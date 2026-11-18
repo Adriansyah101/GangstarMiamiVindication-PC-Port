@@ -1,0 +1,21 @@
+# The game's CPU time standing in the city at 150 ticks a second (FRAME_MS=6.6667), in front, then behind another
+# window (BACKGROUND_THROTTLE): run it with PRECISE_WAIT=1 and =0 (bench.ps1 -Ini) to compare the pacer's waits
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1600
+ini SCREEN_HEIGHT=900
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini FRAME_MS=6.6667
+ini PACE_LOG=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 40
+cpu front 20
+unfocus 25 cpu
+minimize 20 cpu
+expectlog ^\[bg\] behind other windows
+expectlog ^\[bg\] minimized: at most 10

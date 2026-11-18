@@ -1,0 +1,48 @@
+# DYNAMIC_SHADOWS at SHADOW_QUALITY=2, then LOW from the pause menu's options (VIDEO, GRAPHICS, page 3) in the city:
+# the map is made again at 1024 with no restart
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini DYNAMIC_SHADOWS=1
+ini SHADOW_QUALITY=2
+ini SUN_MOON=1
+ini KEY_MOVE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 45
+shot high
+key ESC
+wait 3
+shot paused
+click 0.19 0.33          # OPTIONS
+wait 3
+click 0.19 0.58          # VIDEO
+wait 3
+click 0.839 0.27         # DISPLAY -> GRAPHICS
+wait 2
+click 0.786 0.831        # page 2
+wait 2
+click 0.786 0.831        # page 3: SHADOW QUALITY, FADE IN TRAFFIC
+wait 2
+shot graphics3
+click 0.783 0.406        # SHADOW QUALITY: HIGH -> LOW
+wait 2
+click 0.734 0.902        # APPLY
+wait 2
+shot applied
+waitlog ^\[gamepatch\] options tab: SHADOW_QUALITY=1 in force now 10
+click 0.06 0.957         # BACK
+wait 3
+key ESC                  # out of the pause menu
+waitlog ^\[shadow\] map 1024x1024, 8 taps \(SHADOW_QUALITY=1\), from the options 20
+wait 2
+shot low
+moved paused low
+nolog ^\[shadow\] framebuffer incomplete
+expectlog ^\[shadow\] map 2048x2048, 16 taps \(SHADOW_QUALITY=2\)

@@ -1,0 +1,44 @@
+# A benchmark in the busy city (dev build): every graphics enhancement, DRAW_DISTANCE=2, the densities at 3, MSAA 4,
+# no frame cap, PERF_PROFILE. 30 s standing still (the GPU passes, the draws), then 20 s walking (streaming, files).
+# To compare two builds, run it with -Exe on each and read the [perf] lines; tools\playtest\bench.ps1 does that and
+# can pick the GPU.
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1600
+ini SCREEN_HEIGHT=900
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini FRAME_MS=0
+ini SWAP_INTERVAL=0
+ini MSAA=4
+ini ANISOTROPIC_FILTERING=16
+ini AMBIENT_OCCLUSION=1
+ini BLOOM=2
+ini WATER_REFLECTIONS=1
+ini VEHICLE_REFLECTIONS=1
+ini DYNAMIC_SHADOWS=1
+ini SUN_MOON=1
+ini SPAWN_FADE=1
+ini DRAW_DISTANCE=2
+ini FOG_MODE=2
+ini TRAFFIC_DENSITY=3
+ini PEDESTRIAN_DENSITY=3
+ini PARKED_CAR_DENSITY=3
+ini KEY_MOVE=1
+ini PERF_PROFILE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 45
+shot still-start
+wait 30
+shot still-end
+hold W
+wait 20
+release W
+shot walked
+moved still-end walked
+expectlog ^\[perf\] [\d.]+ s:
+expectlog ^\[perf\] GPU, \d+ frames

@@ -1,0 +1,34 @@
+# BACKGROUND_THROTTLE in the city: behind the taskbar (30 drawn frames a second, the game runs on), then minimized
+# (10, no swap, Esc pauses the game); back in front the pause menu waits and the full rate is back
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini FRAME_MS=4.1667
+ini PACE_LOG=1
+ini PHYSICS_SYNC=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+minimize 4               # in the main menu: nothing to pause
+wait 2
+click 0.13 0.39
+wait 35
+shot city
+unfocus 6
+waitlog ^\[bg\] in front: full speed 5
+minimize 8
+wait 3
+shot paused
+moved city paused
+expectlog ^\[bg\] BACKGROUND_THROTTLE=1: behind other windows at most 30 drawn frames a second, minimized 10
+expectlog ^\[bg\] behind other windows: at most 30 drawn frames a second
+expectlog ^\[gamepatch\] physics sync now step 16\.667 ms
+expectlog ^\[bg\] minimized: at most 10 drawn frames a second
+expectlog ^\[bg\] minimized: nothing to pause \(a menu, cutscene or the title is up\)
+expectlog ^\[bg\] minimized in play: Esc pauses the game
+expectlog ^\[bg\] the game is paused
+expectlog ^\[gamepatch\] physics sync now step 4\.167 ms

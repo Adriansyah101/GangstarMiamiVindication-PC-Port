@@ -1,0 +1,38 @@
+# A GangstarMV.ini laid out as before the speed-ups moved to [Advanced] and MENU_FADE_CLICKS, RADIO_LOGO_FIX and
+# SWITCH_SAVE_FIX to [Fixes]: each key is still read where the older file has it, and a key's line in its own section
+# wins over a line elsewhere (FAST_MEMMOVE=1 in [Advanced] over FAST_MEMMOVE=0 in [Fixes], although that comes later).
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini [Advanced]
+ini FAST_MEMMOVE=1
+ini [Fixes]
+ini STATIC_VBO=0
+ini FILE_POOL=0
+ini FAST_MEMMOVE=0
+ini [Audio]
+ini RADIO_LOGO_FIX=0
+ini [Input]
+ini MENU_FADE_CLICKS=0
+ini [Gameplay]
+ini SWITCH_SAVE_FIX=0
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+shot menu
+expectlog ^\[config\] STATIC_VBO=0$
+expectlog ^\[config\] FILE_POOL=0$
+expectlog ^\[config\] RADIO_LOGO_FIX=0$
+expectlog ^\[config\] MENU_FADE_CLICKS=0$
+expectlog ^\[config\] SWITCH_SAVE_FIX=0$
+nolog ^\[config\] FAST_MEMMOVE=
+expectlog ^\[config\] keys found outside their section .*MENU_FADE_CLICKS -> \[Fixes\], RADIO_LOGO_FIX -> \[Fixes\], SWITCH_SAVE_FIX -> \[Fixes\], STATIC_VBO -> \[Advanced\], FILE_POOL -> \[Advanced\]$
+nolog FAST_MEMMOVE -> \[
+nolog ^\[gamepatch\] HUD radio logo shows the car's station
+nolog ^\[gamepatch\] main menu takes clicks during its background fades
+expectlog ^\[gamepatch\] SWITCH_SAVE_FIX off
+inihas ^RADIO_LOGO_FIX=0$
+inisec Audio RADIO_LOGO_FIX

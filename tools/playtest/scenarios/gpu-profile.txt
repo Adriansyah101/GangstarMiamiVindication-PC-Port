@@ -1,0 +1,37 @@
+# GPU_PROFILE: MSAA and SHADOW_QUALITY left blank (auto) follow the kind of GPU, asked of Direct3D 11 on a thread;
+# the options show AUTO with what it gives.  SPIKE_MS logs the long ticks of the loading.
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini DYNAMIC_SHADOWS=1
+ini SPIKE_MS=40
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 40
+shot city
+key ESC
+wait 3
+click 0.19 0.33          # OPTIONS
+wait 3
+click 0.19 0.58          # VIDEO: DISPLAY, with ANTI-ALIASING
+wait 3
+shot display
+click 0.839 0.27         # DISPLAY -> GRAPHICS
+wait 2
+click 0.786 0.831        # page 2
+wait 2
+click 0.786 0.831        # page 3: SHADOW QUALITY
+wait 2
+shot graphics3
+expectlog ^\[gpu\] .*the settings on auto take its profile
+expectlog ^\[msaa\] MSAA=4 \(auto\),
+expectlog ^\[shadow\] DYNAMIC_SHADOWS=1, SHADOW_QUALITY=auto
+expectlog ^\[shadow\] map \d+x\d+, \d+ taps \(SHADOW_QUALITY=[12], auto: a (built-in GPU|graphics card)\)
+expectlog ^\[framepace\] PRECISE_WAIT=1: the pacer waits on a high-resolution timer
+expectlog ^\[spike\] SPIKE_MS=40: ticks longer than that are logged
+expectlog ^\[spike\] tick \d+: [\d.]+ ms \(its work [\d.]+ ms, of it the swap [\d.]+ ms; (not )?drawn\)

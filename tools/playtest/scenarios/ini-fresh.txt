@@ -1,0 +1,25 @@
+# A first start with no GangstarMV.ini, on either kind of build: the file the game writes has the fixes in [Fixes] and
+# the speed-ups in [Advanced]. In the city a dev build logs [crowd] every 15 s; a release build logs none of that
+# periodic diagnostic output ([crowd], [shadow] casters with no view).
+noini
+save Gangstar2.sav
+waitlog ^\[sunmoon\] glows hidden 150     # after the intro movie and the start-up warning, before the title
+wait 6
+click 0.5 0.5            # the title
+wait 5
+shot menu
+click 0.13 0.39
+wait 45
+shot city
+leftmenu menu city
+expectlog ^\[config\] created .*with the default settings
+nolog ^\[config\] keys found outside their section
+inisec Fixes TEXFIX SWAP_COPY NO_FLICKER VTXFIX CRASH58_GUARD STOPLOCK_FIX MISSION_SAVE_FIX DPI_AWARE MENUFLASH_FIX FADE_EDGE_FIX MENU_FADE_CLICKS RADIO_LOGO_FIX SWITCH_SAVE_FIX
+inisec Advanced FAST_FTELL FAST_FSEEK FAST_MEMMOVE STATIC_VBO SHARED_RESOLVE FILE_MISS_CACHE FILE_POOL QUERY_FREE STREAM_VBO FOG_SKIP_FAR
+inisec Audio NO_AUDIO CUSTOM_RADIO RADIO_SONGS
+inisec Input SHOW_CURSOR PAD_LAYOUT KEY_MOVE
+inisec Gameplay ALLOW_WEAPON_SPRINT PLAYERSWITCH_INVENTORY LC_SWITCH
+dev: expectlog ^\[crowd\] last 15 s
+release: nolog ^\[crowd\]
+release: nolog ^\[shadow\] .*casters gave no view
+release: nolog ^\[shadow\] no view from this caster

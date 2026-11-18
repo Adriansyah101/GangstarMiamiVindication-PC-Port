@@ -1,0 +1,25 @@
+# GPU_PROFILE=igpu: SHADOW_QUALITY left blank takes the built-in GPU's 1; MSAA set by hand (2) wins over the profile.
+# PRECISE_WAIT=0 and BACKGROUND_THROTTLE=0 take the old ways.
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini DYNAMIC_SHADOWS=1
+ini GPU_PROFILE=igpu
+ini MSAA=2
+ini PRECISE_WAIT=0
+ini BACKGROUND_THROTTLE=0
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 40
+shot city
+expectlog ^\[gpu\] .*: the built-in GPU's profile \(GPU_PROFILE=igpu\)
+expectlog ^\[msaa\] MSAA=2, GPU maximum
+expectlog ^\[shadow\] map 1024x1024, 8 taps \(SHADOW_QUALITY=1, auto: a built-in GPU\)
+expectlog ^\[framepace\] PRECISE_WAIT=0: the pacer sleeps in whole ms and spins
+nolog ^\[bg\] BACKGROUND_THROTTLE=1
+nolog ^\[spike\]
