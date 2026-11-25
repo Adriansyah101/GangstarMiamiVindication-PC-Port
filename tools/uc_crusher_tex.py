@@ -1,22 +1,9 @@
-"""Convert Urban Crime's PVRTC textures for the Crusher add-on into the DDS (DXT5) the Mac game reads.
-
-usage: python -I uc_crusher_tex.py <add-on\\crusher folder> <Urban Crime _packMac folder> [--png]
-
-Reads car_update_texture_d.tga and car_update_texture_damage_d.tga from the Urban Crime pack (PVR v2,
-PVRTC 2 bpp, twiddled), decodes the full-size level, builds a box-filtered mip chain down to 1x1 and
-writes each as a DDS with DXT5 blocks under the same name into the add-on folder (the Mac pack keeps its
-".tga" textures as DDS too).  --png also writes <name>.png previews of the decoded picture.
-The files written are the user's own conversion of their own copy: never ship them.
-"""
 import os
 import struct
 import sys
 import zlib
 
 NAMES = ("car_update_texture_d.tga", "car_update_texture_damage_d.tga")
-
-
-# ---- PVRTC 2 bpp decoding (after Imagination's PVRTDecompress) ----------------------------------
 
 def twiddle(xsize, ysize, x, y):
     mind, maxv = xsize, y
@@ -33,13 +20,11 @@ def twiddle(xsize, ysize, x, y):
         shift += 1
     return tw | ((maxv >> shift) << (2 * shift))
 
-
 def color_a(c):
     if c & 0x8000:
         return ((c & 0x7c00) >> 10, (c & 0x3e0) >> 5, (c & 0x1e) | ((c & 0x1e) >> 4), 0xf)
     return (((c & 0xf00) >> 7) | ((c & 0xf00) >> 11), ((c & 0xf0) >> 3) | ((c & 0xf0) >> 7),
             ((c & 0xe) << 1) | ((c & 0xe) >> 2), (c & 0x7000) >> 11)
-
 
 def color_b(c):
     if c & 0x80000000:
@@ -47,9 +32,7 @@ def color_b(c):
     return (((c & 0xf000000) >> 23) | ((c & 0xf000000) >> 27), ((c & 0xf00000) >> 19) | ((c & 0xf00000) >> 23),
             ((c & 0xf0000) >> 15) | ((c & 0xf0000) >> 19), (c & 0x70000000) >> 27)
 
-
 def interpolate(P, Q, R, S):
-    """8x4 upscale of four 5554 colours, P at the top-left texel: out[y][x] = (r, g, b, a) 8 bit."""
     out = [[None] * 8 for _ in range(4)]
     hP = [p * 8 for p in P]
     hR = [r * 8 for r in R]
@@ -65,7 +48,6 @@ def interpolate(P, Q, R, S):
         hP = [a + b for a, b in zip(hP, qp)]
         hR = [a + b for a, b in zip(hR, sr)]
     return out
-
 
 def unpack_mod(mod, col, ox, oy, vals, modes):
     mode = col & 1
@@ -94,9 +76,7 @@ def unpack_mod(mod, col, ox, oy, vals, modes):
                 vals[x + ox][y + oy] = 3 if bits & 1 else 0
                 bits >>= 1
 
-
 REP = (0, 3, 5, 8)
-
 
 def mod_value(vals, modes, x, y):
     m = modes[x][y]
@@ -107,7 +87,6 @@ def mod_value(vals, modes, x, y):
     if m == 2:
         return (REP[vals[x - 1][y]] + REP[vals[x + 1][y]] + 1) // 2
     return (REP[vals[x][y - 1]] + REP[vals[x][y + 1]] + 1) // 2
-
 
 def decode_pvrtc2(data, w, h):
     nx, ny = w // 8, h // 4
@@ -135,9 +114,6 @@ def decode_pvrtc2(data, w, h):
                     row[(wx * 8 + 4 + x) % w] = tuple((a[i] * (8 - m) + b[i] * m) // 8 for i in range(4))
     return img
 
-
-# ---- mips, DXT5 and DDS -----------------------------------------------------------------------
-
 def half(img):
     h, w = len(img), len(img[0])
     if w == 1 and h == 1:
@@ -152,15 +128,12 @@ def half(img):
         out.append(row)
     return out
 
-
 def to565(c):
     return ((c[0] * 31 + 127) // 255) << 11 | ((c[1] * 63 + 127) // 255) << 5 | ((c[2] * 31 + 127) // 255)
-
 
 def from565(v):
     r, g, b = (v >> 11) & 31, (v >> 5) & 63, v & 31
     return ((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2))
-
 
 def dxt5_block(px):
     al = [p[3] for p in px]
@@ -190,7 +163,6 @@ def dxt5_block(px):
             cbits |= best << (2 * k)
     return struct.pack("<BB", a0, a1) + abits.to_bytes(6, "little") + struct.pack("<HHI", c0, c1, cbits)
 
-
 def dxt5(img):
     h, w = len(img), len(img[0])
     out = bytearray()
@@ -200,13 +172,11 @@ def dxt5(img):
             out += dxt5_block(px)
     return bytes(out)
 
-
 def dds(levels):
     h, w = len(levels[0]), len(levels[0][0])
     hdr = struct.pack("<4s7I44x2I4s5I5I", b"DDS ", 124, 0x21007, h, w, 0, 0, len(levels),
                       32, 4, b"DXT5", 0, 0, 0, 0, 0, 0x401008, 0, 0, 0, 0)
     return hdr + b"".join(dxt5(l) for l in levels)
-
 
 def png(img, path):
     h, w = len(img), len(img[0])
@@ -215,7 +185,6 @@ def png(img, path):
     with open(path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) +
                 chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
-
 
 def main():
     out_dir, uc_dir = sys.argv[1], sys.argv[2]
@@ -235,7 +204,6 @@ def main():
             levels.append(n)
         open(os.path.join(out_dir, name), "wb").write(dds(levels))
         print("%s: %dx%d, %d mip levels -> DXT5 DDS" % (name, w, h, len(levels)))
-
 
 if __name__ == "__main__":
     main()

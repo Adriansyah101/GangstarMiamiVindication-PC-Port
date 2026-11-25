@@ -1,31 +1,3 @@
-"""Build the patch table that lets the game's lowest code run from a copy.
-
-The host maps the game at its own addresses (see layout.h in host/games/<game>).  Windows owns everything
-below 0x10000 and the exe's PE header owns 0x10000..0x11000, so the game bytes
-[0x1000, low_end) run from a copy at LOWCOPY_BASE instead.  low_end is the first function
-start at or above 0x11000, so no function is split between the two places.  This tool
-decodes that code and lists every patch the copy needs; nothing is guessed from data
-values, and the host checks each patch's expected bytes before applying it.
-
-usage: python -I genlow.py <macho> <out.bin> [--report report.txt]
-
-out.bin layout (little endian):
-    char magic[4] = "GMVP"; u32 version = 1
-    u32 macho_size; u32 text_crc32          crc32 of the __TEXT segment's file bytes
-    u32 low_start; u32 low_end              game range that runs from the copy
-    u32 n_patch
-    struct { u32 addr; u8 kind; u8 reg; u16 pad; } patch[n_patch]     sorted by addr
-kinds (addr is a game vmaddr; "copy" means addr + LOW_DELTA):
-    1 REL32_OUT  copy has a rel32 field at addr branching out of the range: field -= delta
-    2 PIC_POP    copy has "call $+5; pop r" at addr: becomes "mov r, addr+5; nop"
-    3 REL32_IN   game code outside the range has a rel32 call/jmp field at addr whose
-                 target is a function start inside the range: field += delta
-    4 PTR_IN     u32 at addr (outside the range) is an exact pointer slot holding a code
-                 address inside the range: value += delta
-reg: x86 register number (eax=0 .. edi=7) for PIC_POP, else 0.
-Anything that still reaches the range at run time (function pointers built in code, PIC
-jump tables) faults there and the host's exception handler redirects it into the copy.
-"""
 import bisect
 import collections
 import os
@@ -47,7 +19,6 @@ REL32_OUT, PIC_POP, REL32_IN, PTR_IN = 1, 2, 3, 4
 REGNUM = {x86.X86_REG_EAX: 0, x86.X86_REG_ECX: 1, x86.X86_REG_EDX: 2, x86.X86_REG_EBX: 3,
           x86.X86_REG_ESP: 4, x86.X86_REG_EBP: 5, x86.X86_REG_ESI: 6, x86.X86_REG_EDI: 7}
 BRANCH_GROUPS = (capstone.CS_GRP_JUMP, capstone.CS_GRP_CALL)
-
 
 def main():
     path, out = sys.argv[1], sys.argv[2]
@@ -82,7 +53,6 @@ def main():
     text_syms = sorted({s["value"] for s in syms if s["value"] and (s["type"] & 0x0E) == 0x0E
                         and text["addr"] <= s["value"] < text["addr"] + text["size"]})
 
-    # ---- decode all code once ----------------------------------------------------------
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     md.detail = True
     md.skipdata = True
@@ -96,8 +66,6 @@ def main():
             else:
                 insns.append(ins)
     starts = {i.address for i in insns}
-    # function starts: named symbols (local ones are stripped), framed prologues after a
-    # terminator, and the targets of direct calls
     funcs = set(text_syms)
     prev = None
     for ins in insns:
@@ -109,12 +77,8 @@ def main():
                 funcs.add(t)
         prev = ins.mnemonic
 
-    # ---- the range: up to the first named function at or above the PE header end ------
     i = bisect.bisect_left(text_syms, PE_HEADER_END)
     low_end = text_syms[i]
-    # Local symbols are stripped in some builds, so the first named function can lie past what the low
-    # copy holds (GMV_LOWCOPY_CAP, layout.h).  Then a direct-call target that follows a terminator or
-    # padding will do: nothing falls through into it, so no function is split.
     if low_end - LOW_START > LOWCOPY_CAP:
         by_addr = {ins.address: k for k, ins in enumerate(insns)}
         called = set()
@@ -150,7 +114,6 @@ def main():
             problems.append("conflicting patches at 0x%x" % addr)
         patches[addr] = (kind, reg)
 
-    # ---- code inside the range ---------------------------------------------------------
     low = [ins for ins in insns if text["addr"] <= ins.address < low_end]
     low_undec = [a for a in undecodable if a < low_end]
     for a in low_undec:
@@ -179,16 +142,12 @@ def main():
             stats["rel32 out (%s)" % ("call" if ins.id == x86.X86_INS_CALL else "jmp/jcc")] += 1
         elif is_branch and ins.id in (x86.X86_INS_JMP, x86.X86_INS_CALL):
             stats["indirect " + ins.mnemonic] += 1
-    # get_pc_thunk style helpers (mov r, [esp]; ret) called from inside the range would hand
-    # back a copy address; the game uses call/pop, so just prove there are none
     for ins in low:
         if ins.id == x86.X86_INS_CALL and ins.operands[0].type == x86.X86_OP_IMM:
             t = ins.operands[0].imm & 0xFFFFFFFF
             b = bytes_at(t, 4) if text["addr"] <= t < text["addr"] + text["size"] else b""
             if len(b) == 4 and b[0] == 0x8B and (b[1] & 0xC7) == 0x04 and b[2] == 0x24 and b[3] == 0xC3:
                 problems.append("get_pc_thunk call at 0x%x" % ins.address)
-    # absolute references from range code to the range itself stay as they are (the copy
-    # keeps original addresses for every pointer it hands out); just count them
     for ins in low:
         for op in ins.operands:
             v = op.imm if op.type == x86.X86_OP_IMM else op.mem.disp if op.type == x86.X86_OP_MEM and op.mem.base == 0 else None
@@ -197,7 +156,6 @@ def main():
                 stats["abs ref to range (left as is)"] += 1
     rep("range code: %d instructions, %d undecodable bytes, %s" % (len(low), len(low_undec), dict(stats)))
 
-    # ---- direct calls and jumps into the range from everywhere else -------------------
     into = collections.Counter()
     for ins in insns:
         if ins.address < low_end or ins.id not in (x86.X86_INS_CALL, x86.X86_INS_JMP):
@@ -215,7 +173,6 @@ def main():
             rep("  direct %s at 0x%x -> 0x%x is not a known function start" % (ins.mnemonic, ins.address, tgt))
     rep("direct branches into range:", dict(into))
 
-    # ---- exact pointer slots holding range code addresses -----------------------------
     dy = info["dyld_info"]
     bound = set()
     for off, size, lazy in ((dy["bind_off"], dy["bind_size"], False), (dy["lazy_off"], dy["lazy_size"], True)):
@@ -239,10 +196,8 @@ def main():
     s = sects[("__DATA", "__mod_init_func")]
     for a in range(s["addr"], s["addr"] + s["size"], 4):
         ptr_slot(a, "__mod_init_func")
-    # weak binds: exact slots resolved to the game's own definitions
     for slot, name, _o, addend, _w in run_binds(data[dy["weak_off"]:dy["weak_off"] + dy["weak_size"]], segs, False):
         ptr_slot(slot, "weak bind")
-    # vtables: inside a __ZTV/__ZTC object, a word equal to a function start is a method
     data_syms = sorted((s["value"], s["name"]) for s in syms
                        if s["value"] and (s["type"] & 0x0E) == 0x0E and s["value"] >= sects[("__DATA", "__data")]["addr"])
     for j, (va, name) in enumerate(data_syms):
@@ -253,8 +208,6 @@ def main():
             v = u32(a)
             if v is not None and inside(v) and v in funcs:
                 ptr_slot(a, "vtable")
-    # ObjC 1.0 method lists, reached through the module -> symtab -> class/category chain;
-    # each list is {obsolete, count, {SEL, types, IMP}[count]}
     objc = [s for (sg, _n), s in sects.items() if sg == "__OBJC"]
     objc_lo = min(s["addr"] for s in objc)
     objc_hi = max(s["addr"] + s["size"] for s in objc)
@@ -272,20 +225,19 @@ def main():
     mod = sects[("__OBJC", "__module_info")]
     for m in range(mod["addr"], mod["addr"] + mod["size"], 16):
         symtab = u32(m + 12)
-        if not symtab or u32(symtab + 8) is None:      # modules without definitions
+        if not symtab or u32(symtab + 8) is None:
             continue
         ncls, ncat = u32(symtab + 8) & 0xFFFF, u32(symtab + 8) >> 16
         for d in range(ncls + ncat):
             obj = u32(symtab + 12 + 4 * d)
             if d < ncls:
-                method_list(u32(obj + 28))           # instance methods
-                method_list(u32(u32(obj) + 28))      # metaclass: class methods
+                method_list(u32(obj + 28))
+                method_list(u32(u32(obj) + 28))
             else:
                 method_list(u32(obj + 8))
                 method_list(u32(obj + 12))
     rep("pointer slots into range:", dict(slots))
 
-    # ---- anything referring to the Mach-O header / load commands ---------------------
     hdr_refs = 0
     for ins in insns:
         for op in ins.operands:
@@ -313,7 +265,6 @@ def main():
     print("range code:", dict(stats))
     print("into range:", dict(into), " pointer slots:", dict(slots))
     print("undecodable bytes in range: %d, header-area operands: %d" % (len(low_undec), hdr_refs))
-
 
 if __name__ == "__main__":
     main()

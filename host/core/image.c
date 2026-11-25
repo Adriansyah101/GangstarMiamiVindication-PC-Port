@@ -1,4 +1,3 @@
-/* image.c -- puts the game image at its own addresses and runs the low range from its copy (see image.h). */
 #include <stdio.h>
 #include <string.h>
 
@@ -80,14 +79,12 @@ static int in_low(const gmvp *t, uint32_t a)
     return a - t->low_start < t->low_end - t->low_start;
 }
 
-/* __text, __const_coal, __symbol_stub, __stub_helper: sections flagged as holding code */
 static int is_code(const macho *m, uint32_t a)
 {
     const macho_sect *s = macho_sect_at(m, a);
     return s && (s->flags & 0x80000400u);
 }
 
-/* Checks one patch against the bytes now in memory; returns NULL if it fits. */
 static const char *check_patch(const macho *m, const gmvp *t, const gmvp_patch *p)
 {
     const macho_sect *text = macho_sect_named(m, "__TEXT", "__text");
@@ -148,19 +145,18 @@ int image_copy(const macho *m, const gmvp *t, image_stats *st, char *err, size_t
             s->vmaddr + s->vmsize < s->vmaddr)
             FAIL("segment %s 0x%x+0x%x does not fit the reserved range", s->name, s->vmaddr, s->vmsize);
     }
-    /* the low copy region and everything above the PE header page start out zero */
     for (int i = 0; i < m->nsegs; i++) {
         const macho_seg *s = &m->segs[i];
         if (!strcmp(s->name, "__PAGEZERO") || !s->filesize)
             continue;
         uint32_t lo = s->vmaddr, hi = s->vmaddr + s->filesize;
         const uint8_t *src = m->data + s->fileoff;
-        if (lo < t->low_end) {                  /* into the copy */
+        if (lo < t->low_end) {
             uint32_t e = hi < t->low_end ? hi : t->low_end;
             memcpy((void *)(uintptr_t)(lo + GMV_LOW_DELTA), src, e - lo);
             st->copied_low_bytes += e - lo;
         }
-        if (hi > GMV_RESERVE_START) {           /* at its own address */
+        if (hi > GMV_RESERVE_START) {
             uint32_t b = lo > GMV_RESERVE_START ? lo : GMV_RESERVE_START;
             memcpy((void *)(uintptr_t)b, src + (b - lo), hi - b);
             st->mapped_bytes += hi - b;
@@ -196,7 +192,6 @@ uint32_t image_compare(const macho *m, const gmvp *t)
             uint32_t b = lo > GMV_RESERVE_START ? lo : GMV_RESERVE_START;
             diff += count_diff((const uint8_t *)(uintptr_t)b, src + (b - lo), hi - b);
         }
-        /* zero-fill tails must still be zero */
         for (uint32_t a = (hi > GMV_RESERVE_START ? hi : GMV_RESERVE_START); a < s->vmaddr + s->vmsize; a++)
             diff += *(const uint8_t *)(uintptr_t)a != 0;
     }
@@ -205,7 +200,6 @@ uint32_t image_compare(const macho *m, const gmvp *t)
 
 int image_patch(const macho *m, const gmvp *t, image_stats *st, char *err, size_t errsz)
 {
-    /* verify every patch before changing a single byte */
     uint32_t prev_end = 0;
     for (uint32_t i = 0; i < t->npatch; i++) {
         const gmvp_patch *p = &t->patch[i];
@@ -221,15 +215,15 @@ int image_patch(const macho *m, const gmvp *t, image_stats *st, char *err, size_
         uint8_t *copy = (uint8_t *)(uintptr_t)(p->addr + GMV_LOW_DELTA);
         uint8_t *orig = (uint8_t *)(uintptr_t)p->addr;
         switch (p->kind) {
-        case GMVP_REL32_OUT:                    /* the copy moved, the target did not */
+        case GMVP_REL32_OUT:
             wr32(copy, rd32(copy) - GMV_LOW_DELTA);
             break;
-        case GMVP_PIC_POP:                      /* hand out the original PIC base */
+        case GMVP_PIC_POP:
             copy[0] = 0xB8 + p->reg;
             wr32(copy + 1, p->addr + 5);
             copy[5] = 0x90;
             break;
-        case GMVP_REL32_IN:                     /* the target moved into the copy */
+        case GMVP_REL32_IN:
             wr32(orig, rd32(orig) + GMV_LOW_DELTA);
             break;
         case GMVP_PTR_IN:

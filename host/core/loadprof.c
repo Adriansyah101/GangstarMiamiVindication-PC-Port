@@ -1,44 +1,21 @@
-/* loadprof.c -- LOAD_PROFILE: where the main thread's time goes in the long ticks while the game
-   loads.  Diagnostic only: nothing the game does changes, it is only timed.
-
-   Every tick presents through gmv_gl_swap, so a tick's work is the span from the end of one
-   present's pacing wait to the next present.  For a tick longer than the threshold
-   (LOAD_PROFILE=1 -> 40 ms, LOAD_PROFILE=<ms> for another value) one line splits it into the main
-   thread's GL texture and buffer uploads, file I/O, contended lock waits, condition waits, sleeps
-   and the rest, plus the loader threads' file I/O over the same span.  A sampler thread reads the
-   main thread's instruction pointer about once a millisecond; a second line says where the samples
-   of that tick landed: a game address for game code, or the module (CRT, GL driver, host) plus the
-   nearest game return address on the stack.  Every 5 s with slow ticks in it gets a total line.
-
-   PERF_PROFILE=1 (on its own or with LOAD_PROFILE): every 5 s, where the main thread's time went
-   over all the ticks, not just the slow ones -- the ticks that presented a frame and the ones that
-   only updated, the swap, uploads, sleeps and waits, and the samples (taken only inside a tick, not
-   in the pacing wait) by module and by the code they landed in.  the GL shim adds the GPU's side.
-
-   Windows stops the main thread from the sampler thread and reads its registers, and names code by
-   the modules' export tables.  Linux cannot read another thread's registers, so the sampler thread
-   signals the main thread about once a millisecond and the main thread's handler takes the sample
-   from its own; code is named by dl_iterate_phdr and dladdr.  The shims' sleeps carry on after the
-   signal (they loop on EINTR) and SA_RESTART restarts the other calls it interrupts. */
-
 #ifndef _WIN32
 #define _GNU_SOURCE
 #endif
 #include "log.h"
-#if GMV_DEV                             /* a release build leaves the diagnostics out */
+#if GMV_DEV
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <windows.h>
+#include "compat.h"
 #else
 #include <errno.h>
 #include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <ucontext.h>
-#include "compat.h"                     /* the Win32 names below: QueryPerformanceCounter, Interlocked* */
+#include "compat.h"
 #endif
 
 #include "layout.h"
@@ -48,17 +25,15 @@
 #define GAME_TEXT_HI GMV_TEXT_HI
 
 static volatile int g_on = -1;
-static int g_perf;                      /* PERF_PROFILE */
+static int g_perf;
 static double g_thresh_ms = 40.0;
 static double g_qpc_per_ms;
-static DWORD g_main_tid;                /* the thread that presents (owns the GL context) */
+static DWORD g_main_tid;
 static uintptr_t g_stack_lo, g_stack_hi;
-static uint32_t g_host_lo, g_host_hi;   /* the host's own code (the exe above the game's range) */
-static volatile int g_in_tick;          /* the main thread is in a tick (not the pacing wait) */
+static uint32_t g_host_lo, g_host_hi;
+static volatile int g_in_tick;
 
-/* main thread only, so plain adds */
 static struct { long n; long long bytes, qpc; } g_main[GMV_PROF_N];
-/* loader threads' file I/O */
 static volatile LONG g_bg_n;
 static volatile LONG64 g_bg_bytes, g_bg_qpc;
 
@@ -77,8 +52,8 @@ int gmv_prof_on(void)
         const char *p = gmv_dbgenv("GMV_PERF_PROFILE");
         g_perf = gmv_env_on(p);
         if (v <= 0 && g_perf)
-            g_thresh_ms = 1e12;         /* PERF_PROFILE alone: no slow-tick lines */
-        g_on = v > 0 || g_perf;         /* same answer from every thread, so the race is harmless */
+            g_thresh_ms = 1e12;
+        g_on = v > 0 || g_perf;
     }
     return g_on;
 }
@@ -90,12 +65,9 @@ int gmv_perf_on(void)
 
 long long gmv_prof_now(void)
 {
-    LARGE_INTEGER t;
-    QueryPerformanceCounter(&t);
-    return t.QuadPart;
+    return gmv_qpc();
 }
 
-/* The calling thread's id.  On Linux that is a system call, too slow for every file read, so it is kept. */
 static DWORD self_tid(void)
 {
 #ifdef _WIN32
@@ -124,13 +96,11 @@ void gmv_prof_add(int kind, long long t0, long long bytes)
     }
 }
 
-/* ---- the sampler ---------------------------------------------------------------------- */
-
 #define RING 16384
-#define CHAIN 12                        /* game return addresses kept per sample (PERF_PROFILE) */
+#define CHAIN 12
 static struct { long long t; uint32_t eip, crt, ret, host; int tick; uint32_t chain[CHAIN]; } g_ring[RING];
 static volatile LONG g_ring_pos;
-static uint32_t g_crt_lo, g_crt_hi;     /* the C library: msvcrt.dll's image, libc.so.6's segments */
+static uint32_t g_crt_lo, g_crt_hi;
 
 static int in_game(uint32_t a)
 {
@@ -144,9 +114,6 @@ static uint32_t game_addr(uint32_t a)
     return (a >= GMV_LOWCOPY_BASE && a < GMV_LOWCOPY_BASE + GMV_LOWCOPY_CAP) ? a - GMV_LOW_DELTA : a;
 }
 
-/* Does the code just before `a` end in a call (so `a` is a return address, not a stray value)?
-   `a` must be in mapped code: the low game range only runs from its copy.  The bytes before it can
-   be on an unmapped page: a stale value on the stack can be a DLL's own base (msvcrt's faulted here). */
 static int after_call(uint32_t a)
 {
     if (a >= GAME_TEXT_LO && a < GMV_RESERVE_START + 8)
@@ -158,23 +125,18 @@ static int after_call(uint32_t a)
         if (!ReadProcessMemory(GetCurrentProcess(), p - 7, &first, 1, NULL))
             return 0;
 #else
-        if (!gmv_readable(p - 7, 1))    /* a system call: safe in the sampling signal's handler */
+        if (!gmv_readable(p - 7, 1))
             return 0;
 #endif
     }
-    if (p[-5] == 0xE8)                  /* call rel32, but not `call $+5; pop` (a PIC base: nothing called) */
+    if (p[-5] == 0xE8)
         return *(const int32_t *)(p - 4) != 0;
-    for (int len = 2; len <= 7; len++)                          /* call r/m32: FF /2 */
+    for (int len = 2; len <= 7; len++)
         if (p[-len] == 0xFF && ((p[-len + 1] >> 3) & 7) == 2)
             return 1;
     return 0;
 }
 
-/* From the (stopped) main thread's stack: the first return address into the C library (which call
-   the thread is under), the first into the host's code (which shim made it) and the first into
-   game code (which game function made it).  With PERF_PROFILE, also the game return addresses
-   further up (`chain`, innermost first), for the inclusive table. */
-/* On Linux it runs in the sampling signal's handler, on the main thread: no locks, no allocation. */
 static void stack_frames(uint32_t esp, uint32_t *crt, uint32_t *ret, uint32_t *host, uint32_t *chain)
 {
     int nc = 0;
@@ -243,10 +205,9 @@ static DWORD WINAPI sampler(void *arg)
     return 0;
 }
 #else
-#define SAMPLE_SIG (SIGRTMAX - 3)       /* crashdump_linux.c stops threads with SIGRTMAX - 2 */
+#define SAMPLE_SIG (SIGRTMAX - 3)
 static pid_t g_pid;
 
-/* On the main thread, interrupted: the sample is the registers it was stopped at. */
 static void on_sample(int sig, siginfo_t *si, void *ucv)
 {
     (void)sig;
@@ -271,8 +232,6 @@ static void *sampler(void *arg)
     return NULL;
 }
 
-/* The loaded object holding `a` (want == NULL) or the first whose file name starts with `want`: its
-   load bias, the span of its loaded segments and its file name.  The program itself has no name. */
 struct obj { uint32_t a; const char *want; uint32_t bias, lo, hi; int exe; char name[24]; };
 
 static int obj_cb(struct dl_phdr_info *in, size_t size, void *arg)
@@ -308,8 +267,6 @@ static int obj_find(struct obj *o)
 }
 #endif
 
-/* "module!export+off" for a code address: the nearest exported name at or below it (an internal
-   ntdll function shows as the export before it, which still groups samples consistently). */
 #ifndef _WIN32
 static void code_name(uint32_t a, char *out, size_t n)
 {
@@ -318,9 +275,9 @@ static void code_name(uint32_t a, char *out, size_t n)
     if (a >= GMV_THUNK_BASE && a < GMV_THUNK_BASE + GMV_THUNK_SIZE)
         snprintf(out, n, "thunk");
     else if (!obj_find(&o))
-        snprintf(out, n, "?%08x", a);    /* llvmpipe's generated code, or freed */
+        snprintf(out, n, "?%08x", a);
     else if (o.exe)
-        snprintf(out, n, "host 0x%x", a);  /* as addr2line -e GangstarMV takes it */
+        snprintf(out, n, "host 0x%x", a);
     else if (dladdr((const void *)(uintptr_t)a, &di) && di.dli_sname && di.dli_saddr &&
              (uint32_t)(uintptr_t)di.dli_saddr <= a)
         snprintf(out, n, "%.24s!%.40s+0x%x", o.name, di.dli_sname, a - (uint32_t)(uintptr_t)di.dli_saddr);
@@ -339,11 +296,11 @@ static void code_name(uint32_t a, char *out, size_t n)
     if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (const char *)(uintptr_t)a, &h) ||
         !GetModuleFileNameA(h, path, sizeof path)) {
-        snprintf(out, n, "?%08x", a);    /* driver-allocated code, or freed */
+        snprintf(out, n, "?%08x", a);
         return;
     }
     if (h == GetModuleHandleA(NULL)) {
-        snprintf(out, n, "host 0x%x", a);  /* as addr2line -e GangstarMV.exe takes it */
+        snprintf(out, n, "host 0x%x", a);
         return;
     }
     const char *b = path;
@@ -375,8 +332,6 @@ static void code_name(uint32_t a, char *out, size_t n)
 }
 #endif
 
-/* Where the samples in [t0, t1] landed: the top chains (code the thread was in <- the msvcrt call
-   it was under <- the game function that made it). */
 static void report_samples(long long t0, long long t1)
 {
     enum { MAXK = 64 };
@@ -391,8 +346,8 @@ static void report_samples(long long t0, long long t1)
             break;
         uint32_t eip = g_ring[i].eip, crt = g_ring[i].crt, ret = g_ring[i].ret;
         if (in_game(eip)) {
-            eip = game_addr(eip) & ~0xffu;  /* game code: group by 256-byte block (+ its caller) */
-        } else {                            /* other code: group by module + export below it */
+            eip = game_addr(eip) & ~0xffu;
+        } else {
             char nm[96];
             code_name(eip, nm, sizeof nm);
             char *plus = strrchr(nm, '+');
@@ -440,10 +395,6 @@ static void report_samples(long long t0, long long t1)
     }
 }
 
-/* ---- sleeps --------------------------------------------------------------------------- */
-
-/* The main thread's sleeps of 2 ms or more this tick, by length and the game return addresses on
-   the stack above the call (the first is usually a one-line sleep wrapper, the next its caller). */
 #define SLEEP_KINDS 4
 static struct { unsigned usec; uint32_t ret[3]; int n; } g_sleeps[SLEEP_KINDS];
 
@@ -465,8 +416,6 @@ void gmv_prof_sleep_note(unsigned usec)
         return;
     }
 }
-
-/* ---- per tick ------------------------------------------------------------------------- */
 
 double ms_of(long long q) { return (double)q / g_qpc_per_ms; }
 
@@ -531,7 +480,7 @@ static void start_main(void)
     const uint8_t *exe = (const uint8_t *)GetModuleHandleA(NULL);
     {
         const IMAGE_NT_HEADERS32 *nt = (const void *)(exe + ((const IMAGE_DOS_HEADER *)exe)->e_lfanew);
-        g_host_lo = GMV_RESERVE_END;    /* the exe's first section is the game's range */
+        g_host_lo = GMV_RESERVE_END;
         g_host_hi = (uint32_t)(uintptr_t)exe + nt->OptionalHeader.SizeOfImage;
     }
     HANDLE me = NULL;
@@ -548,8 +497,6 @@ static void start_main(void)
 }
 #endif
 
-/* ---- PERF_PROFILE: 5 s summaries ------------------------------------------------------ */
-
 static struct {
     long long t0;
     unsigned ticks, drawn;
@@ -557,7 +504,6 @@ static struct {
     double swap, upl, io, sleep, lockwait;
 } g_pw;
 
-/* The module a non-game address is in, cached: its base, end and short name. */
 static struct { uint32_t lo, hi; char name[24]; } g_mods[32];
 static int g_nmods;
 
@@ -569,7 +515,7 @@ static const char *mod_of(uint32_t a)
 #ifndef _WIN32
     struct obj o = { .a = a };
     if (!obj_find(&o))
-        return "?";                     /* llvmpipe's generated code, say */
+        return "?";
     if (g_nmods == 32)
         return "other";
     g_mods[g_nmods].lo = o.lo;
@@ -582,7 +528,7 @@ static const char *mod_of(uint32_t a)
     if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (const char *)(uintptr_t)a, &h) ||
         !GetModuleFileNameA(h, path, sizeof path))
-        return "?";                     /* driver-allocated code (a JIT'd shader path, say) */
+        return "?";
     if (g_nmods == 32)
         return "other";
     const uint8_t *base = (const uint8_t *)h;
@@ -598,8 +544,6 @@ static const char *mod_of(uint32_t a)
 #endif
 }
 
-/* Inclusive time by game call site: the share of in-tick samples with that return address anywhere
-   on the stack (counted once a sample), so a caller shows everything under it.  Open addressing. */
 static void perf_inclusive(long long t0, long long t1, int total)
 {
     enum { HS = 4096 };
@@ -618,7 +562,7 @@ static void perf_inclusive(long long t0, long long t1, int total)
             uint32_t a = g_ring[i].chain[c];
             int dup = 0;
             for (int d = 0; d < c; d++)
-                dup |= g_ring[i].chain[d] == a;     /* recursion: once a sample */
+                dup |= g_ring[i].chain[d] == a;
             if (dup)
                 continue;
             unsigned s = (a * 2654435761u) >> 20;
@@ -643,9 +587,6 @@ static void perf_inclusive(long long t0, long long t1, int total)
     }
 }
 
-/* The samples taken inside ticks over [t0, t1]: the share of each module, then the top places
-   (game code by 256-byte block, other code by block too, with the host shim and the game function
-   above it on the stack).  File only, as the slow-tick lines. */
 static void perf_samples(long long t0, long long t1)
 {
     enum { MAXM = 16, MAXK = 256 };
@@ -689,7 +630,7 @@ static void perf_samples(long long t0, long long t1)
         eip &= ~0xffu;
         uint32_t host = g_ring[i].host, ret = g_ring[i].ret;
         if (!strcmp(mod, "game"))
-            host = 0;                   /* a game block: its caller is not the point */
+            host = 0;
         for (x = 0; x < nk; x++)
             if (k[x].eip == eip && k[x].host == host && k[x].ret == ret)
                 break;
@@ -727,7 +668,7 @@ static void perf_samples(long long t0, long long t1)
         if (best < 0 || k[best].n * 100 < total)
             break;
         char a[96], h[96];
-        if (k[best].eip < GMV_THUNK_BASE)          /* game blocks hold game addresses */
+        if (k[best].eip < GMV_THUNK_BASE)
             snprintf(a, sizeof a, "game 0x%06x", k[best].eip);
         else
             code_name(k[best].eip, a, sizeof a);
@@ -774,7 +715,6 @@ static void perf_tick(long long t, double ms, int drew)
     g_pw.t0 = t;
 }
 
-/* Right after the present, before the pacing wait: the tick's work ends here. */
 void gmv_prof_tick_end(unsigned frame, int drew)
 {
     if (!gmv_prof_on())
@@ -799,7 +739,6 @@ void gmv_prof_tick_end(unsigned frame, int drew)
         double wait = ms_of(g_main[GMV_PROF_WAIT].qpc), slp = ms_of(g_main[GMV_PROF_SLEEP].qpc);
         double swp = ms_of(g_main[GMV_PROF_SWAP].qpc);
         double rest = ms - tex - buf - io - lock - wait - slp - swp;
-        /* File only (no console, no flush): printing here must not cause the next hitch. */
         gmv_logfile("[loadprof] f%u tick %.1f ms: tex %ld/%lld KB %.1f ms, buf %ld/%lld KB %.1f ms, "
                     "io %ld/%lld KB %.1f ms, lock %.1f ms, wait %.1f ms, sleep %ld/%.1f ms, swap %.1f ms, "
                     "rest %.1f ms | loaders io %ld/%lld KB %.1f ms\n",
@@ -833,7 +772,6 @@ void gmv_prof_tick_end(unsigned frame, int drew)
     }
 }
 
-/* After the pacing wait: the next tick's work starts here. */
 void gmv_prof_tick_start(void)
 {
     if (!gmv_prof_on() || !g_main_tid)
@@ -846,4 +784,4 @@ void gmv_prof_tick_start(void)
     g_tick_t0 = gmv_prof_now();
     g_in_tick = 1;
 }
-#endif /* GMV_DEV */
+#endif

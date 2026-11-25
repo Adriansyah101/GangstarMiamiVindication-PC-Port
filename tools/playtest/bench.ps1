@@ -1,11 +1,3 @@
-# Runs the bench-city scenario (or another) on one exe and one GPU, and sums up its [perf] lines.
-#   tools\playtest\bench.ps1 -Exe build\dev\GangstarMV.exe -Gpu amd|nvidia|default [-Runs 2] [-Scenario bench-city]
-#     [-Ini KEY=VALUE,...]   extra ini lines for the run (A/B of a switch on one exe)
-#   tools\playtest\bench.ps1 -Log <GangstarMV.log>    only the summary of a log already made
-# -Gpu sets Windows' graphics preference (HKCU\Software\Microsoft\DirectX\UserGpuPreferences) for the run's exe only:
-# amd = power saving, nvidia = high performance. The value is always taken out again (or put back as it was) in a
-# finally block, so an interrupted run leaves nothing behind. The game window takes the mouse and keyboard while it runs.
-# The summary takes the last 10 [perf] windows: 6 standing still, then 4 walking (bench-city's order).
 param(
     [string]$Exe,
     [ValidateSet('amd', 'nvidia', 'default')][string]$Gpu = 'default',
@@ -27,8 +19,8 @@ function Show-Perf([string]$log) {
     foreach ($l in Get-Content $log) {
         if ($l -match '^\[perf\] ([\d.]+) s: (\d+) ticks .*?, (\d+) drew a frame \(([\d.]+) fps\); work a tick: drawn ([\d.]+) ms \(max ([\d.]+)\).*?file (\d+)') {
             [void]$t.Add(@{ fps = [double]$Matches[4]; drawn = [double]$Matches[5]; max = [double]$Matches[6]; file = [double]$Matches[7] })
-        } elseif ($l -match '^\[perf\] GPU, (\d+) frames \((\d+) with the post pass\): scene ([\d.]+) ms, then sea reflections ([\d.]+), car reflections ([\d.]+), AO ([\d.]+), bloom ([\d.]+) .*?2D/HUD ([\d.]+), present ([\d.]+); first draw to present ([\d.]+) ms .*?; (\d+) draws a frame .*?CPU in the post pass ([\d.]+) ms') {
-            [void]$g.Add(@{ scene = [double]$Matches[3]; sea = [double]$Matches[4]; car = [double]$Matches[5]; ao = [double]$Matches[6]; bloom = [double]$Matches[7]; hud = [double]$Matches[8]; pres = [double]$Matches[9]; gpu = [double]$Matches[10]; draws = [double]$Matches[11]; cpupost = [double]$Matches[12] })
+        } elseif ($l -match '^\[perf\] GPU, (\d+) frames \((\d+) with the post pass\): scene ([\d.]+) ms, then sea reflections ([\d.]+), car reflections ([\d.]+), AO ([\d.]+), bloom ([\d.]+), post AA ([\d.]+) .*?2D/HUD ([\d.]+), present ([\d.]+); first draw to present ([\d.]+) ms .*?; (\d+) draws a frame .*?CPU in the post pass ([\d.]+) ms') {
+            [void]$g.Add(@{ scene = [double]$Matches[3]; sea = [double]$Matches[4]; car = [double]$Matches[5]; ao = [double]$Matches[6]; bloom = [double]$Matches[7]; paa = [double]$Matches[8]; hud = [double]$Matches[9]; pres = [double]$Matches[10]; gpu = [double]$Matches[11]; draws = [double]$Matches[12]; cpupost = [double]$Matches[13] })
         } elseif ($l -match '^\[perf\]   \d+ samples in ticks .*?: (.*)$') {
             $h = @{}; foreach ($m in [regex]::Matches($Matches[1], '(\S+) (\d+)%')) { $h[$m.Groups[1].Value] = [double]$m.Groups[2].Value }
             [void]$s.Add($h)
@@ -44,7 +36,7 @@ function Show-Perf([string]$log) {
     Write-Host "$rend  ($log)"
     '  still  fps {0,6:N1}  CPU drawn {1,5:N2} ms (max {2,5:N1})  file {3,4:N0} ms/s   ({4} windows of {5})' -f (& $avg $still 'fps'), (& $avg $still 'drawn'), (& $mx $still 'max'), (& $avg $still 'file'), $still.Count, $t.Count | Write-Host
     '  walk   fps {0,6:N1}  CPU drawn {1,5:N2} ms (max {2,5:N1})  file {3,4:N0} ms/s   ({4} windows)' -f (& $avg $walk 'fps'), (& $avg $walk 'drawn'), (& $mx $walk 'max'), (& $avg $walk 'file'), $walk.Count | Write-Host
-    '  GPU still: scene {0:N2}, shadows+sea {1:N2}, cars {2:N2}, AO {3:N2}, bloom {4:N2}, HUD {5:N2}, present {6:N2}: {7:N2} ms a frame; {8:N0} draws; CPU in the post pass {9:N2} ms' -f (& $avg $gs 'scene'), (& $avg $gs 'sea'), (& $avg $gs 'car'), (& $avg $gs 'ao'), (& $avg $gs 'bloom'), (& $avg $gs 'hud'), (& $avg $gs 'pres'), (& $avg $gs 'gpu'), (& $avg $gs 'draws'), (& $avg $gs 'cpupost') | Write-Host
+    '  GPU still: scene {0:N2}, shadows+sea {1:N2}, cars {2:N2}, AO {3:N2}, bloom {4:N2}, post AA {10:N2}, HUD {5:N2}, present {6:N2}: {7:N2} ms a frame; {8:N0} draws; CPU in the post pass {9:N2} ms' -f (& $avg $gs 'scene'), (& $avg $gs 'sea'), (& $avg $gs 'car'), (& $avg $gs 'ao'), (& $avg $gs 'bloom'), (& $avg $gs 'hud'), (& $avg $gs 'pres'), (& $avg $gs 'gpu'), (& $avg $gs 'draws'), (& $avg $gs 'cpupost'), (& $avg $gs 'paa') | Write-Host
     $mods = @{}; foreach ($h in $ss) { foreach ($k in $h.Keys) { $mods[$k] = 1 } }
     $share = ($mods.Keys | ForEach-Object { [pscustomobject]@{ n = $_; v = (& $avg $ss $_) } } | Sort-Object v -Descending | Select-Object -First 5 | ForEach-Object { '{0} {1:N0}%' -f $_.n, $_.v }) -join ', '
     Write-Host "  CPU samples still: $share"
@@ -55,7 +47,7 @@ if (-not $Exe) { throw '-Exe or -Log' }
 $Exe = (Resolve-Path $Exe).Path
 $scenBackup = $null; $prev = $null; $had = $false
 try {
-    if ($Ini.Count) {                                   # extra ini lines: the scenario file gets them for this run only
+    if ($Ini.Count) {
         $scenBackup = Get-Content $scenFile -Raw
         $text = $scenBackup -replace '(?m)^save ', ((($Ini | ForEach-Object { "ini $_" }) -join "`r`n") + "`r`nsave ")
         Set-Content $scenFile $text -NoNewline

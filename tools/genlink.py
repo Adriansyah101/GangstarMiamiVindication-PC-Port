@@ -1,26 +1,3 @@
-"""Build the link table the Win32 host needs to run the game image at a different base.
-
-The game is a non-PIE i386 Mach-O linked at 0x1000. Windows already owns that range (WOW64
-stacks/heaps sit in 0x10000..0x600000 before the process even runs), so the host maps the
-image elsewhere and slides every absolute pointer. The binary has no rebase info, so this
-tool reconstructs the set of absolute slots from structure + validated heuristics, and
-flattens the dyld bind / lazy-bind opcode streams into a plain list.
-
-usage: python -I genlink.py <macho> <out.bin> [--report report.txt]
-
-out.bin layout (little endian):
-    char magic[4] = "GMVL"; u32 version = 2
-    u32 n_reloc; u32 n_bind; u32 names_size
-    u32 reloc[n_reloc]                 vmaddr of a 32-bit slot that gets += slide
-    struct { u32 slot; i32 addend; u16 ordinal; u8 flags; u8 pad; u32 name; } bind[n_bind]
-        flags: 1 = weak import, 2 = from lazy bind stream; ordinal 0xFFFF = flat lookup
-    char names[names_size]             NUL-terminated symbol names
-Self-ordinal binds and weak binds are resolved here: the slot is written with the symbol's
-vmaddr into patches.  Those come as an extra trailer:
-    u32 n_set; struct { u32 slot; u32 value; } set[n_set]   value is a vmaddr (slide added)
-Version 1 tables ignored the weak-bind stream and left ~1500 symbol-pointer slots unfilled;
-the host refuses them.
-"""
 import bisect
 import collections
 import os
@@ -33,7 +10,6 @@ from capstone import x86
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse, symbols, INDIRECT_SYMBOL_LOCAL, INDIRECT_SYMBOL_ABS  # noqa: E402
 
-
 def uleb(buf, i):
     v = s = 0
     while True:
@@ -43,7 +19,6 @@ def uleb(buf, i):
         s += 7
         if b < 0x80:
             return v, i
-
 
 def sleb(buf, i):
     v = s = 0
@@ -57,51 +32,49 @@ def sleb(buf, i):
                 v -= 1 << s
             return v, i
 
-
 def run_binds(buf, segs, lazy):
-    """Yield (slot_vmaddr, name, ordinal, addend, weak) for one dyld bind opcode stream."""
     i = 0
     ordinal, name, weak, addend, addr = 0, "", False, 0, 0
     while i < len(buf):
         b = buf[i]
         i += 1
         op, imm = b & 0xF0, b & 0x0F
-        if op == 0x00:          # DONE
+        if op == 0x00:
             if not lazy:
                 return
-        elif op == 0x10:        # SET_DYLIB_ORDINAL_IMM
+        elif op == 0x10:
             ordinal = imm
-        elif op == 0x20:        # SET_DYLIB_ORDINAL_ULEB
+        elif op == 0x20:
             ordinal, i = uleb(buf, i)
-        elif op == 0x30:        # SET_DYLIB_SPECIAL_IMM
+        elif op == 0x30:
             ordinal = (imm | 0xF0) - 0x100 if imm else 0
-        elif op == 0x40:        # SET_SYMBOL_TRAILING_FLAGS_IMM
+        elif op == 0x40:
             end = buf.index(b"\0", i)
             name = buf[i:end].decode("latin-1")
             weak = bool(imm & 1)
             i = end + 1
-        elif op == 0x50:        # SET_TYPE_IMM
+        elif op == 0x50:
             if imm != 1:
                 raise SystemExit("bind type %d not supported" % imm)
-        elif op == 0x60:        # SET_ADDEND_SLEB
+        elif op == 0x60:
             addend, i = sleb(buf, i)
-        elif op == 0x70:        # SET_SEGMENT_AND_OFFSET_ULEB
+        elif op == 0x70:
             off, i = uleb(buf, i)
             addr = segs[imm]["vmaddr"] + off
-        elif op == 0x80:        # ADD_ADDR_ULEB
+        elif op == 0x80:
             d, i = uleb(buf, i)
             addr = (addr + d) & 0xFFFFFFFF
-        elif op == 0x90:        # DO_BIND
+        elif op == 0x90:
             yield addr, name, ordinal, addend, weak
             addr += 4
-        elif op == 0xA0:        # DO_BIND_ADD_ADDR_ULEB
+        elif op == 0xA0:
             yield addr, name, ordinal, addend, weak
             d, i = uleb(buf, i)
             addr = (addr + 4 + d) & 0xFFFFFFFF
-        elif op == 0xB0:        # DO_BIND_ADD_ADDR_IMM_SCALED
+        elif op == 0xB0:
             yield addr, name, ordinal, addend, weak
             addr += 4 + imm * 4
-        elif op == 0xC0:        # DO_BIND_ULEB_TIMES_SKIPPING_ULEB
+        elif op == 0xC0:
             n, i = uleb(buf, i)
             skip, i = uleb(buf, i)
             for _ in range(n):
@@ -109,7 +82,6 @@ def run_binds(buf, segs, lazy):
                 addr += 4 + skip
         else:
             raise SystemExit("bad bind opcode 0x%02x" % b)
-
 
 class Image:
     def __init__(self, data, info):
@@ -123,7 +95,7 @@ class Image:
         return self.sects.get((seg, name))
 
     def bytes_of(self, s):
-        if s["flags"] & 0xFF == 1:      # zerofill
+        if s["flags"] & 0xFF == 1:
             return b""
         return self.data[s["offset"]:s["offset"] + s["size"]]
 
@@ -138,7 +110,6 @@ class Image:
             if s["addr"] <= addr < s["addr"] + s["size"]:
                 return segname, name
         return None
-
 
 def main():
     path, out = sys.argv[1], sys.argv[2]
@@ -166,7 +137,6 @@ def main():
     cstr = img.sect("__TEXT", "__cstring")
     ustr = img.sect("__TEXT", "__ustring")
 
-    # ---- binds -----------------------------------------------------------------------
     dy = info["dyld_info"]
     binds = []
     for off, size, lazy in ((dy["bind_off"], dy["bind_size"], False),
@@ -185,12 +155,6 @@ def main():
             ext_binds.append((slot, name, ordinal, addend, weak, lazy))
     rep("binds: %d external, %d self-resolved" % (len(ext_binds), len(sets)))
 
-    # ---- weak binds ------------------------------------------------------------------
-    # dyld coalesces weak definitions at load and the main executable is searched first, so
-    # each slot in this stream resolves to the game's own copy.  They are exact pointer
-    # locations: the symbol-pointer slots of weak-def functions are filled by nothing else,
-    # and the data words here need no guessing.  Names the game does not define are weak
-    # references into libstdc++ and are already in the regular bind stream.
     weak_where = collections.Counter()
     for slot, name, _ordinal, addend, _weak in run_binds(
             data[dy["weak_off"]:dy["weak_off"] + dy["weak_size"]], img.segs, False):
@@ -203,7 +167,6 @@ def main():
     if len({s for s, _ in sets}) != len(sets):
         raise SystemExit("a slot is resolved twice")
 
-    # ---- what a valid pointer target looks like ------------------------------------
     code = img.bytes_of(text)
     funcs = set(a for a in sym_addrs if text["addr"] <= a < text["addr"] + text["size"])
     for i in range(0, len(code) - 3, 16):
@@ -215,7 +178,7 @@ def main():
     insns = []
     called = set()
     boundaries = set()
-    framed = set()      # prologue right after a terminator: as good as a symbol
+    framed = set()
     enders = {"ret", "jmp", "hlt", "nop", "int3", "ud2"}
     for blob_sect in (text, coal):
         blob = img.bytes_of(blob_sect)
@@ -224,9 +187,6 @@ def main():
             if ins.id == 0:
                 prev = "nop"
                 continue
-            # functions are not always 16-aligned nor framed (vbase thunks): an instruction
-            # boundary after ret/padding, or a frame prologue anywhere, may start one.  Code
-            # after a plain jmp is usually just the next basic block, so it does not count.
             if (prev in enders and prev != "jmp" and ins.mnemonic not in ("nop", "int3")) or \
                     ins.bytes[:3] == b"\x55\x89\xe5":
                 funcs.add(ins.address)
@@ -251,7 +211,6 @@ def main():
 
     mask_ops = {"and", "or", "xor", "test", "shl", "shr", "sar", "rol", "ror", "imul", "bt"}
 
-    # vtable extents: inside a __ZTV object every text-pointing word is a method pointer
     data_syms = sorted((s["value"], s["name"]) for s in syms
                        if s["value"] and (s["type"] & 0x0E) == 0x0E and s["value"] >= img.sect("__DATA", "__data")["addr"])
     dsym_addr = [v for v, _ in data_syms]
@@ -261,11 +220,9 @@ def main():
         return i >= 0 and data_syms[i][1].startswith(("__ZTV", "__ZTC"))
 
     def valid_target(v, ctx, mnem="", slot=0):
-        """ctx: 'data' (aligned word in a data section), 'abs' (code memory operand with no
-        base register -- it is dereferenced, so it is an address), 'imm' (code immediate)."""
         if ctx == "data" and text_like(v) and in_vtable(slot):
             return (v in boundaries), "vtbl"
-        if v < text["addr"] or v >= img.hi:          # mach header / load commands / linkedit
+        if v < text["addr"] or v >= img.hi:
             return False, "range"
         sec = img.section_at(v)
         if sec is None:
@@ -273,15 +230,13 @@ def main():
         if text_like(v):
             if ctx == "imm" and mnem not in ("mov", "push"):
                 return False, "func-op"
-            # round numbers (0x30000, 0xea60...) are far more often counts than code
-            # addresses; a missed function pointer is caught at run time by the host's
-            # fault trap, a wrongly slid integer is silent corruption
+            # 0x30000 0xea60
             if v & 0xFF == 0 and v not in sym_addrs and v not in called and v not in framed:
                 return False, "round"
             return (v in funcs), "func"
         if sec[1] == "__symbol_stub":
             return (v - stubs["addr"]) % 6 == 0, "stub"
-        if sec[1] in ("__cstring", "__ustring"):     # tail-merged strings: any byte may be a start
+        if sec[1] in ("__cstring", "__ustring"):
             return True, "str"
         if sec[1] in ("__stub_helper", "__unwind_info"):
             return False, sec[1]
@@ -296,7 +251,6 @@ def main():
     relocs = set()
     why = collections.Counter()
 
-    # ---- exact structural sources ----------------------------------------------------
     for j in range(stubs["size"] // 6):
         a = stubs["addr"] + 6 * j
         relocs.add(a + 2)
@@ -322,7 +276,6 @@ def main():
                 relocs.add(a)
                 why[name] += 1
 
-    # ---- data words ------------------------------------------------------------------
     rejected = collections.Counter()
     scan = [s for seg in img.segs if seg["name"] in ("__DATA", "__OBJC") for s in seg["sections"]
             if s["flags"] & 0xFF not in (1, 6, 7) and s["name"] not in ("__mod_init_func", "__program_vars")]
@@ -346,11 +299,6 @@ def main():
         why["data " + s["name"]] = n
     rep("data rejects by kind:", dict(rejected))
 
-    # ---- switch jump tables -----------------------------------------------------------
-    # -mdynamic-no-pic code dispatches switches through absolute tables in __TEXT,__const:
-    #     cmp idx, N-1 ; ja default ; jmp [table + idx*4]     (or mov r, [table+idx*4]; jmp r)
-    # The entries are basic-block addresses, not function starts, so the pointer heuristics
-    # reject them.  The cmp guarding the dispatch gives the exact entry count.
     jt = {}
     jt_unbounded = []
     for k, ins in enumerate(insns):
@@ -385,7 +333,6 @@ def main():
     for table in jt_unbounded:
         if table in jt:
             continue
-        # no guard found: take entries while they are instruction starts, up to the next table
         n = 0
         while n < 4096 and (table + 4 * n) not in jt and img.u32(table + 4 * n) in boundaries:
             n += 1
@@ -410,12 +357,6 @@ def main():
         len(jt), len(set(jt) - bounded), jt_entries, jt_bad))
     jt_slots = {t + 4 * j for t, c in jt.items() for j in range(c)}
 
-    # ---- __TEXT,__const --------------------------------------------------------------
-    # A non-PIE image never slides, so const pointer tables can sit here too: the weak-bind
-    # stream proves ~200 of them and the jump tables above are here.  The data heuristics
-    # are NOT applied: this section is full of packed u16 tables (0x00710070, 0x007b0000)
-    # that validate as pointers into __common, and PIC objects keep label-difference
-    # tables here that must not slide.  Count what would validate, don't slide it.
     tc = img.sect("__TEXT", "__const")
     blob = img.bytes_of(tc)
     tc_kinds = collections.Counter()
@@ -429,7 +370,6 @@ def main():
         rep("  tconst %s %-6s 0x%06x = 0x%06x" % ("would" if ok else "rej  ", kind, a, v))
     rep("__TEXT,__const in-image words (NOT slid):", dict(tc_kinds))
 
-    # ---- absolute references in code --------------------------------------------------
     code_rej = collections.Counter()
     for ins in insns:
         for op in ins.operands:
@@ -462,7 +402,6 @@ def main():
         rep("reloc source %-28s %d" % (k, v))
     rep("total relocs: %d" % len(relocs))
 
-    # ---- write -----------------------------------------------------------------------
     names = bytearray()
     name_off = {}
     for _, n, *_ in ext_binds:
@@ -485,7 +424,6 @@ def main():
     print("data rejects:", dict(rejected), " code rejects:", dict(code_rej))
     print("jump tables: %d, %d entries, %d suspicious;  __TEXT,__const words: %s" % (
         len(jt), jt_entries, jt_bad, dict(tc_kinds)))
-
 
 if __name__ == "__main__":
     main()

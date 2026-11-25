@@ -1,5 +1,4 @@
-# Every enhancement on at the start, ORIGINAL_MAC_EXPERIENCE switched on in the main menu's GAMEPATCH tab, then into
-# the city: the [macaudit] lists must hold only what the preset keeps (the same as mac-audit's)
+# All enhancements on, preset switched on in GAMEPATCH, into the city: [macaudit] lists as mac-audit
 dev
 addon
 ini FULLSCREEN=0
@@ -16,6 +15,8 @@ ini AI_SYNC=1
 ini LOAD_BUDGET=200
 ini LOAD_SLEEP_SKIP=1
 ini ANISOTROPIC_FILTERING=16
+ini ALPHA_TO_COVERAGE=1
+ini POST_AA=1
 ini AMBIENT_OCCLUSION=1
 ini BLOOM=2
 ini WATER_REFLECTIONS=1
@@ -56,13 +57,13 @@ wait 3
 click 0.12 0.70
 wait 3
 shot tab-before
-click 0.903 0.406         # ORIGINAL MAC EXPERIENCE: OFF -> ON
+click 0.903 0.406
 wait 2
-click 0.734 0.902         # APPLY
+click 0.734 0.902
 wait 2
 shot tab-switched
 waitlog ^\[gamepatch\] ORIGINAL_MAC_EXPERIENCE on 10
-click 0.06 0.957          # BACK (the Mac's menus take no Esc)
+click 0.06 0.957
 wait 3
 shot menu
 click 0.13 0.39
@@ -76,12 +77,20 @@ wait 2
 shot turned
 moved city turned
 waitlog ^\[macaudit\] \d+ places 120
-wait 125                 # the second list
+wait 125
+expectlog ^\[aa\] ALPHA_TO_COVERAGE=1
+expectlog ^\[aa\] POST_AA=1
+expectlog ^\[post\] now: .*, alpha to coverage 0, post AA 0$
 expectlog ^\[gamepatch\] the other enhancements' hooks out too
 expectlog ^\[gamepatch\] density and SPAWN_FADE hooks out
 expectlog ^\[gamepatch\] draw distance hooks out
 expectlog ^\[gamepatch\] collision tables the Mac's again
 expectlog ^\[crusher\] its hooks out
+expectlog ^\[config\] RANDOM_TIME_OF_DAY blank or not in GangstarMV\.ini: 1$
+expectlog ^\[time\] CONTINUE starts at a random time of day$
+nolog ^\[time\] CONTINUE, random start
 expectlog ^\[macaudit\] groups left in: enhancements 0, draw distance 0, collision tables 0, crowd 0, Crusher 0
-# ("[macaudit] still in after 60 s" can show while the menu and the city's loading last: the draw distance and the
-#  Crusher go only once no menu is up)
+expectlog ^\[gamepatch\] AI drivers steer by the heading on the ground at 0x0006ecc1
+expectlog ^\[gamepatch\] a swimmer the script seats in a vehicle stops swimming first at 0x000cf25d
+nolog ^\[macaudit\] 0006ecc1
+nolog ^\[macaudit\] 000cf25d

@@ -1,4 +1,3 @@
-/* gl_present.c -- the present: what happens between frames, and the tick pacer */
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -8,7 +7,7 @@
 #include <GL/gl.h>
 #include <SDL3/SDL.h>
 #ifdef _WIN32
-#include <mmsystem.h>                  /* timeBeginPeriod (winmm) */
+#include <mmsystem.h>
 #endif
 
 #include "layout.h"
@@ -17,13 +16,6 @@
 #include "glshim.h"
 
 #if GMV_DEV
-/* PERF_PROFILE, the GPU's side (loadprof.c has the CPU's): a timestamp query at points through each
-   drawn frame -- its first clear or draw, the post pass (ao_run: the sea's and the cars' reflections,
-   the AO, the bloom), the present (the MSAA resolve and the blit to the window) and its end.  The
-   results are read PM_RING frames later, when the GPU is long done, so nothing waits for them.  A
-   span is the GPU's time between two points, idle time included: when the CPU is the bottleneck the
-   scene's span is the CPU's pace rather than the GPU's work.  The post pass and the present are
-   issued back to back, so theirs are the GPU's work. */
 pm_t pm = {.on = -1};
 
 static int pm_init(void)
@@ -52,12 +44,11 @@ void pm_mark(int m)
 {
     if (pm.on <= 0 || !pm.started)
         return;
-    pm.QueryCounter(pm.q[pm.slot][m], 0x8E28);          /* GL_TIMESTAMP */
+    pm.QueryCounter(pm.q[pm.slot][m], 0x8E28);
     pm.set[pm.slot] |= 1u << m;
     pm.cpu[m] = gmv_prof_now();
 }
 
-/* The results of the frame that used this slot PM_RING frames ago. */
 static void pm_collect(int s)
 {
     unsigned set = pm.set[s];
@@ -65,7 +56,7 @@ static void pm_collect(int s)
     if (!(set & 1u << PM_START) || !(set & 1u << PM_END))
         return;
     GLint ok = 0;
-    pm.GetQueryObjectiv(pm.q[s][PM_END], 0x8867, &ok);  /* GL_QUERY_RESULT_AVAILABLE */
+    pm.GetQueryObjectiv(pm.q[s][PM_END], 0x8867, &ok);
     if (!ok) {
         pm.late++;
         return;
@@ -73,7 +64,7 @@ static void pm_collect(int s)
     unsigned long long t[PM_N] = {0};
     for (int m = 0; m < PM_N; m++)
         if (set & 1u << m)
-            pm.GetQueryObjectui64v(pm.q[s][m], 0x8866, &t[m]);  /* GL_QUERY_RESULT, ns */
+            pm.GetQueryObjectui64v(pm.q[s][m], 0x8866, &t[m]);
     unsigned long long prev = t[PM_START];
     for (int m = 1; m < PM_N; m++)
         if (set & 1u << m) {
@@ -89,7 +80,6 @@ static void pm_collect(int s)
     pm.frames++;
 }
 
-/* The frame's first clear or draw. */
 void pm_begin(void)
 {
     if (pm.on < 0)
@@ -103,7 +93,6 @@ void pm_begin(void)
     pm_mark(PM_START);
 }
 
-/* After the present's blit, before SwapBuffers. */
 static void pm_end(void)
 {
     if (pm.on <= 0 || !pm.started)
@@ -113,7 +102,7 @@ static void pm_end(void)
     pm.started = 0;
     unsigned set = pm.set[pm.slot];
     if (set & 1u << PM_POST)
-        pm.cpu_post += (double)(pm.cpu[PM_BLOOM] - pm.cpu[PM_POST]) / pm.freq;
+        pm.cpu_post += (double)(pm.cpu[PM_PAA] - pm.cpu[PM_POST]) / pm.freq;
     pm.cpu_pres += (double)(pm.cpu[PM_END] - pm.cpu[PM_PRES]) / pm.freq;
     pm.cpu_frames++;
     long long now = gmv_prof_now();
@@ -121,12 +110,12 @@ static void pm_end(void)
         return;
     double n = pm.frames, np = pm.posts ? pm.posts : 1;
     gmv_log("[perf] GPU, %u frames (%u with the post pass): scene %.2f ms, then sea reflections %.2f, "
-            "car reflections %.2f, AO %.2f, bloom %.2f (a frame with the pass), 2D/HUD %.2f, present %.2f; "
-            "first draw to present %.2f ms (max %.1f); %u draws a frame (max %u); CPU in the post pass %.2f ms, "
-            "in the present %.2f ms%s\n",
+            "car reflections %.2f, AO %.2f, bloom %.2f, post AA %.2f (a frame with the pass), 2D/HUD %.2f, "
+            "present %.2f; first draw to present %.2f ms (max %.1f); %u draws a frame (max %u); CPU in the post pass "
+            "%.2f ms, in the present %.2f ms%s\n",
             pm.frames, pm.posts, pm.seg[PM_POST] / np, pm.seg[PM_SSR] / np, pm.seg[PM_VR] / np, pm.seg[PM_AO] / np,
-            pm.seg[PM_BLOOM] / np, pm.seg[PM_PRES] / n, pm.seg[PM_END] / n, pm.total / n, pm.max_total,
-            pm.draws_sum / pm.frames, pm.draws_max, pm.posts ? pm.cpu_post / pm.posts : 0.0,
+            pm.seg[PM_BLOOM] / np, pm.seg[PM_PAA] / np, pm.seg[PM_PRES] / n, pm.seg[PM_END] / n, pm.total / n,
+            pm.max_total, pm.draws_sum / pm.frames, pm.draws_max, pm.posts ? pm.cpu_post / pm.posts : 0.0,
             pm.cpu_pres / pm.cpu_frames, pm.late ? " (some results late)" : "");
     memset(pm.seg, 0, sizeof pm.seg);
     pm.total = pm.max_total = pm.cpu_post = pm.cpu_pres = 0;
@@ -137,13 +126,6 @@ static void pm_end(void)
 #define pm_end() ((void)0)
 #endif
 
-/* ---- PRECISE_WAIT (a port speed-up, [Timing], on by default and under ORIGINAL_MAC_EXPERIENCE) --------------------
-   The pacer used to Sleep in whole milliseconds on the 1 ms timer and, since a Sleep may wake a tick late, spin the
-   last 1.5-2.5 ms of every tick in Sleep(0): at 150 ticks a second that is a third of a core kept busy for nothing,
-   power a laptop's built-in GPU shares.  Now it waits on a high-resolution waitable timer (Windows 10 1803 and
-   later; it wakes within a fraction of a millisecond, whatever timeBeginPeriod says) until shortly before the
-   deadline (by how late it has been waking, pw_learn) and spins only the rest; on Linux nanosleep is that timer.  The ticks come at the same
-   deadlines.  Without such a timer (older Windows), the old waits.  PRECISE_WAIT=0: the old waits. */
 #ifdef _WIN32
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
@@ -155,8 +137,7 @@ static int precise_wait_on(void)
 {
     static int on = -1;
     if (on < 0) {
-        const char *e = gmv_getenv("GMV_PRECISE_WAIT");
-        on = !(e && *e == '0');
+        on = !gmv_env_off(gmv_getenv("GMV_PRECISE_WAIT"));
 #ifdef _WIN32
         if (on && !(pw_timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                                       TIMER_ALL_ACCESS))) {
@@ -170,13 +151,6 @@ static int precise_wait_on(void)
     return on;
 }
 
-
-/* How late the timer wakes, learnt as it goes: the 90th percentile of the last few hundred waits (a running quantile:
-   up 0.9 of a step when a wait woke later than it, down 0.1 when sooner), 0 to 1.5 ms.  The pacer wakes that much
-   plus 50 us ahead of the deadline and spins the rest.  Where the timer is as exact as its name (it was on the GT
-   Racing port's machine) that is the 50 us of the plan; on this laptop's Windows 11 it woke 0.25-0.5 ms late at 150
-   ticks a second, and with a fixed 50 us 70 % of the ticks left 0.1-0.5 ms late; learnt, ~1 % (measured with the dev
-   GMV_PW_MARGIN fixed margins of 0.05, 0.3 and 0.6 ms: no difference in CPU beyond the traffic's). */
 static double pw_late = 0.3;
 
 static void pw_learn(double over)
@@ -186,7 +160,6 @@ static void pw_learn(double over)
 }
 
 #if GMV_DEV
-/* Dev: how late the timer woke (over the sleep asked for) and how late the tick left the pacer, for [framepace]. */
 static unsigned pw_n, pw_o[4], pw_late_n[3], pw_ticks;
 static double pw_omax, pw_lmax;
 static void pw_over_note(double ms)
@@ -214,12 +187,11 @@ static void pw_report(void)
 }
 #endif
 
-/* Sleep ms on the precise timer. */
 static void precise_sleep(double ms)
 {
 #ifdef _WIN32
     LARGE_INTEGER due;
-    due.QuadPart = -(LONGLONG)(ms * 1e4);              /* relative, in 100 ns */
+    due.QuadPart = -(LONGLONG)(ms * 1e4);
     if (!due.QuadPart)
         due.QuadPart = -1;
     if (SetWaitableTimerEx(pw_timer, &due, 0, NULL, NULL, NULL, 0))
@@ -230,21 +202,7 @@ static void precise_sleep(double ms)
 #endif
 }
 
-/* ---- BACKGROUND_THROTTLE (a port addition, [Timing], on by default, off under ORIGINAL_MAC_EXPERIENCE) ------------
-   Why: the Mac game was a full-screen app that the system slowed as any other in the background; here the window went
-   on drawing at the full FRAME_MS rate behind other windows and while minimized, a CPU core and the GPU busy on a
-   picture nobody sees, and a game in progress went on (traffic, the police) with the player away.  A port gap.
-   Each tick the window's state is read from SDL:
-   - behind other windows: at most BACKGROUND_FPS drawn frames a second (30: the Mac's 60 ticks), the game still
-     running, and still shown (a second monitor);
-   - minimized: at most MINIMIZED_FPS (10), no swap (glFlush instead: nothing to show), the 1 ms timer period given
-     back to Windows (timeEndPeriod; the pacer's waits are on the precise timer anyway), and the game told
-     (gmv_game_minimized: Gangstar presses Esc in play, its own pause).  Restored: all of it undone; a paused game
-     waits for the player.
-   The rate change goes to the game too (gmv_game_tick_period), as a FRAME_MS change from the options does, so a
-   fixed physics step follows it.  BACKGROUND_THROTTLE=0: full speed always.  Read again when ORIGINAL_MAC_EXPERIENCE
-   is switched in game, under which it answers 0. */
-static int bg_state;                                    /* 0 in front, 1 behind other windows, 2 minimized */
+static int bg_state;
 static int bg_on = -1, bg_mac = -1, bg_fps[3] = {0, 30, 10};
 
 static int bg_fps_key(const char *key, int dflt)
@@ -254,14 +212,12 @@ static int bg_fps_key(const char *key, int dflt)
     return v < 1 ? 1 : v > 60 ? 60 : v;
 }
 
-/* The state now; changes are logged and passed on.  frames: the tick, for the log. */
 static int bg_poll(unsigned frames)
 {
     if (bg_mac != gmv_config_mac()) {
         bg_mac = gmv_config_mac();
-        const char *e = gmv_getenv("GMV_BACKGROUND_THROTTLE");
         int was = bg_on;
-        bg_on = !(e && *e == '0');
+        bg_on = !gmv_env_off(gmv_getenv("GMV_BACKGROUND_THROTTLE"));
         bg_fps[1] = bg_fps_key("GMV_BACKGROUND_FPS", 30);
         bg_fps[2] = bg_fps_key("GMV_MINIMIZED_FPS", 10);
         if (bg_on != was && bg_on)
@@ -291,11 +247,6 @@ static int bg_poll(unsigned frames)
     return st;
 }
 
-/* ---- SPIKE_MS (a port diagnostic, [Log], off by default) ---------------------------------------------------------
-   A tick longer than SPIKE_MS ms is logged with its number, how long the tick's own work took (the game's update and,
-   on a drawn tick, its frame; the rest is the pacer's wait) and how long of it the swap took (the driver waiting for
-   the GPU or the screen).  Cheap enough for a player's build: two clock reads a tick when on.  At most 10 lines a
-   second; the ones left out are counted.  Not while BACKGROUND_THROTTLE slows the window. */
 static double spike_ms = -1.0, spike_swap_ms;
 
 static void spike_check(unsigned frames, double dt_ms, double work_ms, int drew)
@@ -327,25 +278,20 @@ static void spike_check(unsigned frames, double dt_ms, double work_ms, int drew)
             spike_swap_ms, drew ? "drawn" : "not drawn");
 }
 
-/* Present the window (used by SDL_GL_SwapBuffers).  Set GMV_DUMP_FRAME=<n> to capture frame n of
-   the back buffer to gmv_frame.bmp (written in the game's cwd) for inspection. */
 void gmv_gl_swap(void)
 {
     ensure_gl();
 #if GMV_DEV
-    /* GMV_LOOP_TRACE=1: one-time dump of the call site(s) that reach the per-frame present, to
-       locate the game's MAIN LOOP (and from there its update(dt) call).
-       The direct caller may be a binding thunk, so also scan the stack for the first few return
-       addresses that land in the game's __TEXT range (image base 0x1000 .. ~0x680000). */
+    /* __TEXT 0x1000..~0x680000 */
     {
         static int lt = -1;
         if (lt < 0) { const char *e = gmv_dbgenv("GMV_LOOP_TRACE"); lt = (gmv_env_on(e)) ? 1 : 0; }
         static unsigned seen; static int done;
-        if (lt && !done && ++seen >= 300) {             /* fire in the steady loop, not startup */
+        if (lt && !done && ++seen >= 300) {
             done = 1;
             void *ret0 = __builtin_return_address(0);
             gmv_log("[loop] present direct caller = %p\n", ret0);
-            void **sp = (void **)&ret0;                 /* scan stack upward for game-text returns */
+            void **sp = (void **)&ret0;
             int found = 0;
             for (int i = 0; i < 256 && found < 8; i++) {
                 uintptr_t v = (uintptr_t)sp[i];
@@ -353,7 +299,7 @@ void gmv_gl_swap(void)
                     gmv_log("[loop]   stack[%d] -> game addr %p\n", i, (void *)v);
                     found++;
                 } else if (v >= GMV_LOWCOPY_BASE && v < GMV_LOWCOPY_BASE + GMV_LOWCOPY_CAP) {
-                    /* the low range (incl. the per-frame tick 0x5f30) runs from its copy */
+                    /* 0x5f30 */
                     gmv_log("[loop]   stack[%d] -> game addr %p (low copy %p)\n", i,
                             (void *)(v - GMV_LOW_DELTA), (void *)v);
                     found++;
@@ -372,29 +318,19 @@ void gmv_gl_swap(void)
         gmv_game_between_frames();
         gmv_game_frame_end();
 #if GMV_DEV
-        /* GMV_GL_FINISH=1: force a full GPU sync every frame.  Diagnostic for the "3D turns black
-           but UI stays" symptom: it vanishes under GMV_GL_TRACE (whose per-frame glReadPixels also
-           forces a sync), which points at a buffer-update race (the game overwrites a VBO/texture
-           while the GPU is still reading it -- implicit on the old macOS GL, not on Windows).  If
-           this toggle alone stops the black, the race is confirmed and the real fix is a sync. */
         static int glfin = -1;
         if (glfin < 0) { const char *e = gmv_dbgenv("GMV_GL_FINISH"); glfin = (gmv_env_on(e)) ? 1 : 0; }
         if (glfin) glFinish();
         if (g_gl_trace && (frames < 6 || frames % 60 == 0)) {
-            unsigned char c[4] = {0};                   /* sample the just-rendered BACK centre */
+            unsigned char c[4] = {0};
             diag_read_begin(GL_BACK);
-            glReadPixels(512, 384, 1, 1, 0x1908, 0x1401, c);    /* RGBA, UNSIGNED_BYTE */
+            glReadPixels(512, 384, 1, 1, 0x1908, 0x1401, c);
             diag_read_end();
             gmv_log("[gltrace] f%u BACK pre-swap centre=%d,%d,%d,%d\n", frames, c[0], c[1], c[2], c[3]);
         }
         if ((long)frames == dump_at)
             dump_framebuffer("gmv_frame.bmp");
 #endif
-        /* Anti-flicker (GMV_NO_FLICKER): the engine renders at ~30fps (clears+draws every other
-           frame) but SDL_GL_SwapBuffers is called every frame (~60fps); with double buffering the
-           drawn content lands in one buffer while the other is shown on the alternate frames,
-           giving a black/stale flicker.  Skip the present on frames where nothing was drawn, so the
-           last fully-rendered frame stays on screen.  Default on; GMV_NO_FLICKER=0 disables. */
         int drew = g_drew_since_swap, did_swap = 1;
         int hold = gmv_game_present_hold(frames, drew);
 #if GMV_DEV
@@ -405,7 +341,7 @@ void gmv_gl_swap(void)
         if (g_cap_ticks >= 0) {
             DWORD t = GetTickCount();
             int presented = !(g_no_flicker && !drew);
-            cap_seq("");                                /* flush the last draw run */
+            cap_seq("");
             if (presented && (g_cap_presented++ % 4 == 0 || t - g_cap_last_fade < 300))
                 fade_capture_dump(frames, t);
             gmv_log("[fadecap] f%u tick+%d t=%lu +%lums clears=%u draws=%u present=%s seq=%s\n", frames,
@@ -425,7 +361,7 @@ void gmv_gl_swap(void)
         }
 #endif
         if ((g_no_flicker && !g_drew_since_swap) || hold) {
-            did_swap = 0;   /* nothing new (or a held menu-entry frame) -- keep the current front */
+            did_swap = 0;
         } else {
             pm_mark(PM_PRES);
 #if GMV_DEV
@@ -442,7 +378,7 @@ void gmv_gl_swap(void)
             if (spike_ms > 0.0)
                 QueryPerformanceCounter(&s0);
             if (bg_state == 2)
-                glFlush();                              /* BACKGROUND_THROTTLE, minimized: nothing to show */
+                glFlush();
             else
                 gl_swap_window();
             if (spike_ms > 0.0) {
@@ -458,15 +394,6 @@ void gmv_gl_swap(void)
         g_drew_since_swap = 0;
         gmv_prof_tick_end(frames, did_swap);
 
-        /* Tick pacer (pace_frame_ms, default 60 Hz) + dt stats.  Every tick presents through here
-           (drawn or not), so pacing this call paces the game's whole tick: update + every-other
-           render, exactly what a 60 Hz vblank wait did on the Mac.  The pacer keeps a fixed deadline
-           cadence (next += period) so it averages the exact rate -- the game's whole-ms dt then
-           alternates 16/17 -- and after a hitch longer than a period (a load) it resyncs instead of
-           sprinting to catch up.  The waits are PRECISE_WAIT's (above); BACKGROUND_THROTTLE lengthens
-           the period behind other windows and while minimized; SPIKE_MS looks at each tick's length.
-           [framepace] dt stats every ~2 s are logged when GMV_FRAME_MS or GMV_SWAP_INTERVAL is set
-           explicitly or with GMV_PACE_LOG=1 (dev). */
         {
             static int cfg = -1, eff_state;
             static LONG gen;
@@ -477,10 +404,10 @@ void gmv_gl_swap(void)
             static double wmin, wmax, wsum, wt; static unsigned wn, wdrew;
 #endif
             LARGE_INTEGER now;
-            if (cfg >= 0 && gen != g_pace_gen) {         /* a new FRAME_MS or VSYNC from the options menu */
+            if (cfg >= 0 && gen != g_pace_gen) {
                 gen = g_pace_gen;
-                frame_ms = told_ms = pace_frame_ms();   /* (the menu's setter gave the game this rate) */
-                eff_state = -1;                         /* the period again, below */
+                frame_ms = told_ms = pace_frame_ms();
+                eff_state = -1;
                 int v = swap_want() >= 0 ? swap_want() : frame_ms > 0.0 ? 0 : g_swap_default;
                 swap_interval(v);
                 gmv_log("[framepace] tick pacer now %.3f ms%s, swap interval %d\n", frame_ms,
@@ -503,7 +430,6 @@ void gmv_gl_swap(void)
                 t_exit = (double)last.QuadPart;
                 precise_wait_on();
             }
-            /* BACKGROUND_THROTTLE: the period this tick, the game told when it changes */
             int st = bg_poll(frames), changed = st != eff_state;
             if (changed) {
                 eff_ms = st && (frame_ms <= 0.0 || frame_ms < 500.0 / bg_fps[st]) ? 500.0 / bg_fps[st] : frame_ms;
@@ -521,7 +447,7 @@ void gmv_gl_swap(void)
             if (eff_ms > 0.0) {
                 next += period;
                 if ((double)now.QuadPart > next + period) {
-                    next = (double)now.QuadPart;            /* hitch: resync, don't burst ticks */
+                    next = (double)now.QuadPart;
                 } else {
                     int pw = precise_wait_on();
 #if GMV_DEV
@@ -537,14 +463,13 @@ void gmv_gl_swap(void)
                         if (!pw)
                             Sleep(rem > 2.5 ? (DWORD)(rem - 1.5) : 0);
                         else if (rem > 0.1) {
-                            double m = pw_late + 0.05;  /* wake this far ahead (see pw_learn) */
+                            double m = pw_late + 0.05;
 #if GMV_DEV
                             if (pw_fixed >= 0.0) m = pw_fixed;
 #endif
                             if (rem > m + 0.05) {
-                                precise_sleep(rem - m);     /* PRECISE_WAIT: up to m before the deadline */
-                                LARGE_INTEGER w; QueryPerformanceCounter(&w);
-                                double over = ((double)w.QuadPart - (double)now.QuadPart) * 1000.0 /
+                                precise_sleep(rem - m);
+                                double over = ((double)gmv_qpc() - (double)now.QuadPart) * 1000.0 /
                                               (double)freq.QuadPart - (rem - m);
                                 pw_learn(over);
 #if GMV_DEV
@@ -553,7 +478,7 @@ void gmv_gl_swap(void)
                             } else
                                 SwitchToThread();
                         } else
-                            SwitchToThread();               /* and spin the rest */
+                            SwitchToThread();
                         QueryPerformanceCounter(&now);
                     }
 #if GMV_DEV
@@ -561,7 +486,7 @@ void gmv_gl_swap(void)
 #endif
                 }
             }
-            if (!st && !changed)                            /* SPIKE_MS */
+            if (!st && !changed)
                 spike_check(frames, ((double)now.QuadPart - t_exit) * 1000.0 / (double)freq.QuadPart, work_ms, drew);
             t_exit = (double)now.QuadPart;
             spike_swap_ms = 0.0;
@@ -586,15 +511,13 @@ void gmv_gl_swap(void)
 #endif
         }
 #if GMV_DEV
-        /* Flicker check (GMV_CHECK_FRONT=1): log drew/swap + count bright pixels in the FRONT-buffer
-           text band each frame over a window.  Flicker -> nonblack alternates high/0. */
         {
             static int cf = -1;
             if (cf < 0) { const char *e = gmv_dbgenv("GMV_CHECK_FRONT"); cf = (gmv_env_on(e)) ? 1 : 0; }
             if (cf && frames >= 640 && frames <= 664) {
                 static unsigned char buf[530 * 60 * 4];
                 diag_read_begin(GL_FRONT);
-                glReadPixels(258, 423, 530, 60, 0x1908, 0x1401, buf);  /* text band (GL y = 768-345) */
+                glReadPixels(258, 423, 530, 60, 0x1908, 0x1401, buf);
                 diag_read_end();
                 long nb = 0;
                 for (int i = 0; i < 530 * 60; i++)
@@ -604,8 +527,7 @@ void gmv_gl_swap(void)
         }
         if (frames % 60 == 0)
             gmv_log("[gl] SDL_GL_SwapBuffers: presented frame %u\n", frames);
-        {   /* One-shot: identify the loop that presents without pumping (state3/menu modal wait).
-               Scan this frame's stack for game-range return addresses to get the caller chain. */
+        {
             static int st2 = -2;
             if (st2 == -2) { const char *e = gmv_dbgenv("GMV_STATE_TRACE"); st2 = (gmv_env_on(e)) ? 0 : -1; }
             if (st2 == 0 && frames == 900) {

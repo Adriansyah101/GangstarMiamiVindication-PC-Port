@@ -1,4 +1,3 @@
-/* settings.c -- GangstarMV.ini: every key the game's settings file knows, and the ORIGINAL_MAC_EXPERIENCE preset. */
 #include "game.h"
 #include "log.h"
 
@@ -10,8 +9,6 @@
 #define LOG_SECTION "Log"
 #endif
 
-/* The words that differ by system.  The paths' backslashes become the system's separator when config.c writes the
-   file, so the texts keep writing them the Windows way. */
 #ifdef _WIN32
 #define PORT_ "the Win32 port (GangstarMV.exe)"
 #define EXE_ "exe"
@@ -35,7 +32,7 @@
 #endif
 
 static const gmv_setting settings[] = {
-    {"ORIGINAL_MAC_EXPERIENCE", "Preset", "0", "1 = play it as on the Mac: the [Timing] improvements but the loading ones, the [Graphics] enhancements, the fixes of the original game's bugs (MENUFLASH_FIX, FADE_EDGE_FIX, MENU_FADE_CLICKS, RADIO_LOGO_FIX, SWITCH_SAVE_FIX), " SOLO_CAR_ "HIDE_MORE_GAMES, HIDE_GAMELOFT_LIVE, SHORT_WARNING, CUTSCENE_KEYS, TUTORIAL_KEYS, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, PAD_ICONS, PAD_LAYOUT, PAD_MENU, PAD_HINTS, KEY_MOVE, PLAYERSWITCH_INVENTORY, LC_SWITCH, UC_CRUSHER, CUSTOM_RADIO, RADIO_SONGS, NO_INTRO, SHOW_CURSOR and BACKGROUND_THROTTLE are forced off, the population densities set to 1, the port's other [Fixes], the [Advanced] speed-ups, PRECISE_WAIT and the loading speed-ups (LOAD_SLEEP_SKIP, LOAD_BUDGET=200, FAST_LOAD) forced on and MSAA set to the Mac's 4, whatever they say below."},
+    {"ORIGINAL_MAC_EXPERIENCE", "Preset", "0", "1 = play it as on the Mac: the [Timing] improvements but the loading ones, the [Graphics] enhancements, the fixes of the original game's bugs (MENUFLASH_FIX, FADE_EDGE_FIX, MENU_FADE_CLICKS, RADIO_LOGO_FIX, SWITCH_SAVE_FIX, AI_STEERING_FIX, BOAT_SEAT_FIX), " SOLO_CAR_ "HIDE_MORE_GAMES, HIDE_GAMELOFT_LIVE, SHORT_WARNING, CUTSCENE_KEYS, TUTORIAL_KEYS, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, TIME_OF_DAY, RANDOM_TIME_OF_DAY, PAD_ICONS, PAD_LAYOUT, PAD_MENU, PAD_HINTS, KEY_MOVE, PLAYERSWITCH_INVENTORY, LC_SWITCH, UC_CRUSHER, CUSTOM_RADIO, RADIO_SONGS, NO_INTRO, SHOW_CURSOR and BACKGROUND_THROTTLE are forced off, the population densities set to 1, the port's other [Fixes], the [Advanced] speed-ups, PRECISE_WAIT and the loading speed-ups (LOAD_SLEEP_SKIP, LOAD_BUDGET=200, FAST_LOAD) forced on and MSAA set to the Mac's 4, whatever they say below."},
 
     {"FULLSCREEN",     "Display", "1", "1 = full screen: the game is drawn at SCREEN_WIDTH x SCREEN_HEIGHT and scaled to fill the monitor, with black bars if their shapes differ (pick the monitor's own resolution for the sharpest picture); 0 = a window of SCREEN_WIDTH x SCREEN_HEIGHT."},
     {"SCREEN_WIDTH",   "Display", "",  "The game's Screen Resolution: the width in pixels, 320-7680 (blank = the monitor's)."},
@@ -57,6 +54,8 @@ static const gmv_setting settings[] = {
 
     {"GPU_PROFILE",    "Graphics", "auto", "How the settings left on auto (MSAA, SHADOW_QUALITY) choose: auto = by the kind of GPU the game draws on, found at start-up (a GPU built into the processor gets the lighter values); igpu or full = as on a built-in GPU or a graphics card without asking; 0 = always a graphics card's values. A value you give a setting yourself always wins."},
     {"MSAA",           "Graphics", "auto", "Multisample anti-aliasing (smooth edges): 4 = as on the Mac (the game asks for 4x), 0 = off, or 2 or 8 (capped at what the GPU supports); auto (or blank) = 4 on any GPU. On graphics built into the processor keep 4: 8 with every enhancement on can take the GPU so long per frame that the system resets it and the game stops, and on a graphics card 8 makes the slowest frames of a crowded street slower still."},
+    {"ALPHA_TO_COVERAGE", "Graphics", "1", "1 = with MSAA on, the edges of the world's cut-out textures (leaves, fences, railings and the like) are smoothed by the multisampling too (alpha to coverage, added to the game's own cut-out test, so nothing gets thinner or thicker); 0 = their hard edges, as on the Mac. No effect with MSAA=0. Also on the GAMEPATCH tab (DISPLAY: ANTI-ALIASING, 4X + A2C), at once."},
+    {"POST_AA",        "Graphics", "1", "Post-process anti-aliasing (FXAA) over the 3D picture, drawn under the HUD so the text stays sharp: 1 = always, on top of MSAA too (it also smooths the edges MSAA leaves, such as shader and texture edges, a little softer overall); auto = only while MSAA is off (MSAA=0), as a light stand-in for it; 0 = off, as on the Mac. Its cost does not grow with MSAA. Also on the GAMEPATCH tab (POST AA), at once."},
     {"ANISOTROPIC_FILTERING", "Graphics", "16", "Anisotropic filtering for the game's textures: 0 = only what the game asks for (as on the Mac), or 2, 4, 8 or 16 (roads and walls stay sharp at a distance; capped at what the GPU supports)."},
     {"AMBIENT_OCCLUSION", "Graphics", "1", "1 = ambient occlusion: soft contact shadows in corners and under cars, drawn under the HUD (not on the Mac)."},
     {"AO_STRENGTH",    "Graphics", "",  "How dark the ambient occlusion gets (blank = 1.2; lower is lighter, higher is darker)."},
@@ -69,7 +68,7 @@ static const gmv_setting settings[] = {
     {"WATER_REFLECTIONS", "Graphics", "1", "1 = the sea reflects the city and the sky (screen-space reflections: only what is on screen can be reflected, so the reflection fades to the sky's colour near the screen's edges and when you look down at the water) (not on the Mac)."},
     {"REFLECTION_STRENGTH", "Graphics", "", "How strong the sea's reflections are (blank = 1.0; 0 = none, lower is fainter, up to 2)."},
     {"DYNAMIC_SHADOWS", "Graphics", "1", "1 = shadows that follow the sun and the moon, in place of the fixed one under each vehicle and person (not on the Mac). Only vehicles and people cast them. Also on the GAMEPATCH tab (DYNAMIC SHADOWS), at once."},
-    {"SHADOW_QUALITY", "Graphics", "auto", "With DYNAMIC_SHADOWS=1: 2 = high, a 2048 x 2048 shadow map looked up 16 times a pixel; 1 = low, for graphics built into the processor: 1024 x 1024 looked up 8 times (the same shadows, with edges a little softer and blockier); auto (or blank) = by GPU_PROFILE: 1 on a built-in GPU, 2 on a graphics card. Also on the options' VIDEO tab (SHADOW QUALITY), at once."},
+    {"SHADOW_QUALITY", "Graphics", "auto", "With DYNAMIC_SHADOWS=1: 2 = high, a 2048 x 2048 shadow map looked up 16 times a pixel; 1 = low, for graphics built into the processor: 1024 x 1024 looked up 8 times (the same shadows, with edges a little softer and blockier); auto (or blank) = by GPU_PROFILE: 1 on a built-in GPU, 2 on a graphics card. Also on the GAMEPATCH tab (GRAPHICS: DYNAMIC SHADOWS, AUTO, LOW or HIGH), at once."},
     {"VEHICLE_REFLECTIONS", "Graphics", "1", "1 = the shiny cars (the ones the game gives its sky shine) reflect the street, the buildings and the other cars (screen-space reflections: what is on screen; where the reflected ray finds nothing, as on roofs and trunks, the screen itself is used as a sphere map, looked up by the reflected direction). Matte cars stay matte (not on the Mac)."},
     {"VEHICLE_REFLECTION_STRENGTH", "Graphics", "", "How strong the cars' reflections are (blank = 2.0, the strongest; 0 = none, lower is fainter)."},
     {"SUN_MOON",       "Graphics", "1", "A sun by day and a moon at night in the sky, with their glow (not on the Mac). 2 = as the iPhone version draws them: the glow shines through buildings. 1 = enhanced: the glow is hidden behind buildings with a soft edge and is brighter. 0 = none, as on the Mac."},
@@ -94,17 +93,21 @@ static const gmv_setting settings[] = {
     {"ALLOW_WEAPON_SPRINT", "Gameplay", "1", "1 = keep your weapon in hand while you sprint, as on the iPhone (the Mac puts it away and shows fists until you let go of Sprint)."},
     {"MINIMAP_SHOPS", "Gameplay", "1", "1 = the minimap also shows the weapon shops, car rentals and repair shops near you, with the icons of the pause map's legend (the game keeps them in the minimap's list but never draws them there). Only the ones inside the minimap show; the teleports stay hidden (not on the Mac)."},
     {"MISSION_REPLAY", "Gameplay", "1", "1 = a MISSION REPLAY tab in the in-game SERVICES menu, below CORRUPTION, showing the missions you have completed one at a time with their giver, location, type and reward (not on the Mac). The arrows at the top of the page switch between story, side missions and races, and START plays one again. You keep the cash you earn in a replay; everything else goes back when it ends. Also on the GAMEPATCH tab (FIXES: MISSION REPLAY), from the next opening of SERVICES."},
-    {"TRAFFIC_DENSITY", "Gameplay", "3", "How many cars drive around you, as a multiple of the Mac's (at most 18 at once, fewer at night): 1 = as on the Mac, 0 to 4 (2 = up to 36). New cars also turn up that much sooner."},
+    {"TIME_OF_DAY", "Gameplay", "1", "1 = a TIME OF DAY tab in the in-game SERVICES menu, below MISSION REPLAY. Its page shows the clock as HH:MM between two arrows, with the period (MORNING, DAY, SUNSET or NIGHT) under it; each arrow moves the clock one whole hour back or forward, to :00, and the sky, fog, sun and moon, shadows, car lights and lit windows change with it at once; the clock then runs on as usual. Hidden during a mission, so a mission keeps the time its script sets (not on the Mac). Also on the GAMEPATCH tab (FIXES: TIME OF DAY TAB), from the next opening of SERVICES. Blank or missing = 1, so an older GangstarMV.ini without it gets the tab too."},
+    {"RANDOM_TIME_OF_DAY", "Gameplay", "1", "1 = CONTINUE in the main menu starts the city at a random time of day: one of the four periods (morning, day, sunset, night) at even odds, at a random minute in it. NEW GAME keeps the first mission's time. The clock is not in the save, so the save is not touched (not on the Mac). Also on the GAMEPATCH tab (FIXES: RANDOM START TIME), at once. Blank or missing = 1, as for TIME_OF_DAY."},
+    {"TRAFFIC_DENSITY", "Gameplay", "3", "How many cars drive around you, as a multiple of the Mac's (at most 18 at once, fewer at night): 1 = as on the Mac, 0 to 4 (2 = up to 36)."},
     {"PEDESTRIAN_DENSITY", "Gameplay", "3", "How many pedestrians walk around you, as a multiple of the Mac's (at most 14 at once, fewer at night): 1 = as on the Mac, 0 to 4."},
     {"PARKED_CAR_DENSITY", "Gameplay", "3", "How many parked cars stand around you, as a multiple of the Mac's (at most 10 at once): 1 = as on the Mac, 0 to 4."},
-    {"UC_CRUSHER", "Gameplay", "1", "1 = after ON A LION HUNT, the Crusher monster truck of Urban Crime (the freemium Gangstar Miami for iPhone) stands parked on the beach by LC's hotel, with its own engine sound; nobody else drives it (not on the Mac). Also on the GAMEPATCH tab (FIXES: CRUSHER MONSTER TRUCK), at once: turned off, or with ORIGINAL_MAC_EXPERIENCE switched on in game, it leaves the city, a D340 in its place if you are driving it. Needs add-on\\crusher.pak (or the add-on\\crusher folder) next to the " EXE_ ", made from your own copy of Urban Crime. With the add-on there, its files are read at every start, whatever this says, so that it can come without a new start."},
+    {"UC_CRUSHER", "Gameplay", "1", "1 = after ON A LION HUNT, the Crusher monster truck of Urban Crime (the freemium Gangstar Miami for iPhone) stands parked on the beach by LC's hotel, with its own engine sound; nobody else drives it (not on the Mac). Also on the GAMEPATCH tab (FIXES: RESTORED ADD-ON CONTENT, with RADIO_SONGS), at once: turned off, or with ORIGINAL_MAC_EXPERIENCE switched on in game, it leaves the city, a D340 in its place if you are driving it. Needs add-on\\crusher.pak (or the add-on\\crusher folder) next to the " EXE_ ", made from your own copy of Urban Crime. With the add-on there, its files are read at every start, whatever this says, so that it can come without a new start."},
     {"PLAYERSWITCH_INVENTORY", "Gameplay", "1", "1 = when the story switches you to someone else (Betty) in free roam, they share Johnny's cash and weapons (with ammo): what they spend or pick up is Johnny's too. Missions are left as the game has them. 0 = the Mac's: Betty starts with 10000 and no weapons (not on the Mac)."},
     {"LC_SWITCH",      "Gameplay", "1", "1 = once every mission is done, a marker stands at L.C.'s hotel in free roam: walk into it to play as him, as the game's own marker for Betty does, and into it again to go back to Johnny. His cash and weapons follow PLAYERSWITCH_INVENTORY (not on the Mac)."},
+    {"AI_STEERING_FIX", "Gameplay", "1", "1 = fix of the original game: the AI drivers (the police, the cars you chase, the missions' drivers) aim at their next point by the heading on the ground, so they keep a straight line on slopes and near their points instead of weaving (the original measures the angle in 3D, so a point above or below the car keeps the wheel turned one way or the other). 0 = the Mac's steering. Also on the GAMEPATCH tab (FIXES: ORIGINAL BUG FIXES), at once."},
+    {"BOAT_SEAT_FIX",  "Gameplay", "1", "1 = fix of the original game: when a mission's script seats a character who is still swimming in a vehicle, his AI first takes in that he has stopped, then he is seated, so the seated pose is the last one he is given. Without it, Clive in ON A LION HUNT (when its boat cutscene is watched to the end, not skipped) runs off the dock, swims to his yacht and is seated in it, and his AI then gives him the swimmers' idle pose: he stands over the seat with his arms out, as if treading water, until he gets out. 0 = the Mac's. Also on the GAMEPATCH tab (FIXES: ORIGINAL BUG FIXES), at once."},
 
     {"NO_AUDIO",       "Audio", "0", "1 = no sound at all."},
     {"CUSTOM_RADIO",   "Audio", "1", "1 = the car radio gets a sixth station after the game's five that plays your own music: the files in the \"custom radio\" folder next to the " EXE_ " (" SONGS_ "), in a shuffled order. Switch to it like any station. It follows the game's MUSIC volume, and the HUD radio shows PLAY LIST / MY MUSIC for it (the iPhone's logo, not on the Mac). Also on the game's SOUND page: the row Custom Radio (ON / OFF) under Custom Radio Volume."},
     {"CUSTOM_RADIO_VOLUME", "Audio", "0.53", "How loud the custom station is, as a share of the game's MUSIC volume, 0 to 1 (blank = 1): the SOUND page's Custom Radio Volume slider (its speaker mutes it)."},
-    {"RADIO_SONGS",    "Audio", "1", "1 = the game's radio stations also play the songs the Mac does not have: nine of the iPhone version and two rock songs of the Java version (not on the Mac). Not included: they need add-on\\radio.pak next to the " EXE_ ", made from your own copies of the iPhone version and of Gangstar: West Coast Hustle. Also on the GAMEPATCH tab (FIXES: RESTORED RADIO SONGS), at once. With the add-on there, the songs are listed at every start, whatever this says, and left out of the stations while this is off."},
+    {"RADIO_SONGS",    "Audio", "1", "1 = the game's radio stations also play the songs the Mac does not have: nine of the iPhone version and two rock songs of the Java version (not on the Mac). Not included: they need add-on\\radio.pak next to the " EXE_ ", made from your own copies of the iPhone version and of Gangstar: West Coast Hustle. Also on the GAMEPATCH tab (FIXES: RESTORED ADD-ON CONTENT, with UC_CRUSHER), at once. With the add-on there, the songs are listed at every start, whatever this says, and left out of the stations while this is off."},
     {"AUDIO_FRAMES",   "Audio", "", "Frames per audio render call, 32-4096 (blank = 256)."},
     {"AUDIO_NB",       "Audio", "", "Number of audio buffers, 2-32 (blank = about 93 ms worth)."},
 #if GMV_DEV
@@ -112,7 +115,7 @@ static const gmv_setting settings[] = {
 #endif
 
     {"SHOW_CURSOR",    "Input", "0", "1 = keep " ARROW_ " visible even when the game hides its cursor."},
-    {"PAD_ICONS",      "Input", "1", "1 = the gamepad pictures of the options menu (the button list and the calibration page) show the buttons of the pad you last used: A B X Y, LB RB LT RT, View and Menu for an Xbox pad; cross, circle, square, triangle, L1 R1 L2 R2, L3 R3, SHARE (CREATE) and OPTIONS for a DualShock 4 or DualSense. Other pads keep the game's own pictures, which show only where the button is (not on the Mac). Also on the GAMEPATCH tab (FIXES: PAD BUTTON ICONS), at once."},
+    {"PAD_ICONS",      "Input", "1", "1 = the gamepad pictures of the options menu (the button list and the calibration page) show the buttons of the pad you last used: A B X Y, LB RB LT RT, View and Menu for an Xbox pad; cross, circle, square, triangle, L1 R1 L2 R2, L3 R3, SHARE (CREATE) and OPTIONS for a DualShock 4 or DualSense. Other pads keep the game's own pictures, which show only where the button is (not on the Mac). Also on the GAMEPATCH tab (FIXES: GAMEPAD UI & ICONS, with PAD_MENU and PAD_HINTS), at once."},
     {"PAD_LAYOUT",     "Input", "1", "0 = the Mac's gamepad buttons; 1 = a GTA V-like layout (Xbox names; it assumes the standard pad layout, not the calibration page). On foot: A sprint, B reload, X shops/buildings, Y enter a vehicle, LB previous weapon, RB cover, hold LT to lock on, RT shoot, D-pad left/right previous/next weapon. In a car: RT gas, LT brake/reverse, RB handbrake, LB shoot, hold A to lock on (drive-by), Y get out, X/B previous/next weapon, R3 look back, D-pad left/right radio station, down radio on/off, up the CB's special mission (the left stick only steers). Flying: RT up, LT down, LB/RB turn, A shoot, Y get out. Sniper: RT shoot, RB/LB zoom in/out, B leave. Start pauses in all of them."},
     {"PAD_MENU",       "Input", "1", "1 = the gamepad works the menus (not on the Mac): while the game shows its yellow pointer, the left stick or the D-pad moves it, A (cross) clicks and B (circle) goes back like Esc; a button also skips the intro movie."},
     {"PAD_HINTS",      "Input", "1", "1 = the tutorial boxes name the gamepad's buttons (those of the PAD_LAYOUT in use) while the pad is the last thing you used (not on the Mac). The texts are English; in another language the keyboard texts stay."},
@@ -161,6 +164,8 @@ static const gmv_setting settings[] = {
     {"CARSND_TRACE",   "Diagnostics", "0", "Car sound and engine pitch trace."},
     {"ENGSRC_TRACE",   "Diagnostics", "0", "Engine sound source trace."},
     {"VEH_TRACE",      "Diagnostics", "0", "Vehicle AI drive-to destination trace."},
+    {"STEER_PROBE",    "Diagnostics", "0", "[steer] every second, for each AI driver: steering calls, left/right flips (the game's 3D steer / the ground-plane steer), steering travel, yaw rate and speed. Hooks the AI steering call even with AI_STEERING_FIX=0 (it then passes the game's values on unchanged)."},
+    {"BOAT_PROBE",     "Diagnostics", "0", "[boat] when a script seats a character in a vehicle (before and after), and four times a second while ON A LION HUNT's boat cutscene plays: Clive's vehicle, his navigation-mesh cell against the sea's, his last animation, his run flags, whether the game counts him in deep water, and where he is against his yacht. Hooks the seat call even with BOAT_SEAT_FIX=0 (it then seats him as the Mac does)."},
     {"CAM_TRACE",      "Diagnostics", "0", "[camtrace] how the camera follows the running character, every 2 s."},
     {"RADIO_TRACE",    "Diagnostics", "0", "[radio] station table, radio start, station switches, song picks and the HUD radio logo."},
     {"VEHICLE_REFLECTION_DEBUG", "Diagnostics", "0", "[vr] with VEHICLE_REFLECTIONS on: each shiny car's pixels are tinted by what the reflection pass made of them: red = something drawn later covers it, grey = lost in the fog, blue = seen edge-on (faded out), magenta = the model's normal pointed into the car and was turned round, yellow = the reflected ray found nothing on screen (the screen as a sphere map), green = it reflects what the ray hit, cyan = the same after passing the car itself."},
@@ -180,6 +185,8 @@ static const gmv_setting settings[] = {
     {"TEST_FATAL",     "Testing", "", "Stop the game about 10 s in, to try the error box: 1 = a bad memory write, 2 = a missing import, 3 = an illegal instruction, 4 = a crash on another thread (blank = off)."},
     {"PAD_TEST",       "Testing", "", "A virtual pad for tools\\playtest: xbox, ds4, ds5 or raw; its state is the text of cache\\padtest.txt (blank = off)."},
     {"TEST_SPAWN_CAR", "Testing", "", "A vehicle type's own name (Laufer, Lambo, Vamp, Tawny, Taxi, CopCar...): once a save is in the city and the player has stood 3 s on foot with no mission, a car of that type is made where they stand and they are put at its wheel, once a run (blank = off)."},
+    {"TEST_CHASE",     "Testing", "", "1 = once a save is in the city with no mission and ON A LION HUNT's script loaded, its escape is played without the mission: the player is put in the Laufer, the SWAT van with Clive starts down his escape path, and the player's car is kept 0.6 s behind it on the van's own track, so the game's car camera shows the van; 2 = the same at the escape's last speed (blank = off)."},
+    {"TEST_BOAT",      "Testing", "", "1 = once a save is in the city with no mission and ON A LION HUNT's script loaded, the player is put on the dock of Clive's boat escape and, 5 s later, the script's own runner plays that cutscene (from its fade-out to Clive's yacht leaving) without the mission; 2 = the same, with the cutscene's SKIP pressed once Clive is out of his van (blank = off)."},
     {"FORCE_DRAW",     "Testing", "0", "Force the game's draw flag on."},
     {"FORCE_GATE6",    "Testing", "0", "Force the front-end gate 6 flag."},
     {"MENU_LOOP_SCENE", "Testing", "", "Show only the main menu's Nth background scene, over and over (1-16 in the menu's order; 4 = the countryside walk, 5 = the downtown ambulance; blank = off)."},
@@ -192,7 +199,7 @@ static const char *const header =
     ";\r\n"
     "; Read once at startup from the savegame folder next to the " EXE_ ". If it is missing it is created with the\r\n"
     "; defaults below, so deleting it restores every default. A blank value, or a setting missing from the\r\n"
-    "; file, means the built-in value its comment gives (for the enhancements: off, as on the Mac).\r\n"
+    "; file, means the built-in value its comment gives (for most enhancements: off, as on the Mac).\r\n"
     "; Values: 1 = on, 0 = off, unless the comment says otherwise. Lines starting with ; are comments.\r\n"
 #if GMV_DEV
     ";\r\n"
@@ -226,16 +233,6 @@ static const char *const section_help[][2] = {
 #endif
 };
 
-/* ORIGINAL_MAC_EXPERIENCE=1: these keys answer with the value here, ahead of the environment and
-   the file.  The stability and rendering fixes stay on (without them the port crashes or loses
-   fades the Mac showed), and so do the speed-ups, which change no picture or rule: also
-   the loading ones (LOAD_SLEEP_SKIP, LOAD_BUDGET, FAST_LOAD), whose stalls in the
-   main menu's scene changes depend on the machine, not on the game.  Every fix of an original-game bug
-   is off, the visible ones too (MENUFLASH_FIX, FADE_EDGE_FIX, MENU_FADE_CLICKS), except
-   MISSION_SAVE_FIX (a save made under the preset must keep Reginald's missions, so
-   MISSION_REPLAY still offers them once the preset is off);
-   so is everything that changes timing, physics, what you hear, which radio logo the HUD shows, whether the
-   main menu has its More Games corner and Gameloft LIVE! badge or whether a sprint puts the weapon away.  NULL = the call site's built-in default (FRAME_MS blank = 60 ticks/s). */
 static const gmv_preset_value mac_preset[] = {
     {"TEXFIX", "1"}, {"SWAP_COPY", "1"}, {"NO_FLICKER", "1"},
     {"VTXFIX", "1"}, {"CRASH58_GUARD", "1"}, {"STOPLOCK_FIX", "1"}, {"MISSION_SAVE_FIX", "1"}, {"FAST_FTELL", "1"},
@@ -246,25 +243,29 @@ static const gmv_preset_value mac_preset[] = {
 #if GMV_DEV
     {"SOLO_CAR", "0"},
 #endif
-    {"RADIO_LOGO_FIX", "0"}, {"SWITCH_SAVE_FIX", "0"}, {"MSAA", "4"}, {"ANISOTROPIC_FILTERING", "0"},
+    {"RADIO_LOGO_FIX", "0"}, {"SWITCH_SAVE_FIX", "0"}, {"MSAA", "4"}, {"ALPHA_TO_COVERAGE", "0"}, {"POST_AA", "0"}, {"ANISOTROPIC_FILTERING", "0"},
     {"AMBIENT_OCCLUSION", "0"}, {"BLOOM", "0"}, {"WATER_REFLECTIONS", "0"}, {"VEHICLE_REFLECTIONS", "0"}, {"SUN_MOON", "0"},
     {"DYNAMIC_SHADOWS", "0"}, {"SHADOW_QUALITY", NULL}, {"SPAWN_FADE", "0"}, {"DRAW_DISTANCE", "1"},
     {"FOG_MODE", "0"}, {"FOG_HEIGHT", NULL},
     {"HIDE_MORE_GAMES", "0"}, {"HIDE_GAMELOFT_LIVE", "0"}, {"SHORT_WARNING", "0"}, {"CUTSCENE_KEYS", "0"}, {"TUTORIAL_KEYS", "0"},
-    {"ALLOW_WEAPON_SPRINT", "0"}, {"MINIMAP_SHOPS", "0"}, {"MISSION_REPLAY", "0"}, {"PAD_ICONS", "0"}, {"PAD_LAYOUT", "0"}, {"PAD_MENU", "0"}, {"PAD_HINTS", "0"}, {"KEY_MOVE", "0"}, {"PLAYERSWITCH_INVENTORY", "0"}, {"LC_SWITCH", "0"}, {"UC_CRUSHER", "0"}, {"CUSTOM_RADIO", "0"}, {"RADIO_SONGS", "0"},
+    {"ALLOW_WEAPON_SPRINT", "0"}, {"MINIMAP_SHOPS", "0"}, {"MISSION_REPLAY", "0"}, {"TIME_OF_DAY", "0"}, {"RANDOM_TIME_OF_DAY", "0"}, {"PAD_ICONS", "0"}, {"PAD_LAYOUT", "0"}, {"PAD_MENU", "0"}, {"PAD_HINTS", "0"}, {"KEY_MOVE", "0"}, {"PLAYERSWITCH_INVENTORY", "0"}, {"LC_SWITCH", "0"}, {"AI_STEERING_FIX", "0"}, {"BOAT_SEAT_FIX", "0"}, {"UC_CRUSHER", "0"}, {"CUSTOM_RADIO", "0"}, {"RADIO_SONGS", "0"},
     {"NO_INTRO", "0"}, {"SHOW_CURSOR", "0"},
     {"TRAFFIC_DENSITY", "1"}, {"PEDESTRIAN_DENSITY", "1"}, {"PARKED_CAR_DENSITY", "1"},
 };
 
-/* Keys taken out of the game.  An older GangstarMV.ini still has their lines; they are skipped quietly. */
+static const gmv_preset_value absent[] = {
+    {"TIME_OF_DAY", "1"}, {"RANDOM_TIME_OF_DAY", "1"}, {"AI_STEERING_FIX", "1"}, {"BOAT_SEAT_FIX", "1"},
+};
+
 static const char *const retired[] = {
-    "NO_MOUSELOOK", "NO_RMB",           /* the mouse always turns the camera, the right button always locks on */
+    "NO_MOUSELOOK", "NO_RMB",
 };
 
 const gmv_settings_table gmv_game_settings = {
     settings, sizeof settings / sizeof *settings, header, section_help, sizeof section_help / sizeof *section_help,
     mac_preset, sizeof mac_preset / sizeof *mac_preset,
-    "[config] ORIGINAL_MAC_EXPERIENCE=1: 60 ticks/s, original physics, no MENUFLASH_FIX, FADE_EDGE_FIX, MENU_FADE_CLICKS, " SOLO_CAR_ "RADIO_LOGO_FIX, SWITCH_SAVE_FIX, ANISOTROPIC_FILTERING, AMBIENT_OCCLUSION, BLOOM, WATER_REFLECTIONS, VEHICLE_REFLECTIONS, SUN_MOON, DYNAMIC_SHADOWS, SPAWN_FADE, DRAW_DISTANCE, FOG_MODE/FOG_HEIGHT, HIDE_MORE_GAMES, HIDE_GAMELOFT_LIVE, SHORT_WARNING, FAST_LOAD, CUTSCENE_KEYS, TUTORIAL_KEYS, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, PAD_ICONS, PAD_LAYOUT, PAD_MENU, PAD_HINTS, KEY_MOVE, PLAYERSWITCH_INVENTORY, LC_SWITCH, UC_CRUSHER, CUSTOM_RADIO, RADIO_SONGS, NO_INTRO, SHOW_CURSOR, BACKGROUND_THROTTLE or the population densities; "
+    "[config] ORIGINAL_MAC_EXPERIENCE=1: 60 ticks/s, original physics, no MENUFLASH_FIX, FADE_EDGE_FIX, MENU_FADE_CLICKS, " SOLO_CAR_ "RADIO_LOGO_FIX, SWITCH_SAVE_FIX, AI_STEERING_FIX, BOAT_SEAT_FIX, ALPHA_TO_COVERAGE, POST_AA, ANISOTROPIC_FILTERING, AMBIENT_OCCLUSION, BLOOM, WATER_REFLECTIONS, VEHICLE_REFLECTIONS, SUN_MOON, DYNAMIC_SHADOWS, SPAWN_FADE, DRAW_DISTANCE, FOG_MODE/FOG_HEIGHT, HIDE_MORE_GAMES, HIDE_GAMELOFT_LIVE, SHORT_WARNING, CUTSCENE_KEYS, TUTORIAL_KEYS, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, TIME_OF_DAY, RANDOM_TIME_OF_DAY, PAD_ICONS, PAD_LAYOUT, PAD_MENU, PAD_HINTS, KEY_MOVE, PLAYERSWITCH_INVENTORY, LC_SWITCH, UC_CRUSHER, CUSTOM_RADIO, RADIO_SONGS, NO_INTRO, SHOW_CURSOR, BACKGROUND_THROTTLE or the population densities; "
             "TEXFIX, SWAP_COPY, NO_FLICKER, VTXFIX, CRASH58_GUARD, STOPLOCK_FIX, MISSION_SAVE_FIX, STATIC_VBO, SHARED_RESOLVE, QUERY_FREE, STREAM_VBO, FILE_MISS_CACHE, FILE_POOL, FOG_SKIP_FAR, PRECISE_WAIT, LOAD_SLEEP_SKIP, LOAD_BUDGET=200 and FAST_LOAD on; MSAA=4\n",
     retired, sizeof retired / sizeof *retired,
+    absent, sizeof absent / sizeof *absent,
 };

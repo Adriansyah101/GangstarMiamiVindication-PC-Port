@@ -1,4 +1,4 @@
-# A device SDL has no mapping for, passed through as it is: the D-pad as a hat works the menu, into the city, the stick walks
+# Unmapped raw device: hat works the menu, into the city, stick walks
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
@@ -12,9 +12,9 @@ wait 8
 padfor 300 A
 wait 14
 shot menu
-padfor 2000 UP LEFT                # the hat, at full speed
-padfor 148 RIGHT                   # 900 view units a second: to CONTINUE at 133, 300
-padfor 280 DOWN                    # a step takes about 60 ms more than it says
+padfor 2000 UP LEFT
+padfor 148 RIGHT
+padfor 280 DOWN
 wait 1
 shot pointer
 padfor 150 A

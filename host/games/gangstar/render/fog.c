@@ -1,4 +1,3 @@
-/* fog.c -- FOG_MODE 1: fog on the whole world, and the sea carried on past the map's edge (sea_beyond) */
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -11,46 +10,21 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- FOG_MODE 1/2: fog on the whole world (distances from DRAW_DISTANCE, the patches gmv_set_fog) ---------
-   The game fogs per material (bits 12-13 of the render-state word, read at 0x4fc871; 0 = glDisable(GL_FOG))
-   and most of the city's materials -- buildings, roads, the sea -- have it off, on the Mac too.  With fog
-   distances given, a perspective, depth-tested draw to the screen that the game left unfogged is drawn
-   with the game's linear fog anyway.  Left alone: the sky dome and the sun and moon discs (g_sky_draw,
-   set by the patches around the skybox render), the glows, the 2D layer and the game's own framebuffers.
-   Additive draws are fogged towards black and multiplying ones towards white, so they fade out instead
-   of turning into fog-coloured shapes.
-   The fog's colour is the sky's.  The game's fog colour is a near-white that drifts away from the sky at
-   dusk and night, so the fogged city stood out against the sky as a pale band.  The sky gradient is a
-   wall kept in front of the camera (its largest x) whose vertex colours change with height, symmetric
-   about eye level; sky_read takes its colours and position as it is drawn, every frame, and the fog
-   colour becomes the sky's at eye level, also for the materials the game fogs itself (ao_Fogfv).
-   The distant skyline (farcity, the alpha-blended skybox mesh: a half cylinder around the camera, z up,
-   its foot where the world is seen to end once the patches has raised the skybox with the camera, a
-   skirt below it down to z -0.26 and the buildings up to z 0.25) has no real
-   distance.  It lies past the end of the drawn city, so at its foot it takes the fog of the city's far
-   end (g_fog_world_far, from the patches), and the city's fogged edge runs into it without a seam; above
-   that the fog thins to FOG_FARCITY of it by FOG_FARCITY_RISE, so the taller buildings stand out of the
-   haze, and its colour turns to the sky's right behind each point.  A small shader draws it as the
-   game's material does (unit 0 texture times vertex colour; the alpha test stays fixed-function) with
-   that fog.  Without shaders it gets FOG_FARCITY of the fog colour throughout, through a constant fog
-   coordinate. */
-extern float g_fog_world_far;                           /* world units */
+/* FOG_MODE 0x4fc871 */
+extern float g_fog_world_far;
 #define FOG_FARCITY      0.6f
-#define FOG_FARCITY_RISE 0.08f                          /* in the mesh's z: about 8 degrees above the horizon */
-GLfloat g_fog_col[4];                            /* GL_FOG_COLOR in force */
-GLfloat g_fog_game[4];                           /* GL_FOG_COLOR as the game last set it */
+#define FOG_FARCITY_RISE 0.08f
+GLfloat g_fog_col[4];
+GLfloat g_fog_game[4];
 int g_fog_game_set;
-int g_fog_mode;                                  /* FOG_MODE: 0 the game's own, 1 linear, 2 the hybrid */
-float g_fog_height = 6000;                       /* FOG_HEIGHT, world units; 0 = as thick at every height */
+int g_fog_mode;
+float g_fog_height = 6000;
 
 sky_t sky;
 
-/* An array or index pointer as client memory: as given when no buffer object is bound for it (`binding`
-   names its binding, e.g. GL_COLOR_ARRAY_BUFFER_BINDING), else where it lies in the data of a game
-   buffer made static (GMV_VBO_STATIC keeps that data); NULL when not readable. */
 const char *cl_ptr(GLenum binding, const void *p, GLint *buf)
 {
-    GLint b = gmv_gl_buf(binding);                      /* QUERY_FREE keeps it */
+    GLint b = gmv_gl_buf(binding);
     if (buf)
         *buf = b;
     if (!b)
@@ -58,8 +32,6 @@ const char *cl_ptr(GLenum binding, const void *p, GLint *buf)
     return gmv_vbostatic_client((unsigned)b, (uintptr_t)p);
 }
 
-/* GL_ARRAY_BUFFER for the host's own client arrays (0) and back; the array pointers keep the buffer
-   bound when they were given.  Noted for QUERY_FREE. */
 static void cl_array_buffer(GLuint b)
 {
     gmv_gl_bind_buffer(0x8892, b);
@@ -76,13 +48,10 @@ static void sky_colour_at(GLfloat z, GLfloat *out)
         out[k] = sky.c[i - 1][k] + (sky.c[i][k] - sky.c[i - 1][k]) * t;
 }
 
-/* Below eye level the gradient repeats the sky upside down.  It shows only where nothing of the world is
-   drawn, past the end of the sea, and there it takes the fog's colour, as fully fogged sea would have:
-   the gradient is drawn from a copy of its colours with those below eye level set to it. */
 static struct {
-    const void *ptr;                                    /* the game's colour array, restored after the draw */
+    const void *ptr;
     GLint stride;
-    GLint buf, abo;                                     /* the buffer object it is in (0 = client memory); GL_ARRAY_BUFFER */
+    GLint buf, abo;
     unsigned char col[1024 * 64];
 } sky_floor;
 
@@ -124,20 +93,18 @@ void sky_floor_end(void)
         cl_array_buffer((GLuint)sky_floor.abo);
 }
 
-/* Before the sky gradient's draw (the skybox's unblended indexed draw, client arrays); 1 = its colours
-   are replaced for the draw (sky_floor_end after it). */
 int sky_read(GLsizei count, GLenum type, const void *idx)
 {
     if (!g_fog_all || !g_sky_draw || g_blend_on || type != GL_UNSIGNED_SHORT || count > 256)
         return 0;
-    gmv_arr_t va, ca;                                   /* QUERY_FREE keeps the arrays */
-    GLint abo = gmv_gl_buf(0x8894), cbuf = 0;           /* GL_ARRAY_BUFFER_BINDING */
+    gmv_arr_t va, ca;
+    GLint abo = gmv_gl_buf(0x8894), cbuf = 0;
     gmv_gl_arr(GA_VERTEX, &va);
     int con = gmv_gl_arr(GA_COLOR, &ca);
     GLint sz = va.size, ty = va.type, st = va.stride, csz = ca.size, cty = ca.type, cst = ca.stride;
     const void *cp_given = ca.ptr;
-    const char *p = cl_ptr(0x8896, va.ptr, NULL);       /* GL_VERTEX_ARRAY_BUFFER_BINDING */
-    const char *cp = cl_ptr(0x8898, cp_given, &cbuf);   /* GL_COLOR_ARRAY_BUFFER_BINDING */
+    const char *p = cl_ptr(0x8896, va.ptr, NULL);
+    const char *cp = cl_ptr(0x8898, cp_given, &cbuf);
     const uint16_t *ix = (const uint16_t *)cl_ptr(0x8895, idx, NULL);
     if (!ix || !p || !cp || sz < 3 || ty != GL_FLOAT || csz != 4 || cty != GL_UNSIGNED_BYTE || !con)
         return 0;
@@ -159,9 +126,9 @@ int sky_read(GLsizei count, GLenum type, const void *idx)
         while (at < n && z[at] < v[2] - 1e-4f)
             at++;
         if (at < n && fabsf(z[at] - v[2]) <= 1e-4f)
-            continue;                                   /* a height already read */
+            continue;
         if (n == SKY_KEYS)
-            return 0;                                   /* not the gradient expected */
+            return 0;
         memmove(z + at + 1, z + at, (size_t)(n - at) * sizeof *z);
         memmove(c + at + 1, c + at, (size_t)(n - at) * sizeof *c);
         z[at] = v[2];
@@ -172,12 +139,12 @@ int sky_read(GLsizei count, GLenum type, const void *idx)
     if (n < 2)
         return 0;
     GLfloat m[16];
-    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    memcpy(m, ao_matrix(GL_MODELVIEW), sizeof m);
     GLfloat a = m[0], b = m[4], cc = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
     GLfloat det = a * (e * i - f * h) - b * (d * i - f * g) + cc * (d * h - e * g);
     if (!(fabsf(det) > 1e-20f))
         return 0;
-    GLfloat r[9] = {(e * i - f * h) / det, (cc * h - b * i) / det, (b * f - cc * e) / det,     /* by row */
+    GLfloat r[9] = {(e * i - f * h) / det, (cc * h - b * i) / det, (b * f - cc * e) / det,
                     (f * g - d * i) / det, (a * i - cc * g) / det, (cc * d - a * f) / det,
                     (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det};
     for (int row = 0; row < 3; row++) {
@@ -212,7 +179,6 @@ static const char farcity_vs[] =
     "    e = (gl_ModelViewMatrix * gl_Vertex).xyz;\n"
     "}\n";
 
-/* The sky behind a point: its eye-space direction taken into the sky's space, to the wall. */
 static const char farcity_fs[] =
     "#version 120\n"
     "uniform sampler2D tex;\n"
@@ -230,7 +196,7 @@ static const char farcity_fs[] =
     "    float t = (wall - cam.x) / d.x;\n"
     "    if (t <= 0.0) return gl_Fog.color.rgb;\n"
     "    float h = cam.z + t * d.z;\n"
-    "    if (h < cam.z) return gl_Fog.color.rgb;\n"     /* below eye level the sky is the fog's colour */
+    "    if (h < cam.z) return gl_Fog.color.rgb;\n"
     "    vec3 c = kc[0];\n"
     "    for (int i = 1; i < 12; i++)\n"
     "        if (i < kn && h > kz[i - 1])\n"
@@ -245,7 +211,7 @@ static const char farcity_fs[] =
     "}\n";
 
 static struct {
-    int ready;                                          /* 0 = not tried, 1 = shader, -1 = fog coordinate */
+    int ready;
     GLuint p;
     GLint u_tex, u_base, u_top, u_rise, u_wall, u_kn, u_kz, u_kc, u_inv, u_cam, prog;
 } fcy;
@@ -274,7 +240,7 @@ int fog_force_begin(void)
     ao_proj_refresh();
     if (!g_ao_persp)
         return 0;
-    int kind = 1;   /* 1 plain, 2 towards black, 3 towards white, 4 farcity by fog coordinate, 5 by shader */
+    int kind = 1;
     if (g_blend_on) {
         if (g_blend_dst == GL_ONE)
             kind = 2;
@@ -283,7 +249,7 @@ int fog_force_begin(void)
     }
     if (g_sky_draw) {
         if (!g_blend_on || g_blend_dst != GL_ONE_MINUS_SRC_ALPHA)
-            return 0;                                   /* the sky dome, the discs */
+            return 0;
         kind = 4;
     }
     if (kind == 2 || kind == 3) {
@@ -297,7 +263,7 @@ int fog_force_begin(void)
         if (!fcy.ready)
             fcy.ready = farcity_init() ? 1 : -1;
         if (fcy.ready > 0) {
-            fcy.prog = gmv_gl_cur_prog();           /* GL_CURRENT_PROGRAM, QUERY_FREE */
+            fcy.prog = gmv_gl_cur_prog();
             aof.UseProgram(fcy.p);
             aof.Uniform1i(fcy.u_tex, 0);
             aof.Uniform1f(fcy.u_base, base);
@@ -320,7 +286,7 @@ int fog_force_begin(void)
         static void(APIENTRY * fc)(GLfloat);
         if (!fc)
             fc = gl_real("glFogCoordf");
-        glFogi(0x8450 /* GL_FOG_COORD_SRC */, 0x8451 /* GL_FOG_COORD */);
+        glFogi(0x8450 /* 0x8450 GL_FOG_COORD_SRC */, 0x8451 /* 0x8451 GL_FOG_COORD */);
         if (fc)
             fc(fs + (fe - fs) * base * FOG_FARCITY);
     }
@@ -340,14 +306,9 @@ void fog_force_end(int kind)
     if (kind == 2 || kind == 3)
         glFogfv(GL_FOG_COLOR, g_fog_col);
     else if (kind == 4)
-        glFogi(0x8450, 0x8452 /* GL_FRAGMENT_DEPTH */);
+        glFogi(0x8450, 0x8452 /* 0x8452 GL_FRAGMENT_DEPTH */);
 }
 
-/* Past g_fog_clip (the patches: the fog's end, if the drawn city reaches beyond it) the world would only
-   be fog-coloured shapes, which covered the skyline's foot standing there: world draws to the screen
-   are clipped at that depth from the eye, as the fog counts it, by a user clip plane given in eye space
-   (the game uses its own clip planes only for its framebuffers).  It also spares the GPU the city that
-   could not be seen. */
 int fog_clip_begin(void)
 {
     if (!g_fog_all || !(g_fog_clip > 0) || g_fog_clip >= g_fog_world_far || g_sky_draw || g_sky_glow_draw ||
@@ -357,10 +318,9 @@ int fog_clip_begin(void)
     if (!g_ao_persp)
         return 0;
     static GLdouble eq[4];
-    GLdouble want[4] = {0, 0, -g_ao_proj[11], g_fog_clip};     /* -z + d >= 0 looking down +z, z + d >= 0 down -z */
+    GLdouble want[4] = {0, 0, -g_ao_proj[11], g_fog_clip};
     if (memcmp(eq, want, sizeof eq)) {
-        GLint mode = GL_MODELVIEW;
-        glGetIntegerv(GL_MATRIX_MODE, &mode);
+        GLint mode = (GLint)g_ao_mode;
         glMatrixMode(GL_MODELVIEW);
         glPushMatrix();
         glLoadIdentity();
@@ -376,16 +336,6 @@ int fog_clip_begin(void)
     return 1;
 }
 
-/* ---- FOG_SKIP_FAR (a port speed-up, [Advanced], on by default and under ORIGINAL_MAC_EXPERIENCE) ---------------
-   With the fog's clip on (FOG_MODE 1 or 2), nothing past g_fog_clip is drawn.  The game draws the city in two passes, the
-   full-detail one and the low-detail far one, and the far one starts where the full detail ends: at DRAW_DISTANCE=2 that
-   is 900 m, where the fog ends too, so every draw of the far pass was sent to the driver and then clipped away whole.
-   A draw whose projection's near plane lies at or past the clip can leave no fragment (everything it covers is nearer
-   than the clip and farther than the near plane at once), so its call to the driver is left out; the hooks around it
-   still run as before (the layer counts, the glow layer, the marks), so nothing else changes.  The near plane is solved
-   from the projection: the eye-space z where clip z = -w, P10 z + P14 = -P11 z, so the distance is |P14 / (P10 + P11)|
-   whichever way the projection looks.  GMV_FOG_SKIP_FAR=0 sends them again.  GMV_FOG_SKIP_FAR_CHECK=1 (dev) draws them
-   anyway inside an occlusion query and counts the ones that let any sample through (each should let none). */
 int g_fog_skip_far = 1;
 #if GMV_DEV
 static unsigned fs_skipped, fs_draws, fs_checked, fs_through;
@@ -403,7 +353,7 @@ static void fs_check_collect(void)
 {
     for (int i = 0; i < fsq.n; i++) {
         GLuint any = 0;
-        fsq.Get(fsq.q[i], 0x8866, &any);                    /* GL_QUERY_RESULT */
+        fsq.Get(fsq.q[i], 0x8866, &any);
         fs_checked++;
         fs_through += any != 0;
     }
@@ -411,7 +361,6 @@ static void fs_check_collect(void)
 }
 #endif
 
-/* After fog_clip_begin said 1: the draw cannot show (its near plane is at or past the clip). */
 int fog_skip_far(void)
 {
 #if GMV_DEV
@@ -444,13 +393,12 @@ int fog_skip_far(void)
         }
     }
     if (fs_check)
-        return 2;                                           /* draw it, counted */
+        return 2;
 #endif
     return 1;
 }
 
 #if GMV_DEV
-/* Around the draw fog_skip_far answered 2 for: a query (GL_ANY_SAMPLES_PASSED). */
 void fog_skip_check(int begin)
 {
     if (begin) {
@@ -479,26 +427,16 @@ void gmv_fog_skip_report(double seconds)
 }
 #endif
 
-/* The city's sea (alpha-blended, no depth writes, unit 0 texture times vertex colour, client arrays
-   interleaved by 24 bytes) fills the box SEA_X0..SEA_X1 x SEA_Y0..SEA_Y1, deep blue at its edge, and
-   stops there.  Near the map's edges and from the air that edge is in view well inside the fog, a
-   straight line with nothing past it.  With fog on the whole world the sea goes on past the box, around
-   the camera to beyond the pass's far plane, in the edge's colour and with the texture laid as the
-   sea's own (fitted to the chunk's texture coordinates, so it scrolls with them).  It is drawn right
-   after the first chunk of sea on the box's edge in each pass of a frame (the city's near pass and its
-   low-detail far pass, each with its own depth range; drawn in the far pass alone, it was all past the
-   fog's clip whenever the near pass reached beyond it), in that chunk's state and fog, in squares of
-   SEA_CELL so the fog is right across each. */
 #define SEA_X0   -120719.0f
 #define SEA_X1    119609.0f
 #define SEA_Y0   -110358.0f
 #define SEA_Y1    146129.0f
 #define SEA_CELL  25000.0f
-#define SEA_MAX   1024                                  /* squares a frame */
+#define SEA_MAX   1024
 
 void sea_beyond(GLsizei count, GLenum type, const void *idx)
 {
-    static unsigned done[2] = {~0u, ~0u};               /* by pass: the near one, the low-detail far one */
+    static unsigned done[2] = {~0u, ~0u};
     static unsigned char edge[4] = {30, 58, 111, 255};
     static GLfloat pos[SEA_MAX * 6][3], uv[SEA_MAX * 6][2];
     static unsigned char col[SEA_MAX * 6][4];
@@ -506,27 +444,26 @@ void sea_beyond(GLsizei count, GLenum type, const void *idx)
     if (done[pass] == g_frame_no || g_sky_draw || !g_blend_on || g_blend_src != GL_SRC_ALPHA ||
         g_blend_dst != GL_ONE_MINUS_SRC_ALPHA || type != GL_UNSIGNED_SHORT || count < 3 || count > 20000)
         return;
-    GLboolean dmask = (GLboolean)g_ao_dmask;            /* QUERY_FREE: glDepthMask as the game set it (ao.c) */
+    GLboolean dmask = (GLboolean)g_ao_dmask;
     if (!gmv_gl_query_free())
         glGetBooleanv(GL_DEPTH_WRITEMASK, &dmask);
     if (dmask)
         return;
     if (gmv_gl_client_unit() != 0x84C0 || !gmv_gl_arr_on(GA_COLOR) || !gmv_gl_arr_on(GA_TEX0))
-        return;                                         /* QUERY_FREE keeps the arrays */
+        return;
     gmv_arr_t va, ca, xa;
     gmv_gl_arr(GA_VERTEX, &va);
     gmv_gl_arr(GA_COLOR, &ca);
     gmv_gl_arr(GA_TEX0, &xa);
     GLint sz = va.size, ty = va.type, st = va.stride, csz = ca.size, cty = ca.type, cst = ca.stride, tsz = xa.size,
           tty = xa.type, tst = xa.stride;
-    const char *p = cl_ptr(0x8896, va.ptr, NULL);       /* GL_VERTEX_ARRAY_BUFFER_BINDING */
-    const char *cp = cl_ptr(0x8898, ca.ptr, NULL);      /* GL_COLOR_ARRAY_BUFFER_BINDING */
-    const char *tp = cl_ptr(0x889A, xa.ptr, NULL);      /* GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING (unit 0) */
+    const char *p = cl_ptr(0x8896, va.ptr, NULL);
+    const char *cp = cl_ptr(0x8898, ca.ptr, NULL);
+    const char *tp = cl_ptr(0x889A, xa.ptr, NULL);
     const uint16_t *ix = (const uint16_t *)cl_ptr(0x8895, idx, NULL);
     if (!ix || !p || !cp || !tp || sz != 3 || ty != GL_FLOAT || st != 24 || csz != 4 || cty != GL_UNSIGNED_BYTE ||
         cst != 24 || tsz != 2 || tty != GL_FLOAT || tst != 24)
         return;
-    /* Flat at sea level, on the box's edge, and three corners to fit the texture to. */
     int lo = -1, hi = -1, on_edge = -1;
     for (int k = 0; k < count; k++) {
         const float *v = (const float *)(p + (size_t)ix[k] * 24);
@@ -561,7 +498,7 @@ void sea_beyond(GLsizei count, GLenum type, const void *idx)
         fit[j][1] = (dx1 * d2 - d1 * dx2) / det;
         fit[j][2] = ta[j] - fit[j][0] * a[0] - fit[j][1] * a[1];
     }
-    for (int k = 0; k < count; k += count / 8 + 1) {   /* the texture must lie flat across the sea */
+    for (int k = 0; k < count; k += count / 8 + 1) {
         const float *v = (const float *)(p + (size_t)ix[k] * 24), *t = (const float *)(tp + (size_t)ix[k] * 24);
         for (int j = 0; j < 2; j++)
             if (fabs(fit[j][0] * v[0] + fit[j][1] * v[1] + fit[j][2] - t[j]) > 0.01)
@@ -569,9 +506,8 @@ void sea_beyond(GLsizei count, GLenum type, const void *idx)
     }
     memcpy(edge, cp + (size_t)on_edge * 24, 4);
     done[pass] = g_frame_no;
-    /* The camera, and how far this pass sees (corners of the screen included). */
     GLfloat m[16];
-    glGetFloatv(GL_MODELVIEW_MATRIX, m);
+    memcpy(m, ao_matrix(GL_MODELVIEW), sizeof m);
     float camx = -(m[0] * m[12] + m[1] * m[13] + m[2] * m[14]), camy = -(m[4] * m[12] + m[5] * m[13] + m[6] * m[14]);
     float far1 = fabsf(g_ao_proj[14] / (g_ao_proj[10] + 1)), far2 = fabsf(g_ao_proj[14] / (g_ao_proj[10] - 1));
     float r = 1.5f * (far1 > far2 ? far1 : far2);
@@ -610,17 +546,17 @@ void sea_beyond(GLsizei count, GLenum type, const void *idx)
     if (!client_tex) client_tex = gl_real("glClientActiveTexture");
     if (!draw || !client_tex)
         return;
-    GLint abo = gmv_gl_buf(0x8894);                     /* GL_ARRAY_BUFFER_BINDING */
-    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);     /* QUERY_FREE: what changes until the pop is not noted */
+    GLint abo = gmv_gl_buf(0x8894);
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
     if (abo)
-        cl_array_buffer(0);                             /* the squares are client arrays */
+        cl_array_buffer(0);
     for (int u = 3; u >= 0; u--) {
         client_tex(0x84C0 + u);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     }
     glDisableClientState(GL_NORMAL_ARRAY);
-    glDisableClientState(0x845E);                       /* GL_SECONDARY_COLOR_ARRAY */
-    glDisableClientState(0x8457);                       /* GL_FOG_COORD_ARRAY */
+    glDisableClientState(0x845E);
+    glDisableClientState(0x8457);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -629,7 +565,7 @@ void sea_beyond(GLsizei count, GLenum type, const void *idx)
     glTexCoordPointer(2, GL_FLOAT, 0, uv);
     draw(GL_TRIANGLES, 0, n * 6);
     glPopClientAttrib();
-    if (abo)                                            /* the pop restores it too; the game's own bind cache relies on it */
+    if (abo)
         cl_array_buffer((GLuint)abo);
     client_tex(0x84C0);
     static int logged;

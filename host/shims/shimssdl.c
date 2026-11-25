@@ -1,13 +1,3 @@
-/* shimssdl.c -- SDL stand-ins.
-
-   Only the SDL entry points the game reaches are implemented here.  SDL_Init / InitSubSystem /
-   QuitSubSystem matter only for SDL_INIT_JOYSTICK: the joystick API is backed by real controllers
-   in shimsjoy.c (through SDL3), and the joystick init flag is what makes it (re)scan.
-
-   The video / input / GL calls the game makes from gameplay (SDL_SetVideoMode, SDL_PumpEvents,
-   SDL_GL_SwapBuffers, ...) are deliberately left as name-reporting thunks, so the first one hit
-   in a later stage names itself instead of silently returning a wrong value. */
-
 #include <stdint.h>
 
 #include "log.h"
@@ -30,17 +20,11 @@ static int sdl_init(uint32_t flags)
 static int sdl_init_subsystem(uint32_t flags) { gmv_joy_init(flags); return 0; }
 static void sdl_quit_subsystem(uint32_t flags) { gmv_joy_quit(flags); }
 
-/* ---- gameplay: video / input / GL (minimal; our own Win32 window + WGL do the real work) --- */
-/* The game polls SDL_PumpEvents every frame; we use it as our once-per-frame hook to pump the
-   Win32 message queue (keeps the window responsive) and deliver mouse input to the EAGLView. */
 static void sdl_pump_events(void) { gmv_input_pump(); }
 static int sdl_peep_events(void *ev, int num, int act, uint32_t mn, uint32_t mx)
 {
-    /* The game drains keyboard with SDL_GETEVENT (act==2), one event per call.  Hand back one
-       queued key event (captured from Win32 in shimsinput.c) when the range overlaps 0x300/0x301;
-       every other category returns 0: quit has no source, mouse goes via Cocoa, and the joystick
-       events (0x600..0x604) are only drained and discarded by the game, which polls instead. */
-    if (ev && num > 0 && act == 2 /* SDL_GETEVENT */)
+    /* SDL_GETEVENT 0x300/0x301 0x600..0x604 */
+    if (ev && num > 0 && act == 2 )
         return gmv_input_get_sdl_event(ev, mn, mx);
     return 0;
 }
@@ -49,7 +33,7 @@ static int sdl_gl_set_attribute(int attr, int value) { (void)attr; (void)value; 
 static void *sdl_set_video_mode(int w, int h, int bpp, uint32_t flags)
 {
     (void)w; (void)h; (void)bpp; (void)flags;
-    return (void *)1;                           /* a non-null "surface" */
+    return (void *)1;
 }
 static void sdl_wm_set_caption(const char *title, const char *icon) { (void)title; (void)icon; }
 static int sdl_enable_unicode(int enable) { (void)enable; return 0; }

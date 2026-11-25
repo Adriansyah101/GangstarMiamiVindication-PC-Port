@@ -1,4 +1,4 @@
-# CAR REFLECTIONS on a Laufer the player is put in (TEST_SPAWN_CAR): standing, turned round and driving; the shots show the reflections, roofs and trunks included (the screen as a sphere map where the screen-space ray finds nothing)
+# VEHICLE_REFLECTIONS on a spawned Laufer (TEST_SPAWN_CAR): standing, turned and driving
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280

@@ -1,4 +1,3 @@
-/* pad_layout.c -- PAD_LAYOUT: a GTA V-like gamepad layout */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -11,44 +10,15 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- PAD_LAYOUT (menu: PAD LAYOUT, MAC / GTA-LIKE): a GTA V-like gamepad layout (an enhancement;
-   off under ORIGINAL_MAC_EXPERIENCE) ----
-   Pad buttons reach the game as events {vtable, 0x1e, button, state} from the poller 0x191a0
-   (state 0 pressed, 1 held, every frame, then 2 and 3 released); the D-pad as {.., 0x1d, direction,
-   state} with 1 up, 2 right, 3 down, 4 left, 5-8 the diagonals.  Each control mode has an input
-   handler; its onEvent (vtable slot 2) checks that the game is playable (no menu, cutscene, loading
-   or pause), turns the button into an action through its map at handler+0x1c (std::map<int,int>:
-   root +0x24, node key +0x10, value +0x14; a missing button is added with action 0) and hands its
-   dispatcher the action event {0x63e1e0 vtable, 0xe, state, action}.  The D-pad becomes the move
-   actions 0x23-0x26.
-     foot   vtable 0x656648, onEvent 0x11ca7e, dispatcher 0x11edf4
-     car    vtable 0x656aa8, onEvent 0x12bb8e, dispatcher 0x12d496
-     flying vtable 0x656ae8, onEvent 0x12e99e, dispatcher 0x12fab6
-     sniper vtable 0x650a88, onEvent 0x0a5e96, dispatcher 0x0a6c14
-   Actions (from the dispatchers and the controls page's names): 1 shoot; 3/5 get in or out (5 on
-   foot also does 4); 4 shops/buildings; 9/10 next/previous weapon (sniper: zoom out/in); 0xb pause;
-   0xc radio on/off; 0xd/0xe next/previous station; 0xf leave the sniper view; 0x11 foot cover, car
-   brake/reverse; 0x12 foot sprint, car gas; 0x14 look back; 0x15 reload; 0x16 the CB's special
-   mission; 0x17 handbrake; 0x18 lock on (toggles player+0x6f8 on its press); 0x27/0x28 car gas and
-   brake/reverse, flying up/down; 0x29/0x2a car steer, flying turn left/right.  (0x13 opens the Minisave menu.)
-   With the setting on, our onEvent puts our action in the map for the button, lets the game's run
-   (its checks and its dispatch), then puts the game's back.  A missing button is first added by a
-   run with state 3, which dispatches action 0, a no-op in every mode.  The D-pad becomes buttons
-   12-15 (up, right, down, left); the diagonals do nothing.  LT on foot and A in a car (drive-by, the
-   car dispatcher's 0x18, the right mouse button's action there) lock on while held.  In a
-   car the left stick's up/down is dropped: gas and brake/reverse are on the triggers as the D-pad's
-   up/down actions 0x27/0x28 (full throttle while held, digital).  Not the Mac's B/X actions
-   0x12/0x11: those do nothing while the car stands still (0x109304 = speed near 0). */
-#define PL_BTN_EV_VT  0x0063e178u   /* -> the poller's button event vtable (the object's is its +8)    */
-#define PL_PLAYER_PP  0x0063e010u   /* -> the global holding the player                                */
-#define PL_LOCK_FLAG  0x6f8         /* player byte: lock on with every weapon (0x0faa3a picks the
-                                       nearest target each frame; without it only weapon kinds 1-2) */
-#define PL_TARGET     0x650         /* player: the current target                                      */
+/* 0x1e 0x191a0 0x1d handler+0x1c +0x24 +0x10 +0x14 */
+#define PL_BTN_EV_VT  0x0063e178u
+#define PL_PLAYER_PP  0x0063e010u
+#define PL_LOCK_FLAG  0x6f8         /* 0x0faa3a */
+#define PL_TARGET     0x650
 
 static const uint32_t pl_vt[PL_KINDS] = { 0x00656648u, 0x00656aa8u, 0x00656ae8u, 0x00650a88u };
 static const uint32_t pl_orig[PL_KINDS] = { 0x0011ca7eu, 0x0012bb8eu, 0x0012e99eu, 0x000a5e96u };
 
-/* X A B Y LB RB LT RT Back Start L3 R3, then the D-pad's up right down left (0 = nothing) */
 const int pl_map[PL_KINDS][PL_BTNS] = {
     {    4, 0x12, 0x15, 5,   10, 0x11, PL_AIM,    1, 0, 0xb, 0,    0,    0,   9,   0,  10 },
     {   10, PL_AIM, 9, 5,    1, 0x17,   0x28, 0x27, 0, 0xb, 0, 0x14, 0x16, 0xd, 0xc, 0xe },
@@ -59,10 +29,7 @@ const int pl_map[PL_KINDS][PL_BTNS] = {
 typedef void (*pl_fn)(void *, int *, void *);
 volatile int g_pl_on, g_pl_ok, g_pl_aim_btn = -1;
 
-/* Every call into game code goes through these: the game's SSE code keeps movapd stack locals and
-   needs esp 16-byte aligned, which mingw does not keep across our own helper frames (getting into a
-   car crashed in the input reset 0x19d72 -> 0x599d2f before this). no-optimize-sibling-calls matters:
-   without it gcc turns the call into "leave; jmp" and the realignment is lost. */
+/* SSE esp 0x19d72 -> 0x599d2f */
 __attribute__((noinline, force_align_arg_pointer, optimize("no-optimize-sibling-calls")))
 static void pl_orig_call(int kind, void *h, int *ev, void *bus)
 {
@@ -81,14 +48,13 @@ uint32_t pl_call1(uint32_t fn, uint32_t a)
     return ((uint32_t (*)(uint32_t))(uintptr_t)fn)(a);
 }
 
-/* The camera's turn (vtable +0x18): (camera, x pixels, y pixels). */
+/* +0x18 */
 __attribute__((noinline, force_align_arg_pointer, optimize("no-optimize-sibling-calls")))
 static void pl_cam_turn(unsigned char *cam, int x, int y)
 {
     ((void (*)(unsigned char *, int, int))(uintptr_t)*(uint32_t *)(uintptr_t)(*(uint32_t *)cam + 0x18))(cam, x, y);
 }
 
-/* The action slot of button `key` in the handler's map, or NULL. */
 static int *pl_node(unsigned char *h, int key)
 {
     unsigned char *head = h + 0x20, *n = *(unsigned char **)(h + 0x24), *best = head;
@@ -108,13 +74,12 @@ static unsigned char *pl_player(void)
     return *(unsigned char **)(uintptr_t)*(const uint32_t *)(uintptr_t)PL_PLAYER_PP;
 }
 
-/* The game's onEvent with `act` as the button's action. */
 static void pl_run(int kind, unsigned char *h, int *ev, void *bus, int act)
 {
     int b = ev[2], *v = pl_node(h, b), keep;
     if (!v) {
         int probe[4] = { ev[0], ev[1], b, 3 };
-        pl_orig_call(kind, h, probe, bus);      /* adds the button (action 0) if the game is playable */
+        pl_orig_call(kind, h, probe, bus);
         if (!(v = pl_node(h, b)))
             return;
     }
@@ -132,7 +97,7 @@ static void pl_button(int kind, unsigned char *h, int *ev, void *bus)
     if (b < 0 || b >= PL_BTNS)
         return;
     act = pl_map[kind][b];
-    if (b == g_pl_aim_btn && st == 2 && kind != PL_SNIPER) {   /* the lock-on button let go, in this mode */
+    if (b == g_pl_aim_btn && st == 2 && kind != PL_SNIPER) {
         g_pl_aim_btn = -1;
         if ((p = pl_player()) && p[PL_LOCK_FLAG]) {
             int e2[4] = { ev[0], ev[1], b, 0 };
@@ -156,16 +121,7 @@ static void pl_button(int kind, unsigned char *h, int *ev, void *bus)
         pl_run(kind, h, ev, bus, act);
 }
 
-/* A stick's camera turn {vt, 0x1b, 1 left / 3 right, y, x} (high-fps fix, on whatever PAD_LAYOUT says).
-   The pads are read in the drawn-frame phase 0x3ed8, every other tick, and each read turns the
-   camera by (int)(v * K) pixels (v -1..1; K 16 on foot and in a car, right stick only; 50 in the
-   sniper view, both sticks), so the turn per second grows with the frame rate: 4x at 120 drawn
-   frames/s against the Mac's 30.  Here a read turns by v * K * (time since the last read / the Mac's
-   33.3 ms), with the fractions carried to the next read.  With PAD_LAYOUT=1 (GTA-LIKE) the foot and car
-   camera turns PL_GTA_TURN times the Mac's speed (the Mac's felt heavy; 4 = what 120 drawn
-   frames/s gave unscaled), and the sniper view eases small pushes (v * |v|) and turns slower as it
-   zooms in (by its view angle / 50, at handler+0x38, 6-50).  Not under ORIGINAL_MAC_EXPERIENCE
-   (which runs the Mac's rate anyway). */
+/* 0x1b 0x3ed8 handler+0x38 */
 #define PL_GTA_TURN 4.0f
 static void pl_stick(int kind, unsigned char *h, int *ev)
 {
@@ -179,12 +135,12 @@ static void pl_stick(int kind, unsigned char *h, int *ev)
     QueryPerformanceCounter(&now);
     ms = last[s].QuadPart ? (float)((double)(now.QuadPart - last[s].QuadPart) * 1000.0 / (double)freq.QuadPart) : 1e9f;
     last[s] = now;
-    if (ms > 100.0f) {                          /* the first read of a push */
+    if (ms > 100.0f) {
         ms = 1000.0f / 30.0f;
         rest[s][0] = rest[s][1] = 0.0f;
     } else if (ms > 66.7f)
         ms = 66.7f;
-    scale = ms * 0.03f;                         /* / 33.33 ms */
+    scale = ms * 0.03f;
     if (kind == PL_SNIPER && g_pl_on) {
         float fov = *(float *)(h + 0x38);
         if (fov >= 6.0f && fov <= 50.0f)
@@ -203,26 +159,15 @@ static void pl_stick(int kind, unsigned char *h, int *ev)
         want = v * k * scale + rest[s][a];
         n = (int)want;
         rest[s][a] = want - (float)n;
-        *(float *)&ev[3 + a] = n ? ((float)n + (n > 0 ? 0.5f : -0.5f)) / k : 0.0f;   /* the game's (int)(v * K) gives n */
+        *(float *)&ev[3 + a] = n ? ((float)n + (n > 0 ? 0.5f : -0.5f)) / k : 0.0f;
     }
 }
 
-/* The foot and vehicle camera by time (high-fps fix; replaces pl_stick there once its hook is in).
-   The camera's turn (vtable +0x18) stores a turn rate from the pixels (foot camera 0x64f528 at
-   +0x34/+0x38, car 0x64f568 at +0x50/+0x54, the third 0x656b28 at +0x78/+0x7c), and the camera
-   manager's update (0x44640, called at 0x1a2316 every tick with the tick's ms) applies it as rate *
-   dt once, clears it, and does so only when the manager's +0x24 says a turn waits.  The game sets
-   one rate per pad read, and reads come once a drawn frame, so the turn per second followed the frame
-   rate and wobbled when that moved, steady only at a fixed rate.  Here a read only records the stick
-   (after the game's own run of it with the stick at rest, which tells whether its checks let it
-   turn: the run sets +0x24), and before every camera update the rate for that stick goes in again,
-   so the game's rate * dt follows the clock at any frame rate.  The speed is the Mac's at 30 frames/s,
-   PL_GTA_TURN times it under GTA-LIKE.  The poller sends a last read at rest when the stick lets go;
-   a stick not read for 250 ms counts as at rest too. */
+/* +0x18 0x64f528 +0x34/+0x38 0x64f568 +0x50/+0x54 */
 #define PL_CAM_SITE    0x001a2316u
 #define PL_CAM_UPDATE  0x00044640u
-#define PL_CAM_MGR     0x0004547eu   /* -> the camera manager */
-#define PL_CAM_K       0x005f476cu   /* float: the game's pixels per stick unit (16) */
+#define PL_CAM_MGR     0x0004547eu
+#define PL_CAM_K       0x005f476cu
 int g_pl_cam_hooked;
 static volatile float g_rs_x, g_rs_y;
 static volatile int g_rs_on;
@@ -233,7 +178,7 @@ static void pl_cam_read(int kind, unsigned char *h, int *ev, void *bus)
     unsigned char *mgr = (unsigned char *)(uintptr_t)pl_call1(PL_CAM_MGR, 0), keep;
     int e2[5];
     memcpy(e2, ev, sizeof e2);
-    e2[3] = e2[4] = 0;                          /* 0.0f, 0.0f */
+    e2[3] = e2[4] = 0;
     keep = mgr[0x24];
     mgr[0x24] = 0;
     pl_orig_call(kind, h, e2, bus);
@@ -254,9 +199,7 @@ static void gmv_pl_cam_update(unsigned char *mgr, int dt)
     static const uint32_t vts[3][3] = { { 0x0064f528u, 0x34, 0x38 }, { 0x0064f568u, 0x50, 0x54 },
                                         { 0x00656b28u, 0x78, 0x7c } };
     unsigned char *cam = *(unsigned char **)(mgr + 8);
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    if (g_rs_on && (now.QuadPart - g_rs_t.QuadPart) * 4 > g_rs_freq.QuadPart)
+    if (g_rs_on && (gmv_qpc() - g_rs_t.QuadPart) * 4 > g_rs_freq.QuadPart)
         g_rs_on = 0;
     if (g_rs_on && cam && !gmv_config_mac()) {
         uint32_t vt = *(uint32_t *)cam;
@@ -273,15 +216,9 @@ static void gmv_pl_cam_update(unsigned char *mgr, int dt)
     ((void (*)(unsigned char *, int))(uintptr_t)PL_CAM_UPDATE)(mgr, dt);
 }
 
-/* GTA-LIKE on a motorbike: the left stick back leans back (wheelie), forward leans forward (stoppie).
-   The Mac does this with its B/X gas and brake actions while moving (0x12c51c / 0x12c628: the press,
-   held and release each set the lean; nothing while 0x109304 says the vehicle stands still), and
-   writing the lean values alone did nothing, so the stick plays those actions as a button would:
-   pushed past half, a press and then a held event per read; back inside, a release (states 2, 3).
-   Their own gas (on the back press) and brake (forward) come with them.  Buttons 20/21 are ours, in
-   the car map only while one runs (pl_run). */
+/* 0x12c51c 0x12c628 0x109304 */
 #define PL_LEAN_BTN 20
-static int g_pl_lean;                                   /* +1 back (0x12), -1 forward (0x11), 0 none */
+static int g_pl_lean;                                   /* +1 0x12 -1 0x11 */
 
 static void pl_lean_ev(int kind, unsigned char *h, void *bus, int dir, int st)
 {
@@ -301,10 +238,7 @@ static void pl_lean(int kind, unsigned char *h, void *bus, float v)
     g_pl_lean = want;
 }
 
-/* GTA-LIKE on foot: the stick's full push runs at the keyboard's speed.  The foot handler (0x11f42e)
-   moves at (|x| + |y|) * 0.6, so a full push straight ahead gives 0.58 against the keyboard's 1.0
-   (0x11dcd6); here x and y are scaled so that this comes out as the push's length (1 at the rim,
-   the stick reading about 0.97 there), keeping the direction and the slow walk of a small push. */
+/* 0x11f42e 0x11dcd6 */
 static void pl_walk(int *e2)
 {
     float x = *(float *)&e2[4], y = *(float *)&e2[3], s = fabsf(x) + fabsf(y), r, k;
@@ -354,8 +288,7 @@ static void pl_event(int kind, unsigned char *h, int *ev, void *bus)
         return;
     }
     if (kind == PL_CAR && type == 0x1c && ev[2] == 1) {
-        /* The left stick's up/down: gas and brake are on the triggers.  It leans only on a motorbike
-           (the vehicle at h+0x34 has the Moto vtable, the only one with the Moto step 0x10500a). */
+        /* h+0x34 0x10500a */
         uint32_t veh = *(const uint32_t *)(h + 0x34);
         int moto = veh && *(const uint32_t *)(uintptr_t)veh == PL_MOTO_VT;
         pl_lean(kind, h, bus, moto ? *(float *)&ev[3] : 0.0f);
@@ -392,31 +325,19 @@ int pl_set(int on)
     return 1;
 }
 
-/* The options' CONTROLS > GAMEPAD page under GTA-LIKE shows the GTA-LIKE buttons.
-   The page (widget wCustJoystick: fill 0x17f854, show 0x170224, events 0x1705bc) works on the pad
-   scheme of the category picked with its arrows ([menu mgr+0x200]; a separate object per category,
-   vtables below, slot 3 = the action's name string id).  It shows six rows a page, each {action,
-   button}, from 0x1870a4(scheme, page, rows) at 0x17f98b, with the name as scheme->vt[3](action)
-   through the string table (0x8f426 at 0x17fa08) and the button as the picture wgp_<button> (0..11,
-   so the D-pad has none).  The page count is 0x1838e8(scheme) = the scheme's action list length.
-   Clicking a row and pressing a button rebinds it (0x1865ee at 0x17fc0e, from the listener 0x17fbb4).
-   With GTA-LIKE on, the rows come from pl_rows below (actions pl_row_id(kind, i), which our slot 3
-   answers with that same id and our label call with the game's name, plus the D-pad direction for a
-   D-pad row), the count from there too, and a rebind changes nothing (the Mac map is not what plays). */
-#define PL_ROWS_SITE   0x0017f98bu   /* call 0x1870a4 (scheme, page, rows)                          */
+/* 0x17f854 0x170224 0x1705bc [mgr+0x200] 0x1870a4 */
+#define PL_ROWS_SITE   0x0017f98bu   /* call 0x1870a4 */
 #define PL_ROWS_FN     0x001870a4u
-#define PL_LABEL_SITE  0x0017fa08u   /* call 0x8f426 (string table, id) for the row's action name    */
-#define PL_REBIND_SITE 0x0017fc0eu   /* call 0x1865ee (scheme, event, rows, row): 1 = rebound       */
+#define PL_LABEL_SITE  0x0017fa08u   /* call 0x8f426 */
+#define PL_REBIND_SITE 0x0017fc0eu   /* call 0x1865ee */
 #define PL_REBIND_FN   0x001865eeu
-#define PL_COUNT_FN    0x001838e8u   /* (scheme): the number of actions                              */
-#define PL_ROW_ID      0x7e00        /* our row actions: PL_ROW_ID + kind * 32 + row                 */
+#define PL_COUNT_FN    0x001838e8u
+#define PL_ROW_ID      0x7e00
 #define PL_ROWS_MAX    16
 
-typedef struct { int name; signed char btn, dpad; } pl_row;   /* string id; button 0-11 or -1; 1-4 up right down left */
-/* In pl_map's order of importance; a second button for the same action (the D-pad's weapon or zoom
-   copies) is left out, a D-pad-only action shows its direction. */
-#define PB(id, b) {id, b, 0}            /* a button row */
-#define PD(id, d) {id, -1, d}           /* a D-pad row */
+typedef struct { int name; signed char btn, dpad; } pl_row;
+#define PB(id, b) {id, b, 0}
+#define PD(id, d) {id, -1, d}
 static const pl_row pl_rows[PL_KINDS][PL_ROWS_MAX] = {
     {   PB(0x1193, 7), PB(0x10ed, 6), PB(0x10d3, 1), PB(0x10e1, 2), PB(0x10d7, 3), PB(0x10d9, 0),
         PB(0x10df, 5), PB(0x1195, 4), PD(0x1194, 2), PB(0x1185, 9) },
@@ -430,7 +351,7 @@ static const pl_row pl_rows[PL_KINDS][PL_ROWS_MAX] = {
 #undef PB
 #undef PD
 const uint32_t pl_scheme_vt[PL_KINDS] = { 0x00659e50u, 0x00659e68u, 0x00659e38u, 0x00659e20u };
-static uint32_t pl_scheme_name[PL_KINDS];                      /* their slot 3 before ours */
+static uint32_t pl_scheme_name[PL_KINDS];
 
 static int pl_row_count(int kind)
 {
@@ -440,7 +361,6 @@ static int pl_row_count(int kind)
     return n;
 }
 
-/* GTA-LIKE and one of the pad schemes: its kind, else -1. */
 static int pl_scheme_kind(const void *scheme)
 {
     if (!g_pl_on || !scheme)
@@ -494,7 +414,6 @@ static int gmv_pl_padcount(const unsigned char *scheme)
     return (int)((*(const uint32_t *)(scheme + 0x50) - *(const uint32_t *)(scheme + 0x4c)) >> 2);
 }
 
-/* A pad scheme's slot 3 (the action's name id): ours answer for themselves. */
 static uint32_t pl_scheme_name_of(const void *scheme, int action)
 {
     for (int k = 0; k < PL_KINDS; k++)
@@ -531,7 +450,7 @@ __attribute__((cdecl, force_align_arg_pointer))
 static int gmv_pl_padrebind(void *scheme, void *ev, void *rows, int row)
 {
     if (pl_scheme_kind(scheme) >= 0)
-        return 1;                               /* "done", nothing changed: the page shows ours again */
+        return 1;
     return (unsigned char)pl_call4(PL_REBIND_FN, (uint32_t)(uintptr_t)scheme, (uint32_t)(uintptr_t)ev,
                                    (uint32_t)(uintptr_t)rows, (uint32_t)row);
 }
@@ -555,11 +474,8 @@ static void pl_controls_page_install(void)
         pl_scheme_name[k] = names[k];
         ok &= patch_bytes(pl_scheme_vt[k] + 0xc, (const unsigned char *)&f, 4);
     }
-    {   /* the count is wholly ours: a jump at its start (same cdecl arguments) */
-        unsigned char j[5] = { 0xe9 };
-        int32_t rel = (int32_t)((uint32_t)(uintptr_t)gmv_pl_padcount - (PL_COUNT_FN + 5));
-        memcpy(j + 1, &rel, 4);
-        ok &= patch_bytes(PL_COUNT_FN, j, 5);
+    {   /* __cdecl */
+        ok &= patch_jmp(PL_COUNT_FN, (void *)gmv_pl_padcount, 5);
     }
     ok &= sm_redirect(PL_ROWS_SITE, (void *)gmv_pl_padrows) && sm_redirect(PL_LABEL_SITE, (void *)gmv_pl_padlabel) &&
           sm_redirect(PL_REBIND_SITE, (void *)gmv_pl_padrebind);
@@ -573,7 +489,7 @@ void apply_pad_layout(void)
     const char *e = gmv_getenv("GMV_PAD_LAYOUT");
     int ok = 1;
     if (gmv_config_mac())
-        return;                                 /* the Mac's: the hooks come with the switch */
+        return;
     for (int k = 0; k < PL_KINDS; k++)
         ok &= ((const uint32_t *)(uintptr_t)pl_vt[k])[2] == pl_orig[k];
     if (!ok) {

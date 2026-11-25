@@ -1,0 +1,25 @@
+# Clive's escape of ON A LION HUNT (TEST_CHASE), FRAME_MS 6.6667, AI_STEERING_FIX=1: [steer] probe of the SWAT van
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini FRAME_MS=6.6667
+ini AI_STEERING_FIX=1
+env GMV_TEST_CHASE=1
+env GMV_STEER_PROBE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+waitlog ^\[chase\] SWATVanBBM_00 is [0-9a-f]+, its driver [0-9a-f]+$ 60
+wait 8
+shot bridge
+wait 22
+shot streets
+wait 30
+shot later
+expectlog ^\[steer\] car .* speed 1[5-9]
+expectlog ^\[gamepatch\] AI drivers steer by the heading on the ground

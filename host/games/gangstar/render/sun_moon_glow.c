@@ -1,4 +1,3 @@
-/* sun_moon_glow.c -- SUN_MOON: the glows behind the world */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,27 +11,12 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- SUN_MOON: the glows behind the world ------------------------------------------------------------
-   g_sky_glow_draw is set by the patches while a sun or moon glow renders.  The glow's material has no
-   depth test and it is drawn after the world, in the world's depth range (0..0.5), so it showed through
-   buildings.  Its draw now gets a shader in place of the material's fixed-function shading (unit 0
-   texture times vertex colour, added ONE/ONE) that reads the depth drawn so far: where it is sky (at
-   the far end of that range or beyond) the glow is as before; on the world it leaks a little way in
-   past the silhouettes, as light wraps around an edge, and fades out GLOW_WRAP of the screen height
-   inside them.  The glow is GLOW_GAIN times as bright as the material's.  The
-   glow textures are DXT5, whose 5- and 6-bit colours step the gradient into visible rings (red falls
-   90, 82, 74 ... in steps of 8 every ~16 texels), so the shader reads a smoothed 16-bit copy of each
-   (glow_smooth) and dithers its output below one 8-bit step.  If the shader or the depth copy cannot be had, or the glow goes to one of the game's
-   own framebuffers, a plain depth test (LEQUAL, no writes, every fragment at the far end of the range)
-   hides it behind the world with a hard edge.
-   SUN_MOON=2 (IPHONE, g_sky_glow_iphone) keeps the material's own draw and the Mac's texture as it is: no
-   depth test, no gain, no shader, no smoothing, so the DXT5 rings show (the player's choice). */
 int g_sky_glow_draw;
 int g_sky_glow_iphone;
 #define GLOW_WRAP 0.03f
 #define GLOW_GAIN 1.6f
-#define GLOW_DEPTH_UNIT 3                               /* texture unit of the depth copy (the game uses 0) */
-#define GLOW_SMOOTH_UNIT 4                              /* texture unit of the smoothed glow texture */
+#define GLOW_DEPTH_UNIT 3
+#define GLOW_SMOOTH_UNIT 4
 
 static const char glow_vs[] =
     "#version 120\n"
@@ -42,8 +26,6 @@ static const char glow_vs[] =
     "    gl_FrontColor = gl_Color;\n"
     "}\n";
 
-/* Off the sky, the glow keeps twice the share of a disc of taps that see sky: 1 at a silhouette, 0 a
-   radius inside it, and most of it across anything thinner than the radius. */
 static const char glow_fs[] =
     "#version 120\n"
     "uniform sampler2D tex, dep;\n"
@@ -68,12 +50,12 @@ static const char glow_fs[] =
     "}\n";
 
 static struct {
-    int ready;                                          /* 0 = not tried, 1 = shader, -1 = depth test only */
+    int ready;
     GLuint p, fbo, t;
     GLint u_tex, u_dep, u_full, u_far, u_rad, u_gain;
     int w, h;
-    int copied;                                         /* the depth copy is current (no draw since) */
-    unsigned draws;                                     /* draw count when it was made */
+    int copied;
+    unsigned draws;
 } glw;
 
 static int glow_init(void)
@@ -91,7 +73,6 @@ static int glow_init(void)
     return 1;
 }
 
-/* Copy the depth of the framebuffer being drawn to into glw.t (bound on the active unit); 0 on failure. */
 static int glow_copy_depth(int w, int h)
 {
     GLint dfb = 0, rfb = 0;
@@ -99,10 +80,10 @@ static int glow_copy_depth(int w, int h)
     rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
     int ok = 1;
     if (w != glw.w || h != glw.h) {
-        ao_tex(glw.t, 0x88F0, w, h, 0x84F9, 0x84FA);              /* DEPTH24_STENCIL8, DEPTH_STENCIL, 24_8 */
-        glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);            /* GL_TEXTURE_COMPARE_MODE */
+        ao_tex(glw.t, 0x88F0, w, h, 0x84F9, 0x84FA);
+        glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);
         msf.BindFramebuffer(MS_FRAMEBUFFER, glw.fbo);
-        aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, glw.t, 0);   /* DEPTH_STENCIL_ATTACHMENT */
+        aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, glw.t, 0);
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
         GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
@@ -117,7 +98,7 @@ static int glow_copy_depth(int w, int h)
         glBindTexture(GL_TEXTURE_2D, glw.t);
     }
     if (ok) {
-        GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);           /* it would clip the blit */
+        GLboolean sc = (GLboolean)g_glt.scissor;
         if (sc) glDisable(GL_SCISSOR_TEST);
         msf.BindFramebuffer(MS_READ_FB, (GLuint)dfb);
         msf.BindFramebuffer(MS_DRAW_FB, glw.fbo);
@@ -129,9 +110,6 @@ static int glow_copy_depth(int w, int h)
     return ok;
 }
 
-/* A clamped box blur of w x h RGBA floats along the rows, the four channels together.  One texture took
-   53.8 ms a channel and a line at a time, and it takes 1.3 ms like this (offline; no value
-   of the 16-bit result off by more than 1), so the first draw of the glows is no longer a long frame. */
 __attribute__((target("sse2")))
 static void glow_rows(const float *in, float *out, int w, int h, int r)
 {
@@ -149,7 +127,6 @@ static void glow_rows(const float *in, float *out, int w, int h, int r)
     }
 }
 
-/* The same along the columns, row by row so the memory is walked in order; sums holds one row. */
 __attribute__((target("sse2")))
 static void glow_cols(const float *in, float *out, float *sums, int w, int h, int r)
 {
@@ -173,9 +150,6 @@ static void glow_cols(const float *in, float *out, float *sums, int w, int h, in
     }
 }
 
-/* The smoothed copy of the glow texture `src` (made on the first use, on the active unit); 0 if none.
-   Three box blurs each way, of 1/64 of the width, make a Gaussian of about 1/60 that turns the steps
-   into a ramp. */
 static GLuint glow_smooth(GLuint src)
 {
     static struct { GLuint src, t; } c[4];
@@ -207,7 +181,7 @@ static GLuint glow_smooth(GLuint src)
             glow_rows(a, b, w, h, r);
             glow_cols(b, a, sums, w, h, r);
         }
-        unsigned short *o = (unsigned short *)b;              /* reuses b, which is twice as big */
+        unsigned short *o = (unsigned short *)b;
         for (size_t i = 0; i < n; i++) {
             float v = a[i] * 257.0f + 0.5f;
             o[i] = (unsigned short)(v < 0 ? 0 : v > 65535 ? 65535 : v);
@@ -215,7 +189,7 @@ static GLuint glow_smooth(GLuint src)
         aof.ActiveTexture((GLenum)act);
         glGenTextures(1, &t);
         glBindTexture(GL_TEXTURE_2D, t);
-        glTexImage2D(GL_TEXTURE_2D, 0, 0x805B, w, h, 0, GL_RGBA, GL_UNSIGNED_SHORT, o);   /* GL_RGBA16 */
+        glTexImage2D(GL_TEXTURE_2D, 0, 0x805B, w, h, 0, GL_RGBA, GL_UNSIGNED_SHORT, o);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, ws);
@@ -237,11 +211,10 @@ static GLuint glow_smooth(GLuint src)
     return t;
 }
 
-/* Around the glow's draw (inside tr_DrawArrays / tr_DrawElements, whose counters it has bumped). */
 void glow_begin(glow_state_t *s)
 {
     unsigned draws = (unsigned)(g_glt.da_calls + g_glt.de_calls);
-    glGetFloatv(GL_DEPTH_RANGE, s->range);
+    memcpy(s->range, g_ao_dr, sizeof s->range);
     s->mode = 0;
     if (g_sky_glow_iphone)
         return;
@@ -251,11 +224,10 @@ void glow_begin(glow_state_t *s)
     if (!g_ms_fbo)
         gmv_gl_client_size(&w, &h);
     if (glw.ready > 0 && !g_glt.last_fb && w > 0 && h > 0) {
-        s->prog = gmv_gl_cur_prog();                        /* GL_CURRENT_PROGRAM, QUERY_FREE */
-        glGetIntegerv(0x84E0, &s->act);                         /* GL_ACTIVE_TEXTURE */
+        s->prog = gmv_gl_cur_prog();
+        s->act = (GLint)(0x84C0 + g_tf_active);
         aof.ActiveTexture(0x84C0 + GLOW_DEPTH_UNIT);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->tex);
-        /* the sun's and moon's glows are drawn one after the other and write no depth: one copy serves both */
+        s->tex = (GLint)g_tf_bound[GLOW_DEPTH_UNIT];
         int ok = glw.copied && draws == glw.draws + 1 && w == glw.w && h == glw.h;
         if (ok)
             glBindTexture(GL_TEXTURE_2D, glw.t);
@@ -265,11 +237,9 @@ void glow_begin(glow_state_t *s)
         glw.draws = draws;
         GLuint sm = 0;
         if (ok) {
-            GLint t0 = 0;
-            aof.ActiveTexture(0x84C0);
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &t0);
+            GLint t0 = (GLint)g_tf_bound[0];
             aof.ActiveTexture(0x84C0 + GLOW_SMOOTH_UNIT);
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->tex2);
+            s->tex2 = (GLint)g_tf_bound[GLOW_SMOOTH_UNIT];
             if ((sm = t0 ? glow_smooth((GLuint)t0) : 0))
                 glBindTexture(GL_TEXTURE_2D, sm);
         }
@@ -294,8 +264,8 @@ void glow_begin(glow_state_t *s)
         glBindTexture(GL_TEXTURE_2D, (GLuint)s->tex);
         aof.ActiveTexture((GLenum)s->act);
     }
-    s->test = glIsEnabled(GL_DEPTH_TEST);
-    glGetIntegerv(GL_DEPTH_FUNC, &s->func);
+    s->test = (GLboolean)g_ao_depth_on;
+    s->func = (GLint)g_glt.depth_func;
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDepthRange(s->range[1], s->range[1]);
@@ -319,7 +289,42 @@ void glow_end(const glow_state_t *s)
     }
 }
 
-/* The projection and fog trackers; they only note what changed. */
+#define MT_DEPTH 32
+static const GLfloat mt_identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+static GLfloat mt[2][MT_DEPTH][16] = {{{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}},
+                                      {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}}};
+static int mt_top[2];
+
+static int mt_k(void)
+{
+    return g_ao_mode == GL_MODELVIEW ? 0 : g_ao_mode == GL_PROJECTION ? 1 : -1;
+}
+
+static void mt_mul(const GLfloat *b)
+{
+    int k = mt_k();
+    if (k < 0)
+        return;
+    GLfloat *m = mt[k][mt_top[k]], a[16];
+    memcpy(a, m, sizeof a);
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++)
+            m[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+}
+
+static void mt_load(const GLfloat *m)
+{
+    int k = mt_k();
+    if (k >= 0)
+        memcpy(mt[k][mt_top[k]], m, sizeof mt[k][mt_top[k]]);
+}
+
+const GLfloat *ao_matrix(GLenum mode)
+{
+    int k = mode == GL_PROJECTION;
+    return mt[k][mt_top[k]];
+}
+
 static void ao_MatrixMode(GLenum mode)
 {
     static void(APIENTRY * real)(GLenum);
@@ -332,6 +337,7 @@ static void ao_LoadMatrixf(const GLfloat *m)
     static void(APIENTRY * real)(const GLfloat *);
     if (!real) real = gl_real("glLoadMatrixf");
     if (g_ao_mode == GL_PROJECTION) g_ao_proj_dirty = 1;
+    mt_load(m);
     if (real) real(m);
 }
 static void ao_MultMatrixf(const GLfloat *m)
@@ -339,6 +345,7 @@ static void ao_MultMatrixf(const GLfloat *m)
     static void(APIENTRY * real)(const GLfloat *);
     if (!real) real = gl_real("glMultMatrixf");
     if (g_ao_mode == GL_PROJECTION) g_ao_proj_dirty = 1;
+    mt_mul(m);
     if (real) real(m);
 }
 static void ao_LoadIdentity(void)
@@ -346,6 +353,18 @@ static void ao_LoadIdentity(void)
     static void(APIENTRY * real)(void);
     if (!real) real = gl_real("glLoadIdentity");
     if (g_ao_mode == GL_PROJECTION) g_ao_proj_dirty = 1;
+    mt_load(mt_identity);
+    if (real) real();
+}
+static void ao_PushMatrix(void)
+{
+    static void(APIENTRY * real)(void);
+    if (!real) real = gl_real("glPushMatrix");
+    int k = mt_k();
+    if (k >= 0 && mt_top[k] < MT_DEPTH - 1) {
+        memcpy(mt[k][mt_top[k] + 1], mt[k][mt_top[k]], sizeof mt[k][0]);
+        mt_top[k]++;
+    }
     if (real) real();
 }
 static void ao_PopMatrix(void)
@@ -353,6 +372,9 @@ static void ao_PopMatrix(void)
     static void(APIENTRY * real)(void);
     if (!real) real = gl_real("glPopMatrix");
     if (g_ao_mode == GL_PROJECTION) g_ao_proj_dirty = 1;
+    int k = mt_k();
+    if (k >= 0 && mt_top[k] > 0)
+        mt_top[k]--;
     if (real) real();
 }
 static void ao_Ortho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
@@ -360,6 +382,9 @@ static void ao_Ortho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n,
     static void(APIENTRY * real)(GLdouble, GLdouble, GLdouble, GLdouble, GLdouble, GLdouble);
     if (!real) real = gl_real("glOrtho");
     if (g_ao_mode == GL_PROJECTION) g_ao_proj_dirty = 1;
+    const GLfloat o[16] = {(GLfloat)(2 / (r - l)), 0, 0, 0, 0, (GLfloat)(2 / (t - b)), 0, 0, 0, 0, (GLfloat)(-2 / (f - n)), 0,
+                           (GLfloat)(-(r + l) / (r - l)), (GLfloat)(-(t + b) / (t - b)), (GLfloat)(-(f + n) / (f - n)), 1};
+    mt_mul(o);
     if (real) real(l, r, b, t, n, f);
 }
 static void ao_DepthRange(GLclampd n, GLclampd f)
@@ -375,6 +400,9 @@ static void ao_DepthMask(GLboolean on)
 {
     static void(APIENTRY * real)(GLboolean);
     if (!real) real = gl_real("glDepthMask");
+#if GMV_DEV
+    gmv_gl_state_note(SC_DMASK, (on != GL_FALSE) == g_ao_dmask);
+#endif
     g_ao_dmask = on != GL_FALSE;
     if (real) real(on);
 }
@@ -403,7 +431,7 @@ static void ao_Fogfv(GLenum pname, const GLfloat *v)
         memcpy(g_fog_game, v, sizeof g_fog_game);
         g_fog_game_set = 1;
         if (g_fog_all && sky.n)
-            v = sky.hz;                                     /* the sky's colour, not the game's */
+            v = sky.hz;
         memcpy(g_fog_col, v, sizeof g_fog_col);
     }
     if (real) real(pname, v);
@@ -412,10 +440,26 @@ static void ao_BlendFunc(GLenum s, GLenum d)
 {
     static void(APIENTRY * real)(GLenum, GLenum);
     if (!real) real = gl_real("glBlendFunc");
+#if GMV_DEV
+    gmv_gl_state_note(SC_BLEND, s == g_blend_src && d == g_blend_dst);
+#endif
     g_blend_src = s;
     g_blend_dst = d;
     if (real) real(s, d);
 }
+#if GMV_DEV
+GLenum g_alpha_func = GL_ALWAYS;
+GLfloat g_alpha_ref;
+static void ao_AlphaFunc(GLenum func, GLclampf ref)
+{
+    static void(APIENTRY * real)(GLenum, GLclampf);
+    if (!real) real = gl_real("glAlphaFunc");
+    gmv_gl_state_note(SC_ALPHA, func == g_alpha_func && ref == g_alpha_ref);
+    g_alpha_func = func;
+    g_alpha_ref = ref;
+    if (real) real(func, ref);
+}
+#endif
 
 void *gl_ao_intercept(const char *name)
 {
@@ -424,6 +468,7 @@ void *gl_ao_intercept(const char *name)
         {"_glLoadMatrixf", (void *)ao_LoadMatrixf},
         {"_glMultMatrixf", (void *)ao_MultMatrixf},
         {"_glLoadIdentity", (void *)ao_LoadIdentity},
+        {"_glPushMatrix", (void *)ao_PushMatrix},
         {"_glPopMatrix", (void *)ao_PopMatrix},
         {"_glOrtho", (void *)ao_Ortho},
         {"_glFogf", (void *)ao_Fogf},
@@ -431,6 +476,9 @@ void *gl_ao_intercept(const char *name)
         {"_glBlendFunc", (void *)ao_BlendFunc},
         {"_glDepthRange", (void *)ao_DepthRange},
         {"_glDepthMask", (void *)ao_DepthMask},
+#if GMV_DEV
+        {"_glAlphaFunc", (void *)ao_AlphaFunc},
+#endif
         {NULL, NULL},
     };
     for (int i = 0; t[i].n; i++)

@@ -1,4 +1,3 @@
-/* mission_replay.c -- MISSION_REPLAY */
 #include "compat.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -10,140 +9,96 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- MISSION_REPLAY: the completed missions as a tab of the SERVICES menu (an addition, off by default) ----
-
-   The in-game SERVICES menu shares the options screen's tab bar: its pages' show (0x165172) labels
-   slots 0-3 MISSIONS, WEAPONS, CAR RENTAL and CORRUPTION and hides 5 and 6, and their onEvent
-   (0x16531c) switches to ServiceMissions, ServiceWeaponShop, ServiceCarRental or ServiceCorruption
-   for 0-3 and ignores anything above 3.  The MISSIONS page (ServiceMissions, constructor 0x16d334,
-   0x74 bytes, vtable 0x6583a8) lists the tabs, widgetMission (6: the giver's portrait iconNPC, the
-   title txtObjective, location, type and reward, START and ABORT), the giver's name (0xf, a string
-   id at +0x14) and widgetArrows (0x12), which pages through the mission triggers within reach;
-   widgetMission's texts (0x179baa) come from the record of the trigger at its +0x14, and its START
-   (0x1798e8) asks the Confirm page, flagging the MISSIONS page to start the trigger's mission.
-   With MISSION_REPLAY=1:
-   - the show's hide of btnMenu6 (0x1652b7) gives slot 6, right under CORRUPTION, the string id
-     MR_TAB_ID, which the label lookup answers with MISSION REPLAY (gmv_tab_label);
-   - the onEvent's read of the clicked number (0x16540b) switches to the state ServiceReplay for
-     slot 6 and answers 4, past the jump table;
-   - the menu set-up's registration of ServiceMissions (0x1600b4) also registers ServiceReplay, a
-     second MISSIONS page with our show, hide and onEvent in a copy of its vtable.
-   Our page pages through the records of one category whose completion bit is set (see
-   game_read.c): story (groups 1-5, the chapters), side (group 7, amelia, and group 8, reginald, whose
-   bits the original save never kept; MISSION_SAVE_FIX keeps them) or races (group 6,
-   albert).  The category
-   is the CONTROLS page's ◀ category ▶ header (widgetActionKeyTitle, 0x22), which our page also
-   lists: while shown it is moved over the top of the mission panel and runs its texts and events
-   from a copy of its vtable; our hide hides it at once (no fade where it was), puts it back where
-   the menu file has it and gives back its vtable.  The page fills widgetMission and the name as
-   0x179baa would from a record.  widgetMission runs its texts and
-   events from a copy of its vtable, which does the game's own unless our page is shown; there its
-   START replays the mission (below) and ABORT is hidden.  Under
-   ORIGINAL_MAC_EXPERIENCE it is off; with GAMEPATCH_TAB the hooks go in for the file's
-   MISSION_REPLAY=1 too, and slot 6 stays hidden while ORIGINAL_MAC_EXPERIENCE is switched on.
-   Slot 6 is also hidden while a mission or a replay is under way.
-
-   The replay.  A mission is one of the world's scripts (see game_read.c) that waits at a 0x8f
-   command, its giver's checkpoint, for the player or for the MISSIONS page's START; once the
-   mission is done its script has run to its end and lies idle.  The save keeps only which scripts
-   run (RUSC), the story's 18 variables (MINT, at the scripts' +0x3b8) and the completion bits.
-   START sets the script running again (0x32284), steps it onto its 0x8f as the script runner would
-   (0x321ba) and starts it as the MISSIONS page's Confirm does (0x165674): 0x180360 with
-   widgetMission's +0x14 at the script, then the menus closed.  The end is the game's own: a
-   failure, a death or ABORT takes the script back to its 0x8f and undoes its commands, a pass runs
-   it to its end, where a ScriptUnlock (setup 0xd080e) would start the story's next script; held
-   back here when that script was idle.  Once the mission is over and the game has settled, the
-   scripts are put back as they were (one idle before that runs now is undone, 0x3236c, or after a
-   pass just stopped; one that ran and has stopped runs again from its start, as after a load), and
-   so are the variables, the completion bits and the tries; the cash a pass paid is kept.  The
-   game's saves (all ten callers of 0x98148) wait meanwhile, and one is made after if any was asked
-   for.  The chapters' first missions start on their own (no 0x8f to wait at, a 0x63 first): START
-   only sets their script running.  A fail or abort puts that script back before its 0x63, still
-   running, and it would start the mission again; it is undone there.  Mission 47's script locks two others before its 0x8f (0x81,
-   setup 0xd068c: the script of its +0x10 undone, 0x3236c); the steps onto the 0x8f do that too,
-   and the put-back sets them running again from their start if they ran before.  After a fail or
-   an abort the objects the script switched on stay off as before, and the player goes back to
-   where START found it (mr_world_back), under the cutscene fader's black (mf_*), which START
-   clears from too. */
-#define MR_HIDE6_SITE  0x001652b7u   /* Services show: set-visible(btnMenu6, 0)                    */
-#define MR_CLICK_SITE  0x0016540bu   /* Services onEvent: call 0x16eff4, the clicked number        */
-#define MR_TABLE_CMP   0x00165410u   /* cmp eax,3; ja: the jump table's bound                      */
-#define MR_REG_SITE    0x001600b4u   /* menu set-up: register(menufx, ServiceMissions, "dummy")    */
+/* 0x165172 0x16531c 0x16d334 0x74 0x6583a8 0xf +0x14 */
+#define MR_HIDE6_SITE  0x001652b7u
+#define MR_HIDE5_SITE  0x00165297u
+#define MR_CLICK_SITE  0x0016540bu   /* call 0x16eff4 */
+#define MR_TABLE_CMP   0x00165410u   /* cmp eax,3 */
+#define MR_REG_SITE    0x001600b4u
 #define MR_SM_CTOR     0x0016d334u
 #define MR_SM_BYTES    0x74u
 #define MR_SM_VT       0x006583a8u
 #define MR_SM_SHOW     0x001654dcu
 #define MR_SM_HIDE     0x0016335cu
 #define MR_SM_EVENT    0x00165e62u
-#define MR_SV_SHOW     0x00165172u   /* the SERVICES pages' show: the tabs and the listed widgets  */
-#define MR_SV_EVENT    0x0016531cu   /* their onEvent: the tabs                                    */
+#define MR_SV_SHOW     0x00165172u
+#define MR_SV_EVENT    0x0016531cu
 #define MR_W_MISSION   6
 #define MR_W_NAME      0xf
-#define MR_WM_VT       0x00659488u   /* widgetMission                                              */
+#define MR_WM_VT       0x00659488u
 #define MR_WM_SLOTS    7
 #define MR_WM_EVENT    0x001798e8u
 #define MR_WM_TEXTS    0x00179baau
-#define MR_FRAME       0x002fd8a0u   /* (flash, clip, frame label, 0)                              */
-#define MR_MONEY       0x0008e6e2u   /* (string table, amount, 0, 1): the cash as the game writes it */
-#define MR_SET_ID      0x0016eb56u   /* (widget, string id)                                        */
-#define MR_IDS_RESIZE  0x005edb8eu   /* (&page + 0x5c, count): the page's widget list, as its ctor grows it */
-#define MR_IDS_SITE    0x0016d37fu   /* the ctor's first call of it                                 */
-#define MR_CAT_X       398           /* the header's place on our page: its bar over the panel's top */
+#define MR_FRAME       0x002fd8a0u
+#define MR_MONEY       0x0008e6e2u
+#define MR_SET_ID      0x0016eb56u
+#define MR_IDS_RESIZE  0x005edb8eu   /* 0x5c */
+#define MR_IDS_SITE    0x0016d37fu
+#define MR_CAT_X       398
 #define MR_CAT_Y       117
+#define MR_TOD_CAT_X   635           /* 0x43a8 */
+#define MR_TOD_CAT_Y   322           /* 0x1cd4 */
+#define MR_KEY_PATH    "widgetActionKeyTitle.titleAction"
+#define MR_KEY_X       17
+#define MR_KEY_Y       62
+#define MR_TOD_KEY_X   153           /* 0x120c txtValue */
 #define MR_SLOT        6
 #define MR_STATE       "ServiceReplay"
+#define MR_TOD_STATE   "ServiceTime"
+#define MR_SM_IDS      7             /* 0x1e 1 0x11 0x13 6 0x12 0xf */
 #define MR_MAX         128
-#define MR_SC_SET      0x00032284u   /* (script, state, time): 2 = running from time, -1 now        */
-#define MR_SC_STOP     0x00032202u   /* (script, state): at no command                               */
-#define MR_SC_STEP     0x000321bau   /* (script): on to its next command, set up; 0 past its end      */
-#define MR_SC_UNDO     0x0003236cu   /* (script): back to its start, each command undone; idle        */
-#define MR_SC_RESUME   0x0003244cu   /* (script): running again from now                              */
-#define MR_SC_ID       0x00032560u   /* (script): its mission id                                      */
-#define MR_SC_FIND     0x00032d98u   /* (scripts, id, 0): the script                                  */
-#define MR_CP_NAME     0x000c7e8eu   /* (0x8f command): its checkpoint's name                         */
-#define MR_OBJ_FIND    0x00034af8u   /* (name): the world's object                                    */
-#define MR_START       0x00180360u   /* (widgetMission): start the mission of the script at its +0x14 */
-#define MR_POP_TO      0x0015cafcu   /* (manager, state name, it too, 1): the menus popped down to it  */
-#define MR_MENU_OFF    0x0015cbe2u   /* (manager)                                                     */
+#define MR_SC_SET      0x00032284u
+#define MR_SC_STOP     0x00032202u
+#define MR_SC_STEP     0x000321bau
+#define MR_SC_UNDO     0x0003236cu
+#define MR_SC_RESUME   0x0003244cu
+#define MR_SC_ID       0x00032560u
+#define MR_SC_FIND     0x00032d98u
+#define MR_CP_NAME     0x000c7e8eu   /* 0x8f */
+#define MR_OBJ_FIND    0x00034af8u
+#define MR_START       0x00180360u   /* widgetMission +0x14 */
+#define MR_POP_TO      0x0015cafcu
+#define MR_MENU_OFF    0x0015cbe2u
 #define MR_GAME_ON     0x001a46dau
-#define MR_UNLOCK_SLOT 0x006553e8u   /* ScriptUnlock's setup in its vtable                            */
+#define MR_UNLOCK_SLOT 0x006553e8u
 #define MR_UNLOCK      0x000d080eu
-#define MR_SAVE        0x00098148u   /* (save block, path): the save written                          */
-#define MR_SAVE_NOW    0x000f3606u   /* the game's save: a block, its path, 0x98148                    */
-#define MR_HUD         0x00685668u   /* the HUD                                                       */
-#define MR_HUD_SHOWN   0x00029400u   /* (HUD): shown (its +4, the walking/driving/flying one: vfunc 8) */
-#define MR_HUD_SHOW    0x000293c8u   /* (HUD): shown (+4's vfunc 0), as a menu's close does; 0x296b0 hides */
-#define MR_CINE        0x0003440eu   /* (scripts, mode): the cutscene mode, scripts +0xc; 0 = play     */
-#define MR_RESET       0x00033e78u   /* (scripts, type): mission stopped (0x8d1dc), its scripts rewound */
-#define MR_FAIL_SITE   0x0003705du   /* the scripts' update: the reset after a fail or a death (type 0x83) */
-#define MR_OBJ_NAMED   0x00032838u   /* (script, name): the object a command names ("player" and such too) */
-#define MR_IS_PLAYER   0x000617b2u   /* (object): the character under control                         */
-#define MR_IS_DEAD     0x0007e294u   /* (character): Character::isDead                                */
-#define MR_WORLD_OFF   0x424         /* the list 0x24270 moves a switched-off object to (0x2100a, 2)   */
-#define MR_POS_STORE   0x000f4774u   /* (player): PlayerStorePosition's, into its +0x7d0..+0x7e3       */
-#define MR_POS_BACK    0x000f4860u   /* (player): PlayerRestorePosition's: there again (or its car)    */
+#define MR_SAVE        0x00098148u
+#define MR_SAVE_NOW    0x000f3606u   /* 0x98148 */
+#define MR_HUD         0x00685668u
+#define MR_HUD_SHOWN   0x00029400u
+#define MR_HUD_SHOW    0x000293c8u   /* HUD +4 0x296b0 */
+#define MR_CINE        0x0003440eu   /* +0xc */
+#define MR_RESET       0x00033e78u   /* 0x8d1dc */
+#define MR_FAIL_SITE   0x0003705du   /* 0x83 */
+#define MR_OBJ_NAMED   0x00032838u
+#define MR_IS_PLAYER   0x000617b2u
+#define MR_IS_DEAD     0x0007e294u
+#define MR_WORLD_OFF   0x424         /* 0x24270 0x2100a */
+#define MR_POS_STORE   0x000f4774u   /* +0x7d0..+0x7e3 */
+#define MR_POS_BACK    0x000f4860u
 #define MR_POS_OFF     0x7d0
 #define MR_FADE_OUT_MS 350
 #define MR_FADE_HOLD_MS 250
 #define MR_FADE_IN_MS  500
 #define MR_WATCH_MS    30000
-#define MR_SETTLE_MS   1500          /* the game's own end of a mission, before the scripts go back    */
+#define MR_SETTLE_MS   1500
 #define MR_WAIT_MS     60000
 
-static int mr_active, mr_n, mr_cur, mr_cat, mr_pos[3];
+static int mr_page, mr_n, mr_cur, mr_cat, mr_pos[3];
 static const char *const mr_cat_name[3] = { "STORY", "SIDE", "RACES" };
 static uint32_t mr_list[MR_MAX];
-static uint32_t mr_vt[OM_VT_N];
+static uint32_t mr_vt[OM_VT_N], mr_tod_vt[OM_VT_N];
+static unsigned char *mr_tod_page;
 static uint32_t mr_wm_vt[2 + MR_WM_SLOTS];
 static uint32_t mr_cat_vt[2 + OM_CAT_SLOTS], *mr_cat_prev;
-static float mr_cat_home[2];                 /* the header's x and y (twips) in the menu file */
-uint32_t mr_unlock_prev;              /* ScriptUnlock's setup as we found it (the menu loop's?) */
+static float mr_cat_home[2];
+uint32_t mr_unlock_prev;
 #if GMV_DEV
 #define MR_ML_UNLOCK ((uint32_t)(uintptr_t)gmv_ml_unlock)
 #else
-#define MR_ML_UNLOCK 0u                       /* a release has no menu loop */
+#define MR_ML_UNLOCK 0u
 #endif
-static uint32_t mr_msg_rec;                  /* the record a refusal is about, and the refusal */
+static uint32_t mr_msg_rec;
 static const char *mr_msg;
 
 rp_t rp;
@@ -169,8 +124,7 @@ static uint32_t mr_cmd(uint32_t sc, int i)
     return i >= 0 && i < (int)ms_rd(sc + 4) ? ms_rd(ms_rd(sc + 0x10) + 4 * i) : 0;
 }
 
-/* The mission's script, if it can be replayed: the first with its id whose first command past any
-   0xa8 or 0x81 is a 0x8f, or a 0x63 for a chapter's first mission, the index of which goes to *at. */
+/* 0xa8/0x81 0x8f 0x63 */
 static uint32_t mr_script(int id, int *at)
 {
     static uint32_t c_list;
@@ -217,9 +171,6 @@ static uint32_t mr_obj(uint32_t name)
     return name ? ((uint32_t (*)(uint32_t, uint32_t))(uintptr_t)MR_OBJ_NAMED)(rp.sc, name) : 0;
 }
 
-/* The black over a fail's or an abort's put-back and after START: the cutscene fader's own (its
-   alpha, drawn every frame while not -999), ramped here.  If the game writes it meanwhile (a
-   script's CineFadeIn/Out, a mission reset), the fade is the game's from then on. */
 enum { MF_NONE, MF_DARKENING, MF_DARK, MF_CLEARING };
 mf_t mf;
 
@@ -228,7 +179,6 @@ static void mf_put(int a)
     *(int32_t *)(uintptr_t)MR_FADE = mf.a = a;
 }
 
-/* 1 once the screen is black, or if the game's fader is in use (no fade then). */
 static int mf_dark(void)
 {
     if (mf.phase == MF_NONE) {
@@ -271,7 +221,6 @@ static void mf_tick(void)
         mf_put(255 - 255 * ms / MR_FADE_IN_MS);
 }
 
-/* Diagnostic: the put-back's objects switched on again afterwards. */
 static void mr_watch(void)
 {
     if (!rp.watch)
@@ -290,11 +239,7 @@ static void mr_watch(void)
 }
 
 #if GMV_DEV
-/* Diagnostic: what hides the HUD after a replay that did not pass (reported: pausing and going back
-   to the game hides it again).  The HUD's show 0x293c8, its hide 0x296b0 and its +0xec flag (set by
-   0x2941c, which the mission's start does before it hides the HUD; cleared by 0x2942c; the pause
-   reads it) are hooked at their entries and logged with their caller and that one's caller; each
-   frame logs a change of shown, +0xec or the HUD in use (+4). */
+/* HUD 0x293c8 0x296b0 +0xec 0x2941c 0x2942c */
 #define MR_HT_LINES 400
 static int mr_ht_on, mr_ht_hooked, mr_ht_lines, mr_ht_shown = -2, mr_ht_ec = -2;
 static uint32_t mr_ht_cur;
@@ -318,8 +263,7 @@ static void gmv_mr_hud_hook(int which, uint32_t ret, uint32_t ebp)
             mgr ? (int)ms_rd(mgr + 0x1c) : -2, (int)ms_rd(MS_SCRIPTS + 0xc));
 }
 
-/* Entry hook: push ebp (the caller's frame), the return address and `which`, call the logger, then
-   the `len` prologue bytes (no relative operands) and back. */
+/* push ebp */
 static int mr_ht_hook(uint32_t va, const unsigned char *pro, size_t len, int which)
 {
     if (len < 5 || len > 8 || memcmp((const void *)(uintptr_t)va, pro, len))
@@ -329,20 +273,17 @@ static int mr_ht_hook(uint32_t va, const unsigned char *pro, size_t len, int whi
         return 0;
     size_t o = 0;
     uint32_t a = (uint32_t)(uintptr_t)&gmv_mr_hud_hook;
-    st[o++] = 0x55;                                                     /* push ebp       */
-    st[o++] = 0xff; st[o++] = 0x74; st[o++] = 0x24; st[o++] = 0x04;     /* push [esp+4]   */
-    st[o++] = 0x6a; st[o++] = (unsigned char)which;                     /* push which     */
-    st[o++] = 0xb8; memcpy(st + o, &a, 4); o += 4;                      /* mov eax,fn     */
-    st[o++] = 0xff; st[o++] = 0xd0;                                     /* call eax       */
-    st[o++] = 0x83; st[o++] = 0xc4; st[o++] = 0x0c;                     /* add esp,12     */
+    st[o++] = 0x55;                                                     /* push ebp */
+    st[o++] = 0xff; st[o++] = 0x74; st[o++] = 0x24; st[o++] = 0x04;     /* push [esp+4] */
+    st[o++] = 0x6a; st[o++] = (unsigned char)which;
+    st[o++] = 0xb8; memcpy(st + o, &a, 4); o += 4;                      /* mov eax,fn */
+    st[o++] = 0xff; st[o++] = 0xd0;                                     /* call eax */
+    st[o++] = 0x83; st[o++] = 0xc4; st[o++] = 0x0c;                     /* add esp,12 */
     memcpy(st + o, pro, len);
     o += len;
     emit_jmp(st, &o, va + (uint32_t)len);
     FlushInstructionCache(GetCurrentProcess(), st, o);
-    unsigned char site[8] = { 0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90 };
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)st - (va + 5));
-    memcpy(site + 1, &rel, 4);
-    return patch_bytes(va, site, len);
+    return patch_jmp(va, st, len);
 }
 
 static void mr_ht_start(void)
@@ -380,11 +321,7 @@ static void mr_ht_start(void) {}
 static void mr_ht_poll(void) {}
 #endif
 
-/* The objects the mission's script enables (0x6a, named at +0x1c), disables (0x69, +0x14) or
-   hands the player to (0x7b PlayerSwitch, +0x14), and where the player stands, as PlayerStorePosition
-   would keep it (the player's own slot for that is left as it was).  The replay's functions that
-   call game code realign the stack themselves: gcc keeps only 8 here, and the game's SSE wants 16
-   (a character's disable faulted on a movaps at 0x70219 from mr_restore's frame). */
+/* 0x6a +0x1c 0x69 +0x14 PlayerSwitch 0x7b 0x70219 */
 __attribute__((cdecl, force_align_arg_pointer, noinline))
 static void mr_snapshot_world(void)
 {
@@ -424,21 +361,7 @@ static void mr_snapshot_world(void)
     }
 }
 
-/* After a fail or an abort.  The game's reset undoes the script's commands while the character it
-   switched the player to is still the one under control, and ObjectEnable's undo (0xcee9a) only
-   marks that one released (0x800) then; the switch back to the story's player comes after
-   (0x3706f, 0xf356a).  Normal play starts the mission again, which hides it; a replay leaves it
-   standing (EXPRESS CHECKOUT's Betty).  Each object that was off before START and is on now is
-   switched off (its vfunc 0xac, as that undo does).  One already off can still be about: after an
-   abort Betty stood at the pool, +4 0000 yet shown, and with her model hidden her shadow stayed.
-   One off but not in the world's list of switched-off objects (its +0x20, the list it is in) is
-   switched on in +4 and off again the game's way, which takes the rest with it (0x70194 before
-   0x24270); one in that list only has its scene node hidden (node vfunc 0x48(0), as 0x24270
-   does).  Its other bits go back as before START: the
-   released one, and those a story script's ObjectSetFlag (0x68, 0xcebb6) set, which the mission
-   loses (Betty's 0x40, the cops' 0x440).  The player is put back where START found it (a mission
-   can leave it shut in, ON THE WAY FROM L.A.'s cage), unless it is dead or another character is
-   under control. */
+/* ObjectEnable 0xcee9a 0x800 0x3706f 0xf356a 0xac +0x20 */
 __attribute__((cdecl, force_align_arg_pointer, noinline))
 static void mr_world_back(void)
 {
@@ -517,14 +440,6 @@ static void mr_snapshot(void)
     mr_snapshot_world();
 }
 
-/* The scripts, the variables, the completion bits and the tries as they were before START; the
-   saves the replay held back made as one.  Only MissionStop clears the scripts' mission script
-   (MISSIONS shows it when it has nothing to list) and only a pass the manager's tutorial flag (set
-   under way for the chapters' first missions), so after an abort or a fail both go back too.  The
-   HUD is hidden under way (a mission's start, its cutscenes, every menu page until its close) and
-   shown again by a cutscene's end or a menu's close; a chapter's first mission ended early leaves
-   it hidden on foot (a car's own HUD is shown on getting in), and maybe its cutscene mode on: both
-   are put back for play here.  START is pressed in a menu, so the HUD is hidden then, always. */
 __attribute__((cdecl, force_align_arg_pointer, noinline))
 static void mr_restore(const char *how)
 {
@@ -593,9 +508,7 @@ static void mr_restore(const char *how)
     }
 }
 
-/* START, a frame after the click: the snapshot, the script onto its 0x8f, the start as Confirm's,
-   the menus closed.  A chapter's first mission is only set running, as the ScriptUnlock that opens
-   the chapter does: the script runner steps it onto its 0x63 once the game runs again. */
+/* START 0x8f */
 __attribute__((cdecl, force_align_arg_pointer, noinline))
 static void mr_begin(void)
 {
@@ -638,8 +551,7 @@ static void mr_begin(void)
             opener ? " (a chapter's first: set running)" : "");
 }
 
-/* Called from the present, whose stack is 4 off the 16 the game's SSE code needs (START of A BOOM
-   WITH A VIEW faulted on a movapd in the game's clock, 0x599d2f). */
+/* 0x599d2f */
 __attribute__((force_align_arg_pointer))
 void gmv_mission_replay_tick(void)
 {
@@ -701,8 +613,7 @@ void gmv_mission_replay_tick(void)
     }
 }
 
-/* The mission's own end runs on past its last MissionStop (0x64): a ScriptUnlock there of a script
-   that was idle before the replay would start the story's next step again. */
+/* MissionStop 0x64 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_unlock(uint32_t cmd)
 {
@@ -717,10 +628,7 @@ static void gmv_mr_unlock(uint32_t cmd)
     ((void (*)(uint32_t))(uintptr_t)mr_unlock_prev)(cmd);
 }
 
-/* A fail or a death resets the mission: it is stopped and its script rewound, and a chapter's first
-   mission's script, back before its 0x63 and still running, is stepped onto it again by the runner
-   later in the same update, so the game restarts it on every fail.  In a replay it is undone here
-   instead, between the two, and the replay ends as a fail. */
+/* 0x63 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_fail_reset(uint32_t scripts, int type)
 {
@@ -736,7 +644,6 @@ static void gmv_mr_fail_reset(uint32_t scripts, int type)
     }
 }
 
-/* Passes on to SWITCH_SAVE_FIX's wrapper, which writes as the game does when that fix is off or not in. */
 __attribute__((cdecl, force_align_arg_pointer))
 int gmv_mr_save(void *save, void *path)
 {
@@ -754,8 +661,6 @@ static const char *mr_str(int id)
     return ((const char *(*)(void *, int))(uintptr_t)OM_STRING_FN)(table, id);
 }
 
-/* The record's place in the list, its group and then its bit; -1 if it is not of the shown
-   category, or its bit is not set or it has none. */
 static int mr_key(uint32_t rec, uint32_t mgr)
 {
     int i = (int)ms_rd(rec + 4), j = (int)ms_rd(rec + 0x1c), k = (int)ms_rd(rec + 0x18);
@@ -787,7 +692,7 @@ static void mr_collect(void)
         mr_cur = 0;
 }
 
-/* widgetMission and the name, as 0x179baa fills them from a record. */
+/* widgetMission 0x179baa */
 static void mr_fill(void)
 {
     unsigned char *wm = om_widget(MR_W_MISSION), *name = om_widget(MR_W_NAME);
@@ -841,7 +746,7 @@ static void mr_fill(void)
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_wm_texts(unsigned char *w)
 {
-    if (mr_active)
+    if (mr_page == MR_SLOT)
         mr_fill();
     else
         ((void (*)(void *))(uintptr_t)MR_WM_TEXTS)(w);
@@ -850,7 +755,7 @@ static void gmv_mr_wm_texts(unsigned char *w)
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_wm_event(unsigned char *w, unsigned char *ev)
 {
-    if (!mr_active) {
+    if (mr_page != MR_SLOT) {
         ((void (*)(void *, void *))(uintptr_t)MR_WM_EVENT)(w, ev);
         return;
     }
@@ -902,10 +807,13 @@ static void mr_take_widget(void)
         *(uint32_t **)wm = mr_wm_vt + 2;
 }
 
-/* The category header: the category between its ◀ ▶, no column titles. */
 static void mr_cat_texts(unsigned char *w)
 {
     void *fx = *(void **)(w + 8);
+    if (mr_page == TOD_SLOT) {
+        tod_header(fx);
+        return;
+    }
     om_text(fx, "widgetActionKeyTitle.titleAction", "");
     om_text(fx, "widgetActionKeyTitle.titleKey", "");
     om_text(fx, "widgetActionKeyTitle.txtValue", mr_cat_name[mr_cat]);
@@ -914,7 +822,7 @@ static void mr_cat_texts(unsigned char *w)
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_cat_texts(unsigned char *w)
 {
-    if (mr_active)
+    if (mr_page)
         mr_cat_texts(w);
     else
         ((void (*)(void *))(uintptr_t)mr_cat_prev[OM_W_TEXTS])(w);
@@ -923,7 +831,7 @@ static void gmv_mr_cat_texts(unsigned char *w)
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_cat_keep(unsigned char *w)
 {
-    if (!mr_active) {
+    if (!mr_page) {
         ((void (*)(void *))(uintptr_t)mr_cat_prev[OM_W_KEEP])(w);
         return;
     }
@@ -931,11 +839,10 @@ static void gmv_mr_cat_keep(unsigned char *w)
     ((void (*)(void *))(uintptr_t)OM_KEEP)(w);
 }
 
-/* ◀ ▶: the other category, with its own place in its list. */
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_cat_event(unsigned char *w, unsigned char *ev)
 {
-    if (!mr_active) {
+    if (!mr_page) {
         ((void (*)(void *, void *))(uintptr_t)mr_cat_prev[OM_W_EVENT])(w, ev);
         return;
     }
@@ -947,6 +854,11 @@ static void gmv_mr_cat_event(unsigned char *w, unsigned char *ev)
         return;
     ev[0x24] = 1;
     om_sound(0x56);
+    if (mr_page == TOD_SLOT) {
+        tod_step(d);
+        mr_cat_texts(w);
+        return;
+    }
     unsigned char *pager = om_widget(OM_W_PAGER);
     mr_pos[mr_cat] = mr_cur;
     mr_cat = (mr_cat + d + 3) % 3;
@@ -959,26 +871,29 @@ static void gmv_mr_cat_event(unsigned char *w, unsigned char *ev)
     gmv_trace("[replay] %s: %d completed\n", mr_cat_name[mr_cat], mr_n);
 }
 
-/* The header onto our page: the copy of its vtable, moved over the top of the mission panel. */
-static void mr_take_cat(void)
+static int mr_take_cat(void)
 {
+    typedef void (*move_fn)(void *, const char *, int, int);
     unsigned char *cat = om_widget(OM_W_CAT), *ch;
-    if (!cat || *(uint32_t **)cat == mr_cat_vt + 2 || !(ch = *(unsigned char **)(cat + 4)))
-        return;
-    mr_cat_prev = *(uint32_t **)cat;
-    memcpy(mr_cat_vt, mr_cat_prev - 2, sizeof mr_cat_vt);
-    mr_cat_vt[2 + OM_W_KEEP] = (uint32_t)(uintptr_t)gmv_mr_cat_keep;
-    mr_cat_vt[2 + OM_W_EVENT] = (uint32_t)(uintptr_t)gmv_mr_cat_event;
-    mr_cat_vt[2 + OM_W_TEXTS] = (uint32_t)(uintptr_t)gmv_mr_cat_texts;
-    *(uint32_t **)cat = mr_cat_vt + 2;
-    const float *m = *(const float **)(ch + 0x5c);   /* {sx, rx, x, ry, sy, y}, twips */
-    mr_cat_home[0] = m[2];
-    mr_cat_home[1] = m[5];
-    ((void (*)(void *, const char *, int, int))(uintptr_t)OM_MOVE)(*(void **)(cat + 8), "widgetActionKeyTitle", MR_CAT_X, MR_CAT_Y);
+    if (!cat || !(ch = *(unsigned char **)(cat + 4)))
+        return 0;
+    if (*(uint32_t **)cat != mr_cat_vt + 2) {
+        mr_cat_prev = *(uint32_t **)cat;
+        memcpy(mr_cat_vt, mr_cat_prev - 2, sizeof mr_cat_vt);
+        mr_cat_vt[2 + OM_W_KEEP] = (uint32_t)(uintptr_t)gmv_mr_cat_keep;
+        mr_cat_vt[2 + OM_W_EVENT] = (uint32_t)(uintptr_t)gmv_mr_cat_event;
+        mr_cat_vt[2 + OM_W_TEXTS] = (uint32_t)(uintptr_t)gmv_mr_cat_texts;
+        *(uint32_t **)cat = mr_cat_vt + 2;
+        const float *m = *(const float **)(ch + 0x5c);
+        mr_cat_home[0] = m[2];
+        mr_cat_home[1] = m[5];
+    }
+    int tod = mr_page == TOD_SLOT, x = tod ? MR_TOD_CAT_X : MR_CAT_X, y = tod ? MR_TOD_CAT_Y : MR_CAT_Y;
+    ((move_fn)(uintptr_t)OM_MOVE)(*(void **)(cat + 8), "widgetActionKeyTitle", x, y);
+    ((move_fn)(uintptr_t)OM_MOVE)(*(void **)(cat + 8), MR_KEY_PATH, tod ? MR_TOD_KEY_X : MR_KEY_X, MR_KEY_Y);
+    return 1;
 }
 
-/* And back: hidden at once, where the menu file has it (the move takes whole pixels, so the exact
-   twips go into the matrix the move made), its vtable as before. */
 static void mr_give_cat(void)
 {
     unsigned char *cat = om_widget(OM_W_CAT), *ch;
@@ -986,6 +901,7 @@ static void mr_give_cat(void)
         return;
     if (cat[0x10])
         ((void (*)(void *, int))(uintptr_t)mr_cat_vt[2 + OM_W_HIDE])(cat, 0);
+    ((void (*)(void *, const char *, int, int))(uintptr_t)OM_MOVE)(*(void **)(cat + 8), MR_KEY_PATH, MR_KEY_X, MR_KEY_Y);
     ((void (*)(void *, const char *, int, int))(uintptr_t)OM_MOVE)(
         *(void **)(cat + 8), "widgetActionKeyTitle", (int)(mr_cat_home[0] / 20), (int)(mr_cat_home[1] / 20));
     if ((ch = *(unsigned char **)(cat + 4))) {
@@ -997,46 +913,57 @@ static void mr_give_cat(void)
     *(uint32_t **)cat = mr_cat_prev;
 }
 
-/* MISSION_REPLAY as it answers now: the options tab's line and its ORIGINAL_MAC_EXPERIENCE take the tab
-   away (and give it back) from the next opening of SERVICES. */
 static int mr_on(void)
 {
     const char *e = gmv_config_live("GMV_MISSION_REPLAY");
     return gmv_env_on(e);
 }
 
-/* A mission (or a replay) under way: SERVICES opens without the tab until it is over. */
-static int mr_busy(void)
+int mr_busy(void)
 {
     uint32_t mgr = mr_mgr();
     return rp.phase != MR_IDLE || (mgr && ((int)ms_rd(mgr + 4) != -1 || ms_rd(mgr + 0x1c)));
 }
 
-__attribute__((cdecl, force_align_arg_pointer))
-static void gmv_mr_tab6(void *fx, const char *path, int visible)
+static int mr_tab_on(int slot)
+{
+    return (slot == MR_SLOT ? mr_on() : slot == TOD_SLOT && mr_tod_page && tod_on()) && !mr_busy();
+}
+
+static void mr_tab(void *fx, const char *path, int visible, int slot, int id)
 {
     unsigned char *tabs = om_widget(OM_W_TABS);
-    if (tabs && mr_on() && !mr_busy()) {
-        ((void (*)(void *, int, int, int))(uintptr_t)OM_SET_ENTRY)(tabs, MR_SLOT, MR_TAB_ID, 1);
+    if (tabs && mr_tab_on(slot)) {
+        ((void (*)(void *, int, int, int))(uintptr_t)OM_SET_ENTRY)(tabs, slot, id, 1);
         visible = 1;
     }
     om_visible(fx, path, visible);
 }
 
 __attribute__((cdecl, force_align_arg_pointer))
+static void gmv_mr_tab6(void *fx, const char *path, int visible)
+{
+    mr_tab(fx, path, visible, MR_SLOT, MR_TAB_ID);
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
+static void gmv_mr_tab5(void *fx, const char *path, int visible)
+{
+    mr_tab(fx, path, visible, TOD_SLOT, TOD_TAB_ID);
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
 static int gmv_mr_clicked(unsigned char *tabs)
 {
     int n = *(int *)(tabs + 0x58);
-    if (n != MR_SLOT || !mr_on() || mr_busy())
+    if ((n != MR_SLOT && n != TOD_SLOT) || !mr_tab_on(n))
         return n;
     om_sound(0x5a);
-    if (!mr_active)
-        ((void (*)(void *, const char *, int))(uintptr_t)OM_SWITCH_FN)(om_mgr(), MR_STATE, 0);
+    if (mr_page != n)
+        ((void (*)(void *, const char *, int))(uintptr_t)OM_SWITCH_FN)(om_mgr(), n == MR_SLOT ? MR_STATE : MR_TOD_STATE, 0);
     return 4;
 }
 
-/* Our page's show: the SERVICES show (with the header taken first), our tab lit, the pager over
-   the completed missions of the category. */
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_show(unsigned char *self)
 {
@@ -1044,8 +971,8 @@ static void gmv_mr_show(unsigned char *self)
     mr_take_widget();
     mr_collect();
     mr_msg_rec = 0;
-    mr_active = pager && wm && *(uint32_t **)wm == mr_wm_vt + 2;
-    if (mr_active)
+    mr_page = pager && wm && *(uint32_t **)wm == mr_wm_vt + 2 ? MR_SLOT : 0;
+    if (mr_page)
         mr_take_cat();
     if (pager) {
         ((void (*)(void *, void *))(uintptr_t)OM_LISTEN)(pager, self);
@@ -1054,7 +981,7 @@ static void gmv_mr_show(unsigned char *self)
     ((void (*)(void *))(uintptr_t)MR_SV_SHOW)(self);
     if (tabs)
         ((void (*)(void *, int, int))(uintptr_t)OM_TAB_SELECT)(tabs, MR_SLOT, 1);
-    if (!mr_active) {
+    if (!mr_page) {
         gmv_log("[replay] the MISSIONS page's widgets are not the expected ones\n");
         return;
     }
@@ -1064,21 +991,40 @@ static void gmv_mr_show(unsigned char *self)
 }
 
 __attribute__((cdecl, force_align_arg_pointer))
+static void gmv_tod_show(unsigned char *self)
+{
+    unsigned char *tabs = om_widget(OM_W_TABS), *cat = om_widget(OM_W_CAT);
+    mr_page = TOD_SLOT;
+    if (!mr_take_cat())
+        mr_page = 0;
+    ((void (*)(void *))(uintptr_t)MR_SV_SHOW)(self);
+    if (tabs)
+        ((void (*)(void *, int, int))(uintptr_t)OM_TAB_SELECT)(tabs, TOD_SLOT, 1);
+    if (!mr_page) {
+        gmv_log("[time] the SERVICES header widget is not the expected one\n");
+        return;
+    }
+    mr_cat_texts(cat);
+    tod_log("TIME OF DAY page");
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_hide(unsigned char *self)
 {
     ((void (*)(void *))(uintptr_t)MR_SM_HIDE)(self);
+    if (mr_page != (self == mr_tod_page ? TOD_SLOT : MR_SLOT))
+        return;
     mr_give_cat();
-    mr_active = 0;
+    mr_page = 0;
 }
 
-/* The SERVICES onEvent for the tabs, then the pager's page change. */
 __attribute__((cdecl, force_align_arg_pointer))
 static int gmv_mr_event(unsigned char *self, unsigned char *w, int type)
 {
     if (((unsigned char (*)(void *, void *, int))(uintptr_t)MR_SV_EVENT)(self, w, type))
         return 1;
     unsigned char *pager = om_widget(OM_W_PAGER);
-    if (!mr_active || !w || w != pager || (type != 1 && type != 2))
+    if (mr_page != MR_SLOT || !w || w != pager || (type != 1 && type != 2))
         return 0;
     int i = *(int *)(pager + 0x18);
     mr_cur = i >= 0 && i < mr_n ? i : 0;
@@ -1087,53 +1033,67 @@ static int gmv_mr_event(unsigned char *self, unsigned char *w, int type)
     return 1;
 }
 
+__attribute__((cdecl, force_align_arg_pointer, noinline))
+static unsigned char *mr_new_page(const char *name, uint32_t *vt)
+{
+    unsigned char *s = ((unsigned char *(*)(uint32_t, const char *, int, int))(uintptr_t)OM_ALLOC)(
+        MR_SM_BYTES, "the patches", 1096, 1);
+    if (!s) {
+        gmv_log("[replay] no memory for the %s page\n", name);
+        return NULL;
+    }
+    ((void (*)(void *))(uintptr_t)MR_SM_CTOR)(s);
+    strcpy((char *)s + 8, name);
+    *(uint32_t **)s = vt;
+    return s;
+}
+
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_mr_register(void *menufx, void *state, const char *clip)
 {
     typedef void (*reg_fn)(void *, void *, const char *);
     ((reg_fn)(uintptr_t)OM_REG_FN)(menufx, state, clip);
-    unsigned char *s = ((unsigned char *(*)(uint32_t, const char *, int, int))(uintptr_t)OM_ALLOC)(
-        MR_SM_BYTES, "the patches", __LINE__, 1);
-    if (!s) {
-        gmv_log("[replay] no memory for the MISSION REPLAY page\n");
-        return;
-    }
-    ((void (*)(void *))(uintptr_t)MR_SM_CTOR)(s);
-    int nids = *(int *)(s + 0x60);              /* and the category header */
-    ((void (*)(void *, int))(uintptr_t)MR_IDS_RESIZE)(s + 0x5c, nids + 1);
-    if (*(int *)(s + 0x60) != nids + 1) {
+    unsigned char *s = mr_new_page(MR_STATE, mr_vt), *t;
+    int nids = s ? *(int *)(s + 0x60) : 0;
+    if (s)
+        ((void (*)(void *, int))(uintptr_t)MR_IDS_RESIZE)(s + 0x5c, nids + 1);
+    if (!s || *(int *)(s + 0x60) != nids + 1) {
         gmv_log("[replay] the MISSION REPLAY page's widget list did not grow; no MISSION REPLAY tab\n");
         return;
     }
     (*(uint32_t **)(s + 0x5c))[nids] = OM_W_CAT;
-    strcpy((char *)s + 8, MR_STATE);
-    memcpy(mr_vt, (const void *)(uintptr_t)MR_SM_VT, sizeof mr_vt);
-    mr_vt[OM_VT_SHOW] = (uint32_t)(uintptr_t)gmv_mr_show;
-    mr_vt[OM_VT_HIDE] = (uint32_t)(uintptr_t)gmv_mr_hide;
-    mr_vt[OM_VT_EVENT] = (uint32_t)(uintptr_t)gmv_mr_event;
-    *(uint32_t **)s = mr_vt;
     ((reg_fn)(uintptr_t)OM_REG_FN)(menufx, s, clip);
     mr_take_widget();
     gmv_log("[replay] SERVICES menu: MISSION REPLAY tab registered in slot %d\n", MR_SLOT);
+    uint32_t *ids = (t = mr_new_page(MR_TOD_STATE, mr_tod_vt)) ? *(uint32_t **)(t + 0x5c) : NULL;
+    if (ids && *(int *)(t + 0x60) == MR_SM_IDS && ids[MR_SM_IDS - 3] == MR_W_MISSION &&
+        ids[MR_SM_IDS - 2] == OM_W_PAGER && ids[MR_SM_IDS - 1] == MR_W_NAME) {
+        ids[MR_SM_IDS - 3] = OM_W_CAT;
+        ((void (*)(void *, int))(uintptr_t)MR_IDS_RESIZE)(t + 0x5c, MR_SM_IDS - 2);
+    }
+    if (!ids || *(int *)(t + 0x60) != MR_SM_IDS - 2) {
+        gmv_log("[time] the SERVICES page's widget list is not the expected one; no TIME OF DAY tab\n");
+        return;
+    }
+    ((reg_fn)(uintptr_t)OM_REG_FN)(menufx, t, clip);
+    mr_tod_page = t;
+    gmv_log("[time] SERVICES menu: TIME OF DAY tab registered in slot %d\n", TOD_SLOT);
 }
 
 static int mr_menu_in;
 
-/* The replay's hooks; START needs them.  In mac_undo: they sit on SWITCH_SAVE_FIX's and come off first. */
 void mr_save_hooks(void)
 {
     if (!mr_menu_in || gmv_config_mac() || mr_unlock_prev)
         return;
     patch_undo *keep = patch_undo_now;
     patch_undo_now = &mac_undo;
-    /* The replay's hooks: START refuses without them.  0x6240 lies in the low range, which runs
-       from its copy at +GMV_LOW_DELTA (its call re-aimed by genlow), so that copy is the one patched. */
+    /* 0x6240 */
     static const uint32_t saves[] = { 0x00006240u, 0x000326f1u, 0x000a1547u, 0x000aa9a6u, 0x000f3624u,
                                       0x000f6b33u, 0x0016471fu, 0x001648d6u, 0x00164a0bu, 0x00164bd6u };
     uint32_t prev = *(const uint32_t *)(uintptr_t)MR_UNLOCK_SLOT;
     int ok = prev == MR_UNLOCK || (MR_ML_UNLOCK && prev == MR_ML_UNLOCK);
 #define MR_LIVE(a) ((a) < GMV_RESERVE_START ? (a) + GMV_LOW_DELTA : (a))
-    /* SWITCH_SAVE_FIX may have wrapped them first: ours then goes in front and passes on to it */
     for (size_t i = 0; ok && i < sizeof saves / sizeof *saves; i++)
         ok = sm_is_call(MR_LIVE(saves[i]), MR_SAVE) ||
              sm_is_call(MR_LIVE(saves[i]), (uint32_t)(uintptr_t)gmv_ssf_write);
@@ -1152,12 +1112,13 @@ void mr_save_hooks(void)
 
 void apply_mission_replay(void)
 {
-    if (!mr_on() && !tab_live())
+    if (!mr_on() && !tod_on() && !tab_live())
         return;
     static const unsigned char table_cmp[4] = { 0x83, 0xf8, 0x03, 0x0f };
     const uint32_t *vt = (const uint32_t *)(uintptr_t)MR_SM_VT, *wv = (const uint32_t *)(uintptr_t)MR_WM_VT;
     const uint32_t *cv = (const uint32_t *)(uintptr_t)OM_CAT_VT;
-    if (!sm_is_call(MR_HIDE6_SITE, OM_SET_VISIBLE) || !sm_is_call(MR_CLICK_SITE, OM_CLICK_FN) ||
+    if (!sm_is_call(MR_HIDE6_SITE, OM_SET_VISIBLE) || !sm_is_call(MR_HIDE5_SITE, OM_SET_VISIBLE) ||
+        !sm_is_call(MR_CLICK_SITE, OM_CLICK_FN) ||
         !sm_is_call(MR_REG_SITE, OM_REG_FN) || !sm_is_call(MR_IDS_SITE, MR_IDS_RESIZE) ||
         memcmp((const void *)(uintptr_t)MR_TABLE_CMP, table_cmp, 4) ||
         vt[OM_VT_SHOW] != MR_SM_SHOW || vt[OM_VT_HIDE] != MR_SM_HIDE || vt[OM_VT_EVENT] != MR_SM_EVENT ||
@@ -1170,21 +1131,29 @@ void apply_mission_replay(void)
     memcpy(mr_wm_vt, wv - 2, sizeof mr_wm_vt);
     mr_wm_vt[2 + OM_W_EVENT] = (uint32_t)(uintptr_t)gmv_mr_wm_event;
     mr_wm_vt[2 + OM_W_TEXTS] = (uint32_t)(uintptr_t)gmv_mr_wm_texts;
+    memcpy(mr_vt, vt, sizeof mr_vt);
+    mr_vt[OM_VT_SHOW] = (uint32_t)(uintptr_t)gmv_mr_show;
+    mr_vt[OM_VT_HIDE] = (uint32_t)(uintptr_t)gmv_mr_hide;
+    mr_vt[OM_VT_EVENT] = (uint32_t)(uintptr_t)gmv_mr_event;
+    memcpy(mr_tod_vt, vt, sizeof mr_tod_vt);
+    mr_tod_vt[OM_VT_SHOW] = (uint32_t)(uintptr_t)gmv_tod_show;
+    mr_tod_vt[OM_VT_HIDE] = (uint32_t)(uintptr_t)gmv_mr_hide;
+    mr_tod_vt[OM_VT_EVENT] = MR_SV_EVENT;
     if (!tab_label_hook()) {
         gmv_log("[replay] the tab label lookup is not the expected one; no MISSION REPLAY tab\n");
         return;
     }
     if (!sm_redirect(MR_REG_SITE, (void *)gmv_mr_register) || !sm_redirect(MR_HIDE6_SITE, (void *)gmv_mr_tab6) ||
-        !sm_redirect(MR_CLICK_SITE, (void *)gmv_mr_clicked))
+        !sm_redirect(MR_HIDE5_SITE, (void *)gmv_mr_tab5) || !sm_redirect(MR_CLICK_SITE, (void *)gmv_mr_clicked))
         return;
     mr_menu_in = 1;
     mr_save_hooks();
     gmv_log("[replay] a MISSION REPLAY tab in the SERVICES menu, showing the completed missions%s\n",
             !mr_on() ? "; hidden for now" : mr_unlock_prev ? ", START replays one"
                      : "; the game's saves or ScriptUnlock not the expected ones, so no START");
+    gmv_log("[time] a TIME OF DAY tab in the SERVICES menu, below MISSION REPLAY%s\n", tod_on() ? "" : "; hidden for now");
 }
 
-/* The tab comes and goes with mr_on; a replay under way goes on to its end, its hooks staying in. */
 int om_set_replay(const char *key, double v)
 {
     (void)key, (void)v;

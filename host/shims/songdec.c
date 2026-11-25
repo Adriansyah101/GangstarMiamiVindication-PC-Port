@@ -1,11 +1,3 @@
-/* songdec.c -- the custom radio's own decoders for mp3, flac, wav and ogg (vendor/: dr_mp3, dr_flac, dr_wav,
-   stb_vorbis; compiled in songdec_impl.c).
-
-   They are the same code on Windows and Linux, so these songs play the same on both, and Linux needs no ffmpeg for
-   them.  Media Foundation (Windows) and ffmpeg (Linux) stay for m4a, aac and wma, and for a file of these four kinds
-   that the decoders here will not open.  A song comes out as 16-bit stereo at its own rate: mono is doubled, and of
-   more channels the first two are kept (stb_vorbis mixes them down itself), as the Media Foundation path does. */
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +23,7 @@ struct gmv_song {
     int kind;
     unsigned rate, ch;
     union { drmp3 mp3; drflac *flac; drwav wav; stb_vorbis *ogg; } u;
-    int16_t *tmp;               /* the song's own channels before they become stereo */
+    int16_t *tmp;
     size_t tmpcap;
 };
 
@@ -126,7 +118,7 @@ size_t gmv_song_read(gmv_song *s, int16_t *out, size_t frames)
     if (s->kind == SD_OGG)
         return (size_t)stb_vorbis_get_samples_short_interleaved(s->u.ogg, 2, out, (int)(frames * 2));
     int16_t *in = out;
-    if (s->ch > 2) {                            /* more than fits in out: read into tmp */
+    if (s->ch > 2) {
         if (s->tmpcap < frames * s->ch) {
             free(s->tmp);
             s->tmpcap = frames * s->ch;
@@ -145,7 +137,7 @@ size_t gmv_song_read(gmv_song *s, int16_t *out, size_t frames)
     case SD_WAV:  n = (size_t)drwav_read_pcm_frames_s16(&s->u.wav, frames, in); break;
     }
     if (s->ch == 1) {
-        for (size_t i = n; i-- > 0;) {          /* backwards: mono and stereo share out */
+        for (size_t i = n; i-- > 0;) {
             out[2 * i] = out[2 * i + 1] = in[i];
         }
     } else if (s->ch > 2) {

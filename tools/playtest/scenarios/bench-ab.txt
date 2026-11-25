@@ -1,6 +1,4 @@
-# STREAM_VBO's A/B in one run (dev): bench-city's settings, 120 s standing still in the city while STREAM_VBO turns
-# on and off by turns each PERF_PROFILE window (GMV_STREAM_AB=1 in the environment), so that both see the same traffic.
-# The [perf] STREAM_AB lines say which state each window had.
+# STREAM_VBO A/B (dev): bench-city settings, 120 s still, STREAM_VBO toggled per PERF_PROFILE window (GMV_STREAM_AB=1)
 dev
 env GMV_STREAM_AB=1
 ini FULLSCREEN=0

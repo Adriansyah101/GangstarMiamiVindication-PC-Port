@@ -1,4 +1,3 @@
-/* fog_distance.c -- the fog's distances follow DRAW_DISTANCE */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -11,34 +10,26 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- The fog's distances follow DRAW_DISTANCE (an enhancement; the game's own under
-   ORIGINAL_MAC_EXPERIENCE) ----
-   The time-of-day update 0x142892 sets the linear fog every tick: start = profile +0x0c (the end of
-   the full detail, 450 m on the Mac), end = the low-detail far distance (0xb5a00) plus 2/3 of the
-   low-detail band (1200 m on the Mac).  It hands the pair {start, end} to the shader parameter
-   setter 0x54cec0 at 0x142d5a; that call goes to gmv_set_fog, which swaps in ours
-   (set by eye): FOG_MODE 1/2 from 100 m to 800 m at 1x, FOG_MODE 0 from 450 m to 900 m at 1x, the end
-   50 m further for each 0.5x more.  One world unit is about 1 cm. */
+/* DRAW_DISTANCE 0x142892 +0x0c 0xb5a00 0x54cec0 0x142d5a */
 #define FOG_SITE 0x00142d5au
 #define FOG_FN   0x0054cec0u
-#define FOG_START_M      100.0f     /* FOG_MODE 1/2 */
-#define FOG_END_M        800.0f     /* at DRAW_DISTANCE 1 */
-#define FOG_GAME_START_M 450.0f     /* FOG_MODE 0, the game's own fog */
+#define FOG_START_M      100.0f
+#define FOG_END_M        800.0f
+#define FOG_GAME_START_M 450.0f
 #define FOG_GAME_END_M   900.0f
-#define FOG_END_PER_X    100.0f     /* more for each 1x of DRAW_DISTANCE */
+#define FOG_END_PER_X    100.0f
 
-#define SKY_RADIUS 60000.0f         /* the skybox's scale across, set by its render at 0xbe7d0 */
+#define SKY_RADIUS 60000.0f         /* 0xbe7d0 */
 
-float g_fog_world_far;             /* the far end of the drawn city (the low-detail far), for the skyline's fog */
-float g_fog_clip;                   /* where the world is seen to end: the fog's end or the city's far end */
-float sky_k = 1;             /* the skybox's height over the camera's (apply_sky_horizon) */
-float g_cam_z;                      /* the camera's height over the sea, as the skybox render read it */
+float g_fog_world_far;
+float g_fog_clip;
+float sky_k = 1;
+float g_cam_z;
 
-int g_fog_all, g_sky_draw;
+int g_fog_all, g_sky_draw, g_cp_draw;
 static int fog_mode = -1;
-int fog_sky_wrapped;         /* the skybox render goes through gmv_skybox_render */
+int fog_sky_wrapped;
 
-/* FOG_MODE: 0 = the game's own fog (blank), 1 = linear on the whole world, 2 = the hybrid (the GL shim). */
 int gmv_fog_mode(void)
 {
     if (fog_mode < 0) {
@@ -49,8 +40,6 @@ int gmv_fog_mode(void)
     return fog_mode;
 }
 
-/* The options menu's FOG_MODE (the GL shim, after a present).  Without the skybox wrapped, the whole-world
-   fog cannot come on; mode 0 puts the skybox back at sea level and the game's distances. */
 int gmv_fog_mode_set(int mode)
 {
     gmv_fog_mode();
@@ -67,24 +56,24 @@ int gmv_fog_mode_set(int mode)
 __attribute__((cdecl, force_align_arg_pointer))
 static int gmv_set_fog(void *params, int id, int index, const float *range)
 {
-    g_fog_world_far = (3 * range[1] + 2 * range[0]) / 5;     /* the game's end is far + 2/3 of (far - start) */
+    g_fog_world_far = (3 * range[1] + 2 * range[0]) / 5;
     int mac = gmv_config_mac();
-    static float logged = -1;                       /* the end logged: at the first tick and after each change */
-    if (mac && !g_fog_all) {                        /* ORIGINAL_MAC_EXPERIENCE: the game's own distances */
+    static float logged = -1;
+    if (mac && !g_fog_all) {
         if (logged != 0) {
             logged = 0;
             gmv_log("[gamepatch] fog %.0f..%.0f m, the game's own (ORIGINAL_MAC_EXPERIENCE)\n", range[0] / 100, range[1] / 100);
         }
         return ((int (*)(void *, int, int, const float *))(uintptr_t)FOG_FN)(params, id, index, range);
     }
-    double dd = dd_on && dd_scale > 1 ? dd_scale : 1;   /* the draw distance in force */
+    double dd = dd_on && dd_scale > 1 ? dd_scale : 1;
     float extra = (float)(FOG_END_PER_X * (dd - 1));
     float r[2] = { (g_fog_all ? FOG_START_M : FOG_GAME_START_M) * 100, ((g_fog_all ? FOG_END_M : FOG_GAME_END_M) + extra) * 100 };
     if (g_fog_all) {
         g_fog_clip = r[1] < g_fog_world_far ? r[1] : g_fog_world_far;
         sky_k = 1 - SKY_RADIUS / g_fog_clip;
     }
-    if (logged != r[1] + g_fog_all) {               /* (the mode counted, for the same end in both) */
+    if (logged != r[1] + g_fog_all) {
         logged = r[1] + g_fog_all;
         if (g_fog_all)
             gmv_log("[gamepatch] fog %.0f..%.0f m at draw distance %.2gx (the game's %.0f..%.0f m); the world seen to %.0f m, "
@@ -96,9 +85,7 @@ static int gmv_set_fog(void *params, int id, int index, const float *range)
     return ((int (*)(void *, int, int, const float *))(uintptr_t)FOG_FN)(params, id, index, r);
 }
 
-/* Most of the city's materials have no fog (see fog_force_begin in the GL shim), which fogs them while
-   leaving the sky alone: the skybox render 0xbe468, called only through its vtable entry 0x6522d8, is
-   wrapped to set g_sky_draw.  render(node, arg) reads its second argument, so both are passed on. */
+/* 0xbe468 0x6522d8 g_sky_draw */
 #define FOG_SKY_VT     0x006522d8u
 #define FOG_SKY_RENDER 0x000be468u
 
@@ -110,12 +97,41 @@ static void gmv_skybox_render(void *n, int arg)
     g_sky_draw = 0;
 }
 
-/* The skybox wrap for FOG_MODE 1/2 (or the options menu's), and the distances' setter; neither under
-   ORIGINAL_MAC_EXPERIENCE. */
+#define CP_RENDER_SITE 0x000b9a26u
+
+__attribute__((cdecl, force_align_arg_pointer))
+static void gmv_transparent_render(uint32_t n, uint32_t pass)
+{
+    for (uint32_t p = n, k = 0; p && k < 4 && !g_cp_draw; p = *(uint32_t *)(uintptr_t)(p + 0xd8), k++) {
+        const char *s = *(const char **)(uintptr_t)(p + 0xc);
+        g_cp_draw = s && !strncmp(s, "checkpoint_", 11) &&
+                    (!strncmp(s + 11, "race", 4) || !strncmp(s + 11, "mission", 7) || !strncmp(s + 11, "drive", 5) ||
+                     !strncmp(s + 11, "store", 5) || !strncmp(s + 11, "elevator", 8) || !strncmp(s + 11, "arrow", 5));
+    }
+    ((void (*)(uint32_t, uint32_t))(uintptr_t)(*(uint32_t **)(uintptr_t)n)[0x1c / 4])(n, pass);
+    g_cp_draw = 0;
+}
+
+void apply_checkpoint_glow(void)
+{
+    static const unsigned char orig[12] = { 0x8b, 0x02, 0x89, 0x5c, 0x24, 0x04, 0x89, 0x14, 0x24, 0xff, 0x50, 0x1c };
+    unsigned char b[12] = { 0x89, 0x5c, 0x24, 0x04, 0x89, 0x14, 0x24, 0xe8 };
+    const char *e = gmv_getenv("GMV_BLOOM");
+    if (gmv_config_mac() || (!(e && atoi(e) > 0) && !tab_live()))
+        return;
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)gmv_transparent_render - (CP_RENDER_SITE + sizeof b));
+    memcpy(b + 8, &rel, 4);
+    const void *at = (const void *)(uintptr_t)CP_RENDER_SITE;
+    if (memcmp(at, orig, sizeof b) && memcmp(at, b, sizeof b))
+        gmv_log("[gamepatch] transparent render call not the expected bytes; checkpoints glow in the bloom\n");
+    else
+        patch_bytes(CP_RENDER_SITE, b, sizeof b);
+}
+
 void apply_fog(void)
 {
     if (gmv_config_mac())
-        return;                                 /* the Mac's fog: the hooks come with the switch */
+        return;
     if (gmv_fog_mode() || tab_live()) {
         uint32_t w = (uint32_t)(uintptr_t)gmv_skybox_render;
         if (*(uint32_t *)(uintptr_t)FOG_SKY_VT == FOG_SKY_RENDER && patch_bytes(FOG_SKY_VT, (const unsigned char *)&w, 4)) {
@@ -133,28 +149,12 @@ void apply_fog(void)
         gmv_log("[gamepatch] fog setter not the expected bytes; the fog keeps the game's distances\n");
         return;
     }
-    int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_set_fog - (FOG_SITE + 5));
-    if (!patch_bytes(FOG_SITE + 1, (const unsigned char *)&r, 4))
+    if (!patch_call(FOG_SITE, (void *)gmv_set_fog))
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); the fog keeps the game's distances\n", FOG_SITE + 1, GetLastError());
 }
 
-/* The skybox (the sky gradient and the distant skyline) sits 600 m around the camera, but the skybox
-   render puts it at the camera's x and y and at height 0, the sea: the skyline's foot and the sky's
-   horizon band are at sea level.  Seen from a helicopter they sink well below the true horizon (about
-   14 degrees at 150 m up), and the city drawn out past them -- to 900 m on the Mac, to 2.7 km at
-   DRAW_DISTANCE=3 -- rises over the skyline's foot with its square edge; lifted to the camera's height
-   instead, it floats over the sea, which fades out in the fog well below the horizon.  With the fog on
-   the whole world the skyline stands where the world is seen to end, g_fog_clip (the fog's end, or the
-   city's far end if that comes first): the skybox is put at the camera's height times
-   sky_k = 1 - SKY_RADIUS / g_fog_clip, so its foot, SKY_RADIUS away, is seen at the same angle below
-   the horizon as the sea g_fog_clip away, at any altitude.  the GL shim ends the world there, fogs the
-   skyline's foot, fills the sky below eye level with the fog's colour and carries the sea on past the
-   map's edge, so the fogged sea runs into the skyline's foot.  At 0xbe5c6 the render zeroes the height
-   of the position it read from the camera (eax points at it); a trampoline now stores the camera's
-   height times sky_k (xmm0 is reloaded before its next use), and keeps the height in g_cam_z for the
-   hybrid fog's thinning with height.  The same vector's height also enters a
-   length that only scales the direction handed to atan2. */
-#define SKY_HEIGHT_SITE 0x000be5c6u   /* movl $0x0,-0x80(%ebp) */
+/* 0xbe5c6 eax */
+#define SKY_HEIGHT_SITE 0x000be5c6u   /* movl $0x0 */
 #define SKY_HEIGHT_CONT 0x000be5cdu
 
 void apply_sky_horizon(void)
@@ -175,21 +175,18 @@ void apply_sky_horizon(void)
         return;
     }
     size_t o = 0;
-    static const unsigned char load[5] = { 0xf3, 0x0f, 0x10, 0x40, 0x08 };     /* movss 8(%eax),%xmm0 */
+    static const unsigned char load[5] = { 0xf3, 0x0f, 0x10, 0x40, 0x08 };     /* 8(%eax),%xmm0 */
     memcpy(tr + o, load, 5), o += 5;
-    tr[o++] = 0xf3, tr[o++] = 0x0f, tr[o++] = 0x11, tr[o++] = 0x05;           /* movss %xmm0,g_cam_z */
+    tr[o++] = 0xf3, tr[o++] = 0x0f, tr[o++] = 0x11, tr[o++] = 0x05;
     uint32_t cz = (uint32_t)(uintptr_t)&g_cam_z;
     memcpy(tr + o, &cz, 4), o += 4;
-    tr[o++] = 0xf3, tr[o++] = 0x0f, tr[o++] = 0x59, tr[o++] = 0x05;           /* mulss sky_k,%xmm0 */
+    tr[o++] = 0xf3, tr[o++] = 0x0f, tr[o++] = 0x59, tr[o++] = 0x05;
     uint32_t k = (uint32_t)(uintptr_t)&sky_k;
     memcpy(tr + o, &k, 4), o += 4;
-    static const unsigned char store[5] = { 0xf3, 0x0f, 0x11, 0x45, 0x80 };    /* movss %xmm0,-0x80(%ebp) */
+    static const unsigned char store[5] = { 0xf3, 0x0f, 0x11, 0x45, 0x80 };    /* %xmm0,-0x80(%ebp) */
     memcpy(tr + o, store, 5), o += 5;
     emit_jmp(tr, &o, SKY_HEIGHT_CONT);
-    unsigned char site[7] = { 0xe9, 0, 0, 0, 0, 0x90, 0x90 };
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)tr - (SKY_HEIGHT_SITE + 5));
-    memcpy(site + 1, &rel, 4);
-    if (patch_bytes(SKY_HEIGHT_SITE, site, sizeof site))
+    if (patch_jmp(SKY_HEIGHT_SITE, tr, 7))
         gmv_log("[gamepatch] skybox raised with the camera (trampoline @ %p): the skyline's foot stays where the "
                 "fogged sea ends\n", (void *)tr);
     else

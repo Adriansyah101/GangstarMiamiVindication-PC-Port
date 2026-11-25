@@ -1,30 +1,3 @@
-/* padicons.c -- PAD_ICONS: the options menu's gamepad pictures drawn for the pad in use.
-   An enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE.
-
-   Every gamepad picture of newmenu.fua (the calibration page's pad and its yellow highlights,
-   widgetCalibration.wGP*, and the button of each line of the button list, wCusLine%d.wGP.wgp_%d) is
-   cut from one 4096x2048 atlas, "./splash_gamepad.bmp", which the game loads as the DXT5 texture
-   _packMac/file002441.dat (13 mip levels, one glCompressedTexImage2D each).  The Mac's art is
-   neutral: the face buttons are a diamond of four dots with the one meant lit in yellow, the
-   shoulders and Back/Start a picture of that part of the pad.
-
-   With PAD_ICONS=1 the atlas is recognised at its upload (size, format and a sample of its bytes)
-   and its blocks under the pictures are kept; after a present, when the kind of pad last used
-   (gmv_joy_style) differs from what the texture shows, those blocks are replaced in place with
-   glCompressedTexSubImage2D:
-     - Xbox (XInput): A B X Y in their colours, LB RB LT RT, the View and Menu signs;
-     - DualShock 4 / DualSense: cross, circle, square and triangle in their colours, L1 R1 L2 R2,
-       L3 R3, SHARE (CREATE on a DualSense) and OPTIONS;
-     - any other pad, or none: the Mac's own blocks.
-   The new art is drawn here (shapes from distance functions, letters with GDI's Arial; FreeType's on Linux), over the
-   decoded original, and its mip levels 1-6 are box-filtered from it; blocks no picture touches stay
-   the original bytes.  Levels 7-12 (32x16 texels and less) stay the Mac's.  Nothing of the menu
-   file changes, so the pictures keep their places, sizes and the game's own show/hide.
-
-   The button list shows the game's logical buttons (calibration order X A B Y LB RB LT RT Back
-   Start LS RS, wgp_0..11); shimsjoy.c gives a DualShock's buttons in that order as Square Cross Circle
-   Triangle L1 R1 L2 R2 Share Options L3 R3, so square = X, cross = A, circle = B, triangle = Y. */
-
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,14 +14,11 @@
 
 #define AT_W      4096
 #define AT_H      2048
-#define AT_DXT5   0x83F3u                       /* GL_COMPRESSED_RGBA_S3TC_DXT5_EXT */
-#define AT_HASH   0xafb33352u                   /* FNV-1a of every 37th byte of level 0 */
-#define AT_LEVELS 7                             /* levels 0..6 are redrawn */
-#define NSTYLE    4                             /* 0 the Mac's, 1 Xbox, 2 DualShock 4, 3 DualSense */
+#define AT_DXT5   0x83F3u
+#define AT_HASH   0xafb33352u
+#define AT_LEVELS 7
+#define NSTYLE    4
 
-/* The parts of the atlas that hold pictures, on 256-texel bounds so that each is whole blocks down
-   to level 6 and no two share a block there: the calibration page's highlight dots, the pad's face
-   buttons, and the rows of button pictures. */
 static const struct { int x, y, w, h; } g_clus[] = {
     {256, 0, 512, 768}, {1536, 256, 512, 512}, {0, 1024, 2304, 768},
 };
@@ -56,35 +26,34 @@ static const struct { int x, y, w, h; } g_clus[] = {
 
 enum { B_X, B_A, B_B, B_Y, B_LB, B_RB, B_LT, B_RT, B_BACK, B_START, B_LS, B_RS };
 enum {
-    K_FACE,     /* a button list's face button: redrawn as a round button */
-    K_DOT,      /* a calibration highlight dot (yellow): the sign drawn on it */
-    K_PAD,      /* a face button of the calibration page's pad: the sign drawn on it, in colour */
-    K_SHOULDER, /* a shoulder picture: its name written on it */
-    K_MENU,     /* Back / Start: redrawn as a round button with the sign or name */
-    K_STICK,    /* a stick's yellow L / R: L3 / R3 on a PlayStation pad */
+    K_FACE,
+    K_DOT,
+    K_PAD,
+    K_SHOULDER,
+    K_MENU,
+    K_STICK,
 };
 
-/* Each picture: kind, button, and its rectangle in level-0 texels (from the menu file's shapes). */
 static const struct { unsigned char kind, button; short x0, y0, x1, y1; } g_pics[] = {
-    {K_FACE, B_X, 86, 1101, 318, 1328},          /* wgp_0 .. wgp_3 */
+    {K_FACE, B_X, 86, 1101, 318, 1328},
     {K_FACE, B_A, 860, 1101, 1092, 1330},
     {K_FACE, B_B, 600, 1101, 837, 1332},
     {K_FACE, B_Y, 343, 1101, 574, 1325},
-    {K_SHOULDER, B_LB, 1638, 1142, 1870, 1338},  /* wgp_4 .. wgp_7 */
+    {K_SHOULDER, B_LB, 1638, 1142, 1870, 1338},
     {K_SHOULDER, B_RB, 595, 1380, 824, 1572},
     {K_SHOULDER, B_LT, 1914, 1142, 2145, 1335},
     {K_SHOULDER, B_RT, 863, 1380, 1091, 1572},
-    {K_MENU, B_BACK, 1150, 1356, 1378, 1595},    /* wgp_8, wgp_9 */
+    {K_MENU, B_BACK, 1150, 1356, 1378, 1595},
     {K_MENU, B_START, 1421, 1356, 1654, 1584},
-    {K_STICK, B_LS, 1118, 1101, 1354, 1333},     /* wgp_10, wgp_11 */
+    {K_STICK, B_LS, 1118, 1101, 1354, 1333},
     {K_STICK, B_RS, 1381, 1101, 1615, 1330},
-    {K_STICK, B_LS, 106, 1378, 298, 1570},       /* wGPbtnLeft, wGPbtnRight */
+    {K_STICK, B_LS, 106, 1378, 298, 1570},
     {K_STICK, B_RS, 334, 1383, 536, 1572},
-    {K_DOT, B_Y, 411, 159, 528, 268},            /* wGPbtnY B X A */
+    {K_DOT, B_Y, 411, 159, 528, 268},
     {K_DOT, B_B, 415, 319, 527, 422},
     {K_DOT, B_X, 422, 455, 528, 557},
     {K_DOT, B_A, 425, 603, 528, 706},
-    {K_PAD, B_Y, 1824, 311, 1914, 401},          /* the pad (shape 642) under those dots */
+    {K_PAD, B_Y, 1824, 311, 1914, 401},
     {K_PAD, B_B, 1938, 414, 2028, 504},
     {K_PAD, B_X, 1698, 411, 1788, 501},
     {K_PAD, B_A, 1823, 527, 1913, 617},
@@ -92,8 +61,6 @@ static const struct { unsigned char kind, button; short x0, y0, x1, y1; } g_pics
 #define NPICS (int)(sizeof g_pics / sizeof g_pics[0])
 
 static const char *const g_style_name[NSTYLE] = {"the Mac's", "Xbox", "DualShock 4", "DualSense"};
-
-/* ---- DXT5 blocks ---- */
 
 static void rgb565(unsigned c, int *r, int *g, int *b)
 {
@@ -136,7 +103,6 @@ static unsigned to565(int r, int g, int b) { return (unsigned)((r * 31 + 127) / 
 
 static void dxt5_encode(const uint8_t px[16][4], uint8_t *b)
 {
-    /* alpha: the eight-value ramp between the block's extremes */
     int amin = 255, amax = 0;
     for (int i = 0; i < 16; i++) {
         if (px[i][3] < amin) amin = px[i][3];
@@ -146,14 +112,13 @@ static void dxt5_encode(const uint8_t px[16][4], uint8_t *b)
     uint64_t ai = 0;
     if (amax > amin)
         for (int i = 0; i < 16; i++) {
-            int k = ((px[i][3] - amin) * 7 + (amax - amin) / 2) / (amax - amin);     /* 0 = amin .. 7 = amax */
+            int k = ((px[i][3] - amin) * 7 + (amax - amin) / 2) / (amax - amin);
             int idx = k == 7 ? 0 : k == 0 ? 1 : 8 - k;
             ai |= (uint64_t)idx << (3 * i);
         }
     for (int i = 0; i < 6; i++)
         b[2 + i] = (uint8_t)(ai >> (8 * i));
 
-    /* colour: the box of the visible texels, inset a little, as the two ends */
     int lo[3] = {255, 255, 255}, hi[3] = {0, 0, 0}, any = 0;
     for (int i = 0; i < 16; i++) {
         if (!px[i][3])
@@ -197,19 +162,16 @@ static void dxt5_encode(const uint8_t px[16][4], uint8_t *b)
     b[12] = (uint8_t)ci, b[13] = (uint8_t)(ci >> 8), b[14] = (uint8_t)(ci >> 16), b[15] = (uint8_t)(ci >> 24);
 }
 
-/* ---- the kept blocks: [style][cluster][level], whole blocks of the cluster's rectangle ---- */
-
 static uint8_t *g_blocks[NSTYLE][NCLUS][AT_LEVELS];
-static unsigned g_orig_levels;                  /* bit L: level L of the original is kept */
+static unsigned g_orig_levels;
 
 static int clus_bw(int c, int lv) { return (g_clus[c].w >> lv) / 4; }
 static int clus_bh(int c, int lv) { return (g_clus[c].h >> lv) / 4; }
 static size_t clus_bytes(int c, int lv) { return (size_t)clus_bw(c, lv) * clus_bh(c, lv) * 16; }
 
-/* Keep level lv of the original atlas (the whole level's DXT5 data, as uploaded). */
 static void keep_level(int lv, const uint8_t *data)
 {
-    int row = (AT_W >> lv) / 4 * 16;            /* bytes per row of blocks */
+    int row = (AT_W >> lv) / 4 * 16;
     for (int c = 0; c < NCLUS; c++) {
         uint8_t *dst = malloc(clus_bytes(c, lv));
         if (!dst)
@@ -223,17 +185,14 @@ static void keep_level(int lv, const uint8_t *data)
     g_orig_levels |= 1u << lv;
 }
 
-/* ---- drawing: a cluster's level-0 texels (straight RGBA) and which of them were drawn on ---- */
-
 typedef struct {
-    int x, y, w, h;                             /* the cluster, in atlas texels */
-    uint8_t *px;                                /* w*h*4 */
-    uint8_t *mark;                              /* w*h: 1 = drawn on */
+    int x, y, w, h;
+    uint8_t *px;
+    uint8_t *mark;
 } canvas;
 
 static uint8_t *cv_at(canvas *cv, int x, int y) { return cv->px + ((size_t)(y - cv->y) * cv->w + (x - cv->x)) * 4; }
 
-/* Lay colour (r,g,b) with coverage a (0..1) over texel (x,y) in atlas coordinates. */
 static void cv_put(canvas *cv, int x, int y, float r, float g, float b, float a)
 {
     if (a <= 0 || x < cv->x || y < cv->y || x >= cv->x + cv->w || y >= cv->y + cv->h)
@@ -262,7 +221,6 @@ static void cv_clear(canvas *cv, int x0, int y0, int x1, int y1)
 
 typedef struct { float r, g, b; } rgb;
 
-/* Signed distances (texels, negative inside) at a point. */
 static float sd_circle(float px, float py, float cx, float cy, float r) { return hypotf(px - cx, py - cy) - r; }
 
 static float sd_seg(float px, float py, float ax, float ay, float bx, float by)
@@ -279,9 +237,8 @@ static float sd_box(float px, float py, float cx, float cy, float hx, float hy, 
     return hypotf(ox, oy) + fminf(fmaxf(qx, qy), 0) - round;
 }
 
-/* A shape for fill_shape: its distance at a point. */
 typedef struct {
-    int type;                                   /* 0 disc, 1 ring, 2 segment, 3 box outline, 4 box, 5 triangle outline */
+    int type;
     float cx, cy, a, b, c, d, w;
 } shape;
 
@@ -293,7 +250,7 @@ static float shape_d(const shape *s, float x, float y)
     case 2: return sd_seg(x, y, s->cx, s->cy, s->a, s->b) - s->w / 2;
     case 3: return fabsf(sd_box(x, y, s->cx, s->cy, s->a, s->b, s->c)) - s->w / 2;
     case 4: return sd_box(x, y, s->cx, s->cy, s->a, s->b, s->c);
-    default: {                                  /* equilateral, centre (cx,cy), circumradius a, point up */
+    default: {
         float vx[3], vy[3], d = 1e9f;
         for (int i = 0; i < 3; i++) {
             float ang = -1.5707963f + i * 2.0943951f;
@@ -306,7 +263,6 @@ static float shape_d(const shape *s, float x, float y)
     }
 }
 
-/* Fill a shape, with its colour shaded from top (col) to bottom (col2) across [y0, y1]. */
 static void fill_shape2(canvas *cv, const shape *s, rgb col, rgb col2, float y0, float y1)
 {
     float reach = s->a + s->b + s->w + 4;
@@ -326,8 +282,6 @@ static void fill_shape2(canvas *cv, const shape *s, rgb col, rgb col2, float y0,
 
 static void fill_shape(canvas *cv, const shape *s, rgb col) { fill_shape2(cv, s, col, col, 0, 0); }
 
-/* The text s drawn white-on-nothing in Arial Bold, em texels to the em, its cell's top left at (em/2, em/2) of a
-   bw x bh picture: the coverage of each texel (0..255), malloc'd, or NULL. */
 #ifdef _WIN32
 static uint8_t *render_text(const char *s, int len, float em, int bw, int bh)
 {
@@ -362,9 +316,6 @@ static uint8_t *render_text(const char *s, int len, float em, int bw, int bh)
     return cov;
 }
 #else
-/* Linux has no GDI: FreeType draws the text in the font fontconfig gives for "Arial:bold" (Liberation Sans Bold
-   where it is installed: Arial's widths, near its shapes).  Both libraries are opened when first needed, so the
-   program runs without them; the pictures then have no letters, which the log says once. */
 #include <dlfcn.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -379,7 +330,7 @@ static FT_Face text_face(void)
     tried = 1;
     char path[1024] = "";
     void *fc = dlopen("libfontconfig.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (fc) {                                   /* opaque pointers only: no fontconfig header needed */
+    if (fc) {
         void *(*init)(void) = (void *(*)(void))dlsym(fc, "FcInitLoadConfigAndFonts");
         void *(*parse)(const char *) = (void *(*)(const char *))dlsym(fc, "FcNameParse");
         int (*subst)(void *, void *, int) = (int (*)(void *, void *, int))dlsym(fc, "FcConfigSubstitute");
@@ -392,10 +343,10 @@ static FT_Face text_face(void)
         if (pat) {
             int res;
             char *file = NULL;
-            subst(cfg, pat, 0);                 /* FcMatchPattern */
+            subst(cfg, pat, 0);
             dflt(pat);
             void *m = match(cfg, pat, &res);
-            if (m && !get(m, "file", 0, &file) && file)     /* FcResultMatch */
+            if (m && !get(m, "file", 0, &file) && file)
                 snprintf(path, sizeof path, "%s", file);
             if (m)
                 destroy(m);
@@ -430,7 +381,7 @@ static uint8_t *render_text(const char *s, int len, float em, int bw, int bh)
     static FT_Error (*size)(FT_Face, FT_UInt, FT_UInt);
     static FT_Error (*load)(FT_Face, FT_ULong, FT_Int32);
     if (face && !size) {
-        void *ft = dlopen("libfreetype.so.6", RTLD_NOW | RTLD_LOCAL);     /* already loaded: a reference */
+        void *ft = dlopen("libfreetype.so.6", RTLD_NOW | RTLD_LOCAL);
         size = (FT_Error (*)(FT_Face, FT_UInt, FT_UInt))dlsym(ft, "FT_Set_Pixel_Sizes");
         load = (FT_Error (*)(FT_Face, FT_ULong, FT_Int32))dlsym(ft, "FT_Load_Char");
     }
@@ -458,11 +409,10 @@ static uint8_t *render_text(const char *s, int len, float em, int bw, int bh)
 }
 #endif
 
-/* Text in Arial Bold, its ink centred on (cx,cy), its capitals cap texels high and at most maxw wide. */
 static void draw_text(canvas *cv, const char *s, float cx, float cy, float cap, float maxw, rgb col)
 {
     int len = (int)strlen(s);
-    float em = cap / 0.716f;                    /* Arial's capital height */
+    float em = cap / 0.716f;
     for (int pass = 0; pass < 2; pass++) {
         int bw = (int)(em * (len + 2)), bh = (int)(em * 2);
         uint8_t *p = render_text(s, len, em, bw, bh);
@@ -478,7 +428,7 @@ static void draw_text(canvas *cv, const char *s, float cx, float cy, float cap, 
                     if (y > y1) y1 = y;
                 }
         if (x1 >= 0 && pass == 0 && maxw > 0 && x1 - x0 + 1 > maxw) {
-            em *= maxw / (float)(x1 - x0 + 1);  /* too wide: once more, smaller */
+            em *= maxw / (float)(x1 - x0 + 1);
         } else if (x1 >= 0) {
             int ox = (int)lrintf(cx - (x1 - x0 + 1) / 2.0f) - x0, oy = (int)lrintf(cy - (y1 - y0 + 1) / 2.0f) - y0;
             for (int y = y0; y <= y1; y++)
@@ -495,13 +445,10 @@ static void draw_text(canvas *cv, const char *s, float cx, float cy, float cap, 
     }
 }
 
-/* ---- the pictures ---- */
-
-static const rgb XB_COL[4] = {{40, 124, 220}, {98, 183, 52}, {226, 52, 44}, {245, 190, 35}};     /* X A B Y */
-static const rgb PS_COL[4] = {{224, 140, 222}, {124, 178, 238}, {244, 98, 98}, {64, 212, 164}};  /* square cross circle triangle */
+static const rgb XB_COL[4] = {{40, 124, 220}, {98, 183, 52}, {226, 52, 44}, {245, 190, 35}};
+static const rgb PS_COL[4] = {{224, 140, 222}, {124, 178, 238}, {244, 98, 98}, {64, 212, 164}};
 static const rgb WHITE = {236, 236, 236}, INK = {24, 24, 24};
 
-/* A face button's sign, size texels high, centred on (cx,cy). */
 static void draw_sign(canvas *cv, int style, int button, float cx, float cy, float size, rgb col)
 {
     if (style == 1) {
@@ -512,28 +459,27 @@ static void draw_sign(canvas *cv, int style, int button, float cx, float cy, flo
     float h = size / 2, w = size * 0.15f;
     shape s = {0};
     switch (button) {
-    case B_X:                                   /* square */
+    case B_X:
         s = (shape){3, cx, cy, h * 0.8f, h * 0.8f, w * 0.4f, 0, w};
         fill_shape(cv, &s, col);
         break;
-    case B_A:                                   /* cross */
+    case B_A:
         s = (shape){2, cx - h * 0.82f, cy - h * 0.82f, cx + h * 0.82f, cy + h * 0.82f, 0, 0, w};
         fill_shape(cv, &s, col);
         s = (shape){2, cx - h * 0.82f, cy + h * 0.82f, cx + h * 0.82f, cy - h * 0.82f, 0, 0, w};
         fill_shape(cv, &s, col);
         break;
-    case B_B:                                   /* circle */
+    case B_B:
         s = (shape){1, cx, cy, h * 0.86f, 0, 0, 0, w};
         fill_shape(cv, &s, col);
         break;
-    default:                                    /* triangle */
+    default:
         s = (shape){5, cx, cy + h * 0.14f, h * 1.02f, 0, 0, 0, w};
         fill_shape(cv, &s, col);
         break;
     }
 }
 
-/* The dark round button the list's face buttons and Back/Start are redrawn as. */
 static void draw_button(canvas *cv, float cx, float cy, float r)
 {
     shape s = {0, cx, cy + r * 0.03f, r, 0, 0, 0, 0};
@@ -574,12 +520,12 @@ static void draw_pic(canvas *cv, int style, int i)
         draw_button(cv, cx, cy, r);
         if (ps)
             draw_text(cv, b == B_START ? "OPTIONS" : style == 3 ? "CREATE" : "SHARE", cx, cy, r * 0.27f, r * 1.45f, WHITE);
-        else if (b == B_START) {                /* Menu: three lines */
+        else if (b == B_START) {
             for (int k = -1; k <= 1; k++) {
                 shape s = {2, cx - r * 0.34f, cy + k * r * 0.24f, cx + r * 0.34f, cy + k * r * 0.24f, 0, 0, r * 0.1f};
                 fill_shape(cv, &s, WHITE);
             }
-        } else {                                /* View: two windows, the front one filled */
+        } else {
             float hx = r * 0.25f, hy = r * 0.19f, o = r * 0.11f, w = r * 0.075f;
             shape s = {3, cx - o, cy - o, hx, hy, w, 0, w};
             fill_shape(cv, &s, WHITE);
@@ -592,8 +538,6 @@ static void draw_pic(canvas *cv, int style, int i)
     case K_STICK: {
         if (!ps)
             break;
-        /* the yellow disc's radius: its farthest yellow texel straight up from the centre (the letter
-           may cross that line; the dark ring and the transparent edge are outside it) */
         int icx = (int)cx, icy = (int)cy, rr = 0;
         for (int d = 1; icy - d >= y0; d++)
             if (is_yellow(cv_at(cv, icx, icy - d)))
@@ -611,7 +555,6 @@ static void draw_pic(canvas *cv, int style, int i)
     }
 }
 
-/* Build a style's blocks for every cluster and level from the original's. */
 static int build_style(int style)
 {
     for (int c = 0; c < NCLUS; c++) {
@@ -622,7 +565,6 @@ static int build_style(int style)
             free(cv.px), free(cv.mark);
             return 0;
         }
-        /* level 0, decoded */
         int bw = clus_bw(c, 0);
         for (int by = 0; by < clus_bh(c, 0); by++)
             for (int bx = 0; bx < bw; bx++) {
@@ -635,10 +577,9 @@ static int build_style(int style)
             if (g_pics[i].x0 >= cv.x && g_pics[i].x1 <= cv.x + cv.w && g_pics[i].y0 >= cv.y && g_pics[i].y1 <= cv.y + cv.h)
                 draw_pic(&cv, style, i);
 
-        /* each level: the blocks with a drawn texel re-encoded, the rest the original's bytes */
         for (int lv = 0; lv < AT_LEVELS; lv++) {
             int w = cv.w >> lv, h = cv.h >> lv;
-            if (lv) {                           /* box-filter the level above, alpha-weighted */
+            if (lv) {
                 int pw = w * 2;
                 for (int y = 0; y < h; y++)
                     for (int x = 0; x < w; x++) {
@@ -656,7 +597,7 @@ static int build_style(int style)
                             out[k] = (uint8_t)v;
                         }
                         out[3] = (uint8_t)((sa + 2) / 4);
-                        memcpy(cv.px + ((size_t)y * w + x) * 4, out, 4);   /* in place: (x,y) is read before written */
+                        memcpy(cv.px + ((size_t)y * w + x) * 4, out, 4);
                         cv.mark[(size_t)y * w + x] = (uint8_t)m;
                     }
             }
@@ -701,18 +642,14 @@ static uint32_t atlas_hash(const uint8_t *d, size_t n)
 }
 
 #ifndef PADICONS_TEST
-/* ---- the game's side: the atlas textures and the switch ---- */
 
 #define MAX_TEX 4
-static struct { GLuint id; unsigned levels; int shown; } g_tex[MAX_TEX];   /* shown: the style it shows */
+static struct { GLuint id; unsigned levels; int shown; } g_tex[MAX_TEX];
 static int g_on = -1;
 
 int gmv_padicons_on(void)
 {
     if (g_on < 0) {
-        /* in from the start whenever the file asks for it or the options menu can, so that the menu's line
-           and the in-game ORIGINAL_MAC_EXPERIENCE switch can turn it on and off; gmv_config_live decides what
-           is shown */
         const char *e = gmv_envkey("GMV_PAD_ICONS");
         if (!e)
             e = gmv_config_file_value("PAD_ICONS");
@@ -729,7 +666,7 @@ int gmv_padicons_on(void)
 static GLuint bound_2d(void)
 {
     GLint b = 0;
-    glGetIntegerv(0x8069, &b);                  /* GL_TEXTURE_BINDING_2D */
+    glGetIntegerv(0x8069, &b);
     return (GLuint)b;
 }
 
@@ -748,7 +685,7 @@ void gmv_padicons_upload(int level, unsigned fmt, int w, int h, int size, const 
                 k = i;
         if (hs != AT_HASH) {
             if (k >= 0 && g_tex[k].id == id)
-                g_tex[k].id = 0;                /* the name now holds another picture */
+                g_tex[k].id = 0;
             gmv_trace("[padicons] a 4096x2048 DXT5 texture (%u, sample %08x) is not the gamepad atlas\n", id, hs);
             return;
         }
@@ -818,7 +755,7 @@ void gmv_padicons_sync(void)
         if (!sub)
             return;
         GLint unpack = 0;
-        glGetIntegerv(0x88EF, &unpack);         /* GL_PIXEL_UNPACK_BUFFER_BINDING */
+        glGetIntegerv(0x88EF, &unpack);
         if (unpack && bindbuf)
             bindbuf(0x88EC, 0);
         GLuint was = bound_2d();

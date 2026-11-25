@@ -1,5 +1,4 @@
-# The diagnostics LOAD_PROFILE and PERF_PROFILE (dev build): to the main menu, and both write their lines,
-# the sampler's included
+# LOAD_PROFILE and PERF_PROFILE (dev) to the main menu, sampler included
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280

@@ -1,4 +1,3 @@
-/* ao.c -- AMBIENT_OCCLUSION */
 #include <math.h>
 #include <string.h>
 #include "compat.h"
@@ -10,40 +9,24 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- AMBIENT_OCCLUSION: an enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE ----------
-   Screen-space ambient occlusion from the game's depth buffer, applied between its 3D world and its 2D
-   layer so the HUD, map and text stay untouched.  The engine (glitch) is fixed-function: it loads its
-   projections with glLoadMatrixf (the one glOrtho, at 0x19a6fd, is the EAGLView's), so the switch is
-   read from the projection itself -- a perspective matrix has w depending on z (m[11] = +-1, m[15] =
-   0), the 2D layer's has not.  On the screen (not in the game's own FBOs), once enough depth-tested
-   perspective draws have gone by, the AO is applied right before the first draw under a non-perspective
-   projection; or before a depth clear, or before the present, if the 2D layer never came.  At most once
-   per presented frame, so the frames the game keeps on screen between draws (fades) are not darkened
-   twice.  The pass: copy the depth to a texture, compute AO at half resolution from view-space positions
-   (the inverse of the scene's projection, so the engine's handedness does not matter), blur it twice
-   (keeping depth edges), and multiply it into the screen with depth-aware upsampling.  It fades out with
-   the game's fog and where its radius shrinks below a pixel.  AO_STRENGTH scales the darkening, AO_RADIUS
-   is the reach in world units.  All GL state it touches is pushed and restored. */
-int g_ao_want;                                   /* AMBIENT_OCCLUSION=1 */
-int g_ao = 1;                                    /* 0 once the setup failed */
-float g_ao_strength = 1.2f, g_ao_radius = 60;    /* world units are about 1 cm (near plane 50, fog from 45000) */
-GLenum g_ao_mode = GL_MODELVIEW;                 /* glMatrixMode */
+/* AMBIENT_OCCLUSION glOrtho 0x19a6fd */
+int g_ao_want;
+int g_ao = 1;
+float g_ao_strength = 1.2f, g_ao_radius = 60;
+GLenum g_ao_mode = GL_MODELVIEW;
 int g_ao_proj_dirty = 1, g_ao_persp;
-GLfloat g_ao_proj[16];                           /* current projection */
-GLfloat g_ao_dr[2] = {0, 1};                     /* glDepthRange */
-int g_ao_depth_on, g_ao_fog_on;                  /* GL_DEPTH_TEST, GL_FOG as the game set them */
-int g_blend_on;                                  /* GL_BLEND and glBlendFunc as the game set them */
+GLfloat g_ao_proj[16];
+GLfloat g_ao_dr[2] = {0, 1};
+int g_ao_depth_on, g_ao_fog_on;
+int g_blend_on;
 GLenum g_blend_src = GL_ONE, g_blend_dst = GL_ZERO;
-int g_ao_dmask = 1;                              /* glDepthMask */
-GLfloat g_ao_fogp[4] = {GL_EXP, 0, 1, 1};        /* mode, start, end, density */
-/* The engine draws parts of a frame under different projections and depth ranges (setDepthRange), so
-   one depth buffer can hold several layers.  Each depth-writing perspective draw is counted under its
-   projection + depth range; the AO uses the one most draws had and leaves the other layers alone. */
+int g_ao_dmask = 1;
+GLfloat g_ao_fogp[4] = {GL_EXP, 0, 1, 1};
 g_ao_layer_t g_ao_layer[AO_LAYERS];
-int g_ao_nlayers, g_ao_cur = -1;                 /* layers this frame; the current draw's (-1 = look up) */
-unsigned g_ao_3d;                                /* depth-tested perspective draws since the frame began */
-int g_ao_done;                                   /* applied this frame */
-unsigned g_ao_why[3];                            /* applied at: the 2D switch, a depth clear, the present */
+int g_ao_nlayers, g_ao_cur = -1;
+unsigned g_ao_3d;
+int g_ao_done;
+unsigned g_ao_why[3];
 #if GMV_DEV
 unsigned g_ao_runs;
 #endif
@@ -56,7 +39,6 @@ const char ao_vs[] =
     "#version 120\n"
     "void main() { gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0); }\n";
 
-/* Half resolution: out = (AO, eye depth).  Positions come from the full-resolution depth. */
 static const char ao_fs_ao[] =
     "#version 120\n"
     "uniform sampler2D dep;\n"
@@ -108,7 +90,6 @@ static const char ao_fs_ao[] =
     "    gl_FragColor = vec4(mix(1.0, A, vis), D, 0.0, 1.0);\n"
     "}\n";
 
-/* Half resolution, one direction: a Gaussian that does not mix across depth edges. */
 static const char ao_fs_blur[] =
     "#version 120\n"
     "uniform sampler2D src;\n"
@@ -129,7 +110,6 @@ static const char ao_fs_blur[] =
     "    gl_FragColor = vec4(sum / ws, c.g, 0.0, 1.0);\n"
     "}\n";
 
-/* Full resolution, multiplied into the screen: the four nearest AO texels, weighted by depth. */
 static const char ao_fs_comp[] =
     "#version 120\n"
     "uniform sampler2D aot, dep;\n"
@@ -156,7 +136,6 @@ static const char ao_fs_comp[] =
     "    gl_FragColor = vec4(vec3(ws > 0.0 ? sum / ws : 1.0), 1.0);\n"
     "}\n";
 
-/* vs NULL: a fragment shader under the fixed-function vertex stage (lighting, texture matrices). */
 GLuint ao_program(const char *what, const char *vs, const char *fs)
 {
     const char *src[2] = {vs, fs};
@@ -165,10 +144,10 @@ GLuint ao_program(const char *what, const char *vs, const char *fs)
         if (!src[k])
             continue;
         GLint ok = 0;
-        GLuint s = aof.CreateShader(k ? 0x8B30 : 0x8B31);       /* GL_FRAGMENT_SHADER / GL_VERTEX_SHADER */
+        GLuint s = aof.CreateShader(k ? 0x8B30 : 0x8B31);
         aof.ShaderSource(s, 1, &src[k], NULL);
         aof.CompileShader(s);
-        aof.GetShaderiv(s, 0x8B81, &ok);                        /* GL_COMPILE_STATUS */
+        aof.GetShaderiv(s, 0x8B81, &ok);
         if (!ok) {
             char log[1024] = "";
             aof.GetShaderInfoLog(s, sizeof log, NULL, log);
@@ -179,7 +158,7 @@ GLuint ao_program(const char *what, const char *vs, const char *fs)
     }
     GLint ok = 0;
     aof.LinkProgram(p);
-    aof.GetProgramiv(p, 0x8B82, &ok);                           /* GL_LINK_STATUS */
+    aof.GetProgramiv(p, 0x8B82, &ok);
     if (!ok) {
         char log[1024] = "";
         aof.GetProgramInfoLog(p, sizeof log, NULL, log);
@@ -195,25 +174,22 @@ void ao_tex(GLuint t, GLint ifmt, int w, int h, GLenum fmt, GLenum type)
     glTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);  /* GL_CLAMP_TO_EDGE */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812F);
 }
 
-/* Size the textures to the screen; called inside ao_run's state save. */
 void ao_alloc(int w, int h)
 {
     ao.w = w;
     ao.h = h;
     ao.hw = (w + 1) / 2;
     ao.hh = (h + 1) / 2;
-    ao_tex(ao.t_depth, 0x88F0, w, h, 0x84F9, 0x84FA);          /* DEPTH24_STENCIL8, DEPTH_STENCIL, 24_8 */
-    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);            /* GL_TEXTURE_COMPARE_MODE */
+    ao_tex(ao.t_depth, 0x88F0, w, h, 0x84F9, 0x84FA);
+    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);
     for (int k = 0; k < 2; k++)
-        ao_tex(ao.t[k], 0x8230, ao.hw, ao.hh, 0x8227, GL_FLOAT);   /* RG32F, RG */
+        ao_tex(ao.t[k], 0x8230, ao.hw, ao.hh, 0x8227, GL_FLOAT);
 }
 
-/* The shader and framebuffer entry points (AMBIENT_OCCLUSION and the SUN_MOON glows); `off` names
-   what goes without them in the log. */
 int ao_procs(const char *off)
 {
     static int done;
@@ -239,8 +215,8 @@ int ao_procs(const char *off)
             gmv_log("[ao] the driver has no %s; %s off\n", fns[i].n, off);
             return 0;
         }
-    aof.UseProgram = gmv_gl_track_prog(aof.UseProgram);        /* QUERY_FREE keeps the program */
-    if (!msf.BindFramebuffer) {                                 /* MSAA=0 skipped loading these */
+    aof.UseProgram = gmv_gl_track_prog(aof.UseProgram);
+    if (!msf.BindFramebuffer) {
         msf.GenFramebuffers = ms_proc("glGenFramebuffers", "glGenFramebuffersEXT");
         msf.BindFramebuffer = gmv_gl_track_fb(ms_proc("glBindFramebuffer", "glBindFramebufferEXT"));
         msf.CheckFramebufferStatus = ms_proc("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT");
@@ -272,11 +248,10 @@ int ao_init(void)
     return 1;
 }
 
-/* Attach the textures (after ao_alloc gave them storage) and check the framebuffers. */
 int ao_attach(void)
 {
     msf.BindFramebuffer(MS_FRAMEBUFFER, ao.fbo_depth);
-    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, ao.t_depth, 0);   /* DEPTH_STENCIL_ATTACHMENT */
+    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, ao.t_depth, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
     GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
@@ -322,7 +297,6 @@ int ao_invert(const GLfloat *m, GLfloat *out)
 }
 
 #if GMV_DEV
-/* Eye depth at NDC z (for the log). */
 double ao_eye_depth(const GLfloat *inv, double z)
 {
     double pz = inv[10] * z + inv[14], pw = inv[11] * z + inv[15];

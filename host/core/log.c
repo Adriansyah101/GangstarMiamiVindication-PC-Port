@@ -1,4 +1,3 @@
-/* log.c -- the log file (cache\<game>.log), the folders it hides, and the fatal-error box (see log.h). */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,11 +14,9 @@
 #include "platform.h"
 
 static FILE *log_file;
-static int log_off;                 /* log_discard: no file this run */
-static char *held;                  /* logged before log_open */
+static int log_off;
+static char *held;
 static size_t nheld, capheld;
-/* The folders the log does not name, most specific first: the game's, the exe's, the user's.  Each has two slots:
-   UTF-8 and, on Windows, the ANSI code page; on Linux, the folder with its links resolved. */
 enum { HIDE_APP, HIDE_EXE = 2, HIDE_PROFILE = 4, NHIDE = 6 };
 static struct { char path[GMV_PATH_MAX]; size_t n; const char *tag; } hide[NHIDE];
 
@@ -29,7 +26,7 @@ static void hide_finish(int slot, const char *tag)
     size_t n = strlen(p);
     while (n > 3 && (p[n - 1] == '\\' || p[n - 1] == '/'))
         p[--n] = 0;
-    if (n <= 3 || n < strlen(tag))  /* "C:\" alone would hide every path; the tag must fit in its place */
+    if (n <= 3 || n < strlen(tag))
         n = 0;
     hide[slot].tag = tag;
     hide[slot].n = n;
@@ -46,8 +43,6 @@ static void hide_set(int slot, const char *utf8, const char *tag)
         WideCharToMultiByte(CP_ACP, 0, w, -1, hide[slot + 1].path, sizeof hide[slot + 1].path, NULL, NULL);
     hide_finish(slot + 1, tag);
 #else
-    /* The second slot: the folder with its links resolved, which is how some code keeps it (the game's folder
-       can be a link). */
     char real[PATH_MAX];
     hide[slot + 1].path[0] = 0;
     if (realpath(utf8, real) && strcmp(real, hide[slot].path) && strlen(real) < sizeof hide[slot + 1].path)
@@ -89,7 +84,6 @@ static int same_char(char a, char b)
     return a == b || ((a | 0x20) == (b | 0x20) && (a | 0x20) >= 'a' && (a | 0x20) <= 'z');
 }
 
-/* s with every copy of a hidden folder (either slash, any case) written as its tag. */
 static size_t scrub1(char *s, size_t n, const char *path, size_t len, const char *tag)
 {
     if (!len || n < len)
@@ -100,7 +94,7 @@ static size_t scrub1(char *s, size_t n, const char *path, size_t len, const char
         while (k < len && i + k < n && same_char(s[i + k], path[k]))
             k++;
         if (k == len) {
-            memmove(s + o, tag, nt);                /* the tag is never longer than what it replaces */
+            memmove(s + o, tag, nt);
             o += nt;
             i += len;
         } else
@@ -122,8 +116,6 @@ static size_t scrub(char *s, size_t n)
 #define TAIL_MAX GMV_PATH_MAX
 #endif
 
-/* Blanks each copy of s in d, keeping the length so a crash dump stays valid.  tail: and what follows it in that
-   string, the rest of a path. */
 static void blank_narrow(unsigned char *d, size_t n, const char *s, size_t len, int tail)
 {
     for (size_t o = 0; o + len <= n; o++) {
@@ -158,8 +150,6 @@ static void blank_wide(unsigned char *d, size_t n, const wchar_t *s, size_t len,
     }
 }
 
-/* For the crash dump: each folder as the log knows it and in UTF-16, and every value of the environment, which the
-   C library keeps copies of (the user's name, and whatever else someone keeps there). */
 void log_scrub_bytes(unsigned char *d, size_t n)
 {
     profile_init();
@@ -176,11 +166,11 @@ void log_scrub_bytes(unsigned char *d, size_t n)
     wchar_t *env = GetEnvironmentStringsW();
     static char a[8192];
     for (wchar_t *e = env; e && *e; e += wcslen(e) + 1) {
-        wchar_t *v = wcschr(e + 1, L'=');       /* +1: some names start with one, "=C:=C:\..." */
+        wchar_t *v = wcschr(e + 1, L'=');
         size_t nv = v ? wcslen(++v) : 0;
         if (nv < 3)
             continue;
-        int path = wcschr(v, L'\\') != NULL;    /* HOMEPATH also stands inside a path that starts \Device\... */
+        int path = wcschr(v, L'\\') != NULL;
         blank_wide(d, n, v, nv, path);
         for (int cp = 0; cp < 2; cp++) {
             int m = WideCharToMultiByte(cp ? CP_ACP : CP_UTF8, 0, v, (int)nv, a, sizeof a, NULL, NULL);
@@ -194,9 +184,6 @@ void log_scrub_bytes(unsigned char *d, size_t n)
 #else
 extern char **environ;
 
-/* The same on Linux, where the strings are narrow: each folder, every value of the environment (the main thread's
-   stack starts with a copy of it), and the machine's name.  The longest go first: once a short one (the user's name)
-   is blanked, a longer one that holds it (the game's folder, OLDPWD, PATH) would no longer match. */
 void log_scrub_bytes(unsigned char *d, size_t n)
 {
     profile_init();
@@ -271,7 +258,6 @@ static void out(int console, const char *fmt, va_list ap)
     }
     if (p != buf)
         free(p);
-    /* scrub left the rest of a hidden folder behind the shorter text, where a crash dump's stack would keep it. */
     gmv_secure_zero(buf, (size_t)n < sizeof buf ? (size_t)n : sizeof buf);
 }
 
@@ -316,9 +302,6 @@ void log_close(void)
     log_file = NULL;
 }
 
-/* gmv_fatal's box runs on a thread of its own.  The stopped thread may own the game's window, and a
-   box on it would dispatch that window's messages into the game's WndProc while its modal loop runs.
-   Another thread that stops meanwhile waits here until the player has answered. */
 void gmv_audio_stop(void);
 
 static char fatal_text[1536];
@@ -335,7 +318,7 @@ void gmv_fatal(int code, const char *fmt, ...)
     uint32_t me = gmv_thread_id();
     if (!__sync_bool_compare_and_swap(&fatal_owner, 0, me)) {
         if (fatal_owner == me || fatal_box_thread == me)
-            gmv_exit(code);             /* the stop itself failed: no second box */
+            gmv_exit(code);
         gmv_sleep_forever();
     }
     char why[1024];
@@ -343,14 +326,14 @@ void gmv_fatal(int code, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(why, sizeof why, fmt, ap);
     va_end(ap);
-    int dumped = code != 1 && code != 10 && gmv_dump_write();   /* those two: the game never got to run */
+    int dumped = code != 1 && code != 10 && gmv_dump_write();
     snprintf(fatal_text, sizeof fatal_text, GMV_GAME_NAME " has to stop.\n\n%s\n\n%s", why,
              log_off ? "To see the details, set LOG=1 in savegame" GMV_SEP GMV_GAME_NAME ".ini and try again."
              : dumped ? "The details are in cache" GMV_SEP GMV_GAME_NAME ".log and cache" GMV_SEP GMV_GAME_NAME ".dmp. "
                         "Please send those two files with your bug report."
                       : "The details are in cache" GMV_SEP GMV_GAME_NAME ".log. Please send that file with your bug report.");
     log_close();
-    gmv_release_cursor();               /* the game keeps the mouse inside its window */
+    gmv_release_cursor();
     gmv_thread_run(gmv_audio_stop, 0);
     if (!gmv_thread_run(fatal_box, 1))
         fatal_box();

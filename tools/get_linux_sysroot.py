@@ -1,11 +1,3 @@
-"""Unpacks what compiling and linking for 32-bit Linux needs (Debian's i386 C library and its headers) into a folder,
-so tools\\linux_check.ps1 can check the Linux code from Windows. Nothing from it ends up in a build for Windows, and the
-program it links is not run here.
-
-    python -I tools\\get_linux_sysroot.py <folder>
-
-Each package's SHA-256 is checked against Debian's index, fetched over HTTPS.
-"""
 import hashlib
 import lzma
 import os
@@ -18,13 +10,11 @@ MIRROR = 'https://deb.debian.org/debian/'
 SUITE = 'trixie'
 PACKAGES = ['libc6', 'libc6-dev', 'libgcc-14-dev', 'libgcc-s1', 'linux-libc-dev', 'libcrypt-dev',
             'libgl-dev', 'libgl1', 'libglx-dev', 'libglx0', 'libglvnd0', 'libglvnd-dev', 'mesa-common-dev',
-            'libsdl3-0', 'libsdl3-dev', 'libfreetype-dev']     # FreeType's headers only: padicons.c opens the library
-
+            'libsdl3-0', 'libsdl3-dev', 'libfreetype-dev']
 
 def get(url):
     with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'get_linux_sysroot'})) as r:
         return r.read()
-
 
 def index():
     text = lzma.decompress(get(f'{MIRROR}dists/{SUITE}/main/binary-i386/Packages.xz')).decode('utf-8')
@@ -35,9 +25,7 @@ def index():
             found[fields['Package']] = fields
     return found
 
-
 def members(deb):
-    """The members of an ar archive."""
     assert deb[:8] == b'!<arch>\n'
     at = 8
     while at + 60 <= len(deb):
@@ -46,9 +34,7 @@ def members(deb):
         yield name, deb[at + 60:at + 60 + size]
         at += 60 + size + (size & 1)
 
-
 def unpack(deb, out):
-    """Links become copies, made after the files they point at: Windows may not allow links."""
     links = []
     for name, data in members(deb):
         if not name.startswith('data.tar'):
@@ -72,7 +58,6 @@ def unpack(deb, out):
         os.remove(path)
     return links
 
-
 def main():
     out = os.path.abspath(sys.argv[1])
     os.makedirs(out, exist_ok=True)
@@ -87,20 +72,18 @@ def main():
             sys.exit(f'{p}: the hash does not match')
         print(p, idx[p]['Version'], len(deb))
         links += unpack(deb, out)
-    for _ in range(3):              # a link can point at a link
+    for _ in range(3):
         for target, name, relative in links:
             src = os.path.normpath(os.path.join(os.path.dirname(target), name)) if relative and not name.startswith('/') \
                 else os.path.normpath(os.path.join(out, name.lstrip('/')))
             if os.path.isfile(src) and not os.path.exists(target):
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 shutil.copyfile(src, target)
-    # Debian's /lib is a link to /usr/lib, and libc.so names its files by /lib.
     for name in ('i386-linux-gnu/libc.so.6', 'i386-linux-gnu/ld-linux.so.2', 'ld-linux.so.2'):
         src, dst = os.path.join(out, 'usr/lib', name), os.path.join(out, 'lib', name)
         if os.path.isfile(src):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copyfile(src, dst)
     print('ready:', out)
-
 
 main()

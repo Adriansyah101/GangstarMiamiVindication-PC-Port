@@ -1,4 +1,4 @@
-# Sound: the intro movie's stream, then the game's in the menu and the city.  Whether it reaches the speakers takes a meter or an ear.
+# Sound: intro movie stream, then menu and city audio
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

@@ -1,4 +1,3 @@
-/* diag_fade.c -- diagnostic: full-screen black fades, and the player's death */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -10,23 +9,15 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- diagnostic: full-screen black fades (GMV_FADE_TRACE=1) -------------------------------------
-
-   Every screen fade in the game is a black draw2DRectangle(driver, SColor, rect*, clip) at 0x4c5ce0
-   with alpha in the colour's top byte: the cutscene fade (0x34918, alpha global 0x6424b4), the menu
-   transitions (0x8d050) and the state-machine fades (0x1a5b32, 0x1b279e, 0x1b4f00 -- the last is the
-   generic fade state pushed by gameplay/mission code).  To tell whether the death -> hospital respawn
-   asks for a fade at all, log each origin-anchored rectangle whenever its caller or alpha changes,
-   with a millisecond stamp.  If alpha ramps here but the screen never darkens, the host loses it; if
-   nothing is logged at the death, the game never draws one.  Pure diagnostic. */
-#define FADE_FUNC 0x004c5ce0u      /* draw2DRectangle; prologue 55 89 e5 57 56 53 (6 bytes displaced)  */
+/* 0x4c5ce0 0x34918 0x6424b4 0x8d050 0x1a5b32 0x1b279e */
+#define FADE_FUNC 0x004c5ce0u
 
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_fade_log(uint32_t caller, uint32_t color, const int32_t *rect)
 {
     if (!rect || IsBadReadPtr(rect, 16) || rect[0] != 0 || rect[1] != 0)
         return;
-    gmv_gl_fade_mark(caller, caller == 0x1b5094);                   /* the generic fade state (death, menus): film it */
+    gmv_gl_fade_mark(caller, caller == 0x1b5094);
     static uint32_t lcaller, lcolor;
     static unsigned lines;
     if (caller == lcaller && color == lcolor)
@@ -49,25 +40,19 @@ void apply_fade_trace(void)
     }
     unsigned char *tr = VirtualAlloc(NULL, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!tr) return;
-    /* Entered via jmp at entry: [esp]=ret [esp+4]=driver [esp+8]=color [esp+0xc]=rect* (cdecl). */
+    /* [esp]=ret [esp+4]=driver [esp+8]=color [esp+0xc]=rect* */
     size_t o = 0;
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x0c;  /* push dword [esp+0xc] ; rect    */
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x0c;  /* push dword [esp+0xc] ; color   */
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8]   ; caller  */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x0c;  /* push dword [esp+0xc] */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x0c;  /* push dword [esp+0xc] */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8] */
     tr[o++] = 0xb8; { uint32_t fnp = (uint32_t)(uintptr_t)&gmv_fade_log; memcpy(tr + o, &fnp, 4); o += 4; }
-    tr[o++] = 0xff; tr[o++] = 0xd0;                                 /* call eax                        */
-    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x0c;                 /* add esp,0xc                     */
-    tr[o++] = 0x55; tr[o++] = 0x89; tr[o++] = 0xe5;                 /* displaced 6: push ebp;mov ebp,esp */
-    tr[o++] = 0x57; tr[o++] = 0x56; tr[o++] = 0x53;                 /* push edi;push esi;push ebx       */
-    tr[o++] = 0xff; tr[o++] = 0x25; size_t contref = o; o += 4;
-    size_t contslot = o;
-    { uint32_t c = FADE_FUNC + 6; memcpy(tr + o, &c, 4); o += 4; }
-    { uint32_t a = (uint32_t)(uintptr_t)(tr + contslot); memcpy(tr + contref, &a, 4); }
+    tr[o++] = 0xff; tr[o++] = 0xd0;                                 /* call eax */
+    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x0c;                 /* add esp,0xc */
+    tr[o++] = 0x55; tr[o++] = 0x89; tr[o++] = 0xe5;                 /* push ebp; mov ebp,esp */
+    tr[o++] = 0x57; tr[o++] = 0x56; tr[o++] = 0x53;                 /* push edi; push esi; push ebx */
+    emit_jmp_abs(tr, &o, FADE_FUNC + 6);
     FlushInstructionCache(GetCurrentProcess(), tr, o);
-    unsigned char site[6];
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)tr - (FADE_FUNC + 5));
-    site[0] = 0xe9; memcpy(site + 1, &rel, 4); site[5] = 0x90;
-    if (!patch_bytes(FADE_FUNC, site, sizeof site)) {
+    if (!patch_jmp(FADE_FUNC, tr, 6)) {
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); fade trace skipped\n", FADE_FUNC, GetLastError());
         return;
     }
@@ -75,11 +60,8 @@ void apply_fade_trace(void)
             FADE_FUNC, (void *)tr);
 }
 
-/* The cutscene fader is driven by two script commands, ScriptCommand<Data::CineFadeIn/Out>::update
-   (vtbl+8, update(this, int dt)) at 0xcd8be / 0xcda6c.  Each ramps the shared timer 0x6424b0 by dt
-   over the length [this+0x10] read from the script.  After a death the same fades get shorter; the
-   [cine] lines tell whether the length or the dt changed, and who called update. */
-#define CINE_FADEIN_UPD  0x000cd8beu   /* prologue 55 89 e5 53 57 56 (6 bytes displaced) */
+/* 0xcd8be 0xcda6c 0x6424b0 */
+#define CINE_FADEIN_UPD  0x000cd8beu
 #define CINE_FADEOUT_UPD 0x000cda6cu
 #define CINE_TIMER       0x006424b0u
 #define CINE_ALPHA       0x006424b4u
@@ -97,8 +79,7 @@ static void gmv_cine_log(uint32_t which, uint32_t ret, const int32_t *cmd, int32
             *(const int32_t *)(uintptr_t)CINE_ALPHA);
 }
 
-/* Entry hook for a function with the 6-byte prologue 55 89 e5 53 57 56: calls
-   cb(which, ret, arg1, arg2) (cdecl), then runs the function unchanged. */
+/* __cdecl */
 static void hook_cine_update(uint32_t fn, uint32_t which, void *cb)
 {
     static const unsigned char expect[6] = { 0x55, 0x89, 0xe5, 0x53, 0x57, 0x56 };
@@ -108,42 +89,31 @@ static void hook_cine_update(uint32_t fn, uint32_t which, void *cb)
     }
     unsigned char *tr = VirtualAlloc(NULL, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!tr) return;
-    /* Entered via jmp at entry: [esp]=ret [esp+4]=this [esp+8]=dt. */
+    /* [esp]=ret [esp+4] [esp+8]=dt */
     size_t o = 0;
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8]   ; dt      */
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8]   ; this    */
-    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8]   ; ret     */
-    tr[o++] = 0x68; memcpy(tr + o, &which, 4); o += 4;              /* push which                      */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8] */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8] */
+    tr[o++] = 0xff; tr[o++] = 0x74; tr[o++] = 0x24; tr[o++] = 0x08;  /* push dword [esp+8]; ret */
+    tr[o++] = 0x68; memcpy(tr + o, &which, 4); o += 4;
     tr[o++] = 0xb8; { uint32_t fnp = (uint32_t)(uintptr_t)cb; memcpy(tr + o, &fnp, 4); o += 4; }
-    tr[o++] = 0xff; tr[o++] = 0xd0;                                 /* call eax                        */
-    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x10;                 /* add esp,0x10                    */
-    memcpy(tr + o, expect, sizeof expect); o += sizeof expect;      /* displaced prologue              */
-    tr[o++] = 0xff; tr[o++] = 0x25; size_t contref = o; o += 4;
-    size_t contslot = o;
-    { uint32_t c = fn + 6; memcpy(tr + o, &c, 4); o += 4; }
-    { uint32_t a = (uint32_t)(uintptr_t)(tr + contslot); memcpy(tr + contref, &a, 4); }
+    tr[o++] = 0xff; tr[o++] = 0xd0;                                 /* call eax */
+    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x10;                 /* add esp,0x10 */
+    memcpy(tr + o, expect, sizeof expect); o += sizeof expect;
+    emit_jmp_abs(tr, &o, fn + 6);
     FlushInstructionCache(GetCurrentProcess(), tr, o);
-    unsigned char site[6];
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)tr - (fn + 5));
-    site[0] = 0xe9; memcpy(site + 1, &rel, 4); site[5] = 0x90;
-    if (!patch_bytes(fn, site, sizeof site)) {
+    if (!patch_jmp(fn, tr, 6)) {
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); trace hook skipped\n", fn, GetLastError());
         return;
     }
     gmv_log("[gamepatch] trace hook installed at 0x%08x (trampoline @ %p)\n", fn, (void *)tr);
 }
 
-/* Death trigger for the fade capture.  Player::applyDamage(this, damage, type, attacker) is 0xf8282
-   (reached from the Player vtable through the this-adjusting thunk 0xf9050); its Character part
-   starts at this+4, and Character::getHealth / getMaxHealth read +0x578 / +0x574 of that part
-   (0x2f644 / 0x7e278).  The hook only learns the player pointer; gmv_death_poll, called once per
-   present, watches the health and arms the capture on the tick it goes from above 0 to 0 or below,
-   whatever lowered it. */
+/* 0xf8282 0xf9050 +0x578 +0x574 0x2f644 0x7e278 */
 #define PLAYER_APPLY_DAMAGE 0x000f8282u
 #define PLAYER_HEALTH_OFF   (4 + 0x578)
 #define PLAYER_MAXHP_OFF    (4 + 0x574)
 static volatile uint32_t g_player;
-static volatile int g_player_hp0;                   /* health before the hit that revealed g_player */
+static volatile int g_player_hp0;
 
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_player_damage(uint32_t which, uint32_t ret, uint32_t player, int32_t damage)
@@ -167,7 +137,7 @@ void gmv_death_poll(void)
     int hp = *(const int32_t *)(uintptr_t)(p + PLAYER_HEALTH_OFF);
     int maxhp = *(const int32_t *)(uintptr_t)(p + PLAYER_MAXHP_OFF);
     if (p != lplayer)
-        lhp = g_player_hp0;                         /* so a first, lethal hit still counts */
+        lhp = g_player_hp0;
     if (lhp > 0 && hp <= 0) {
         gmv_trace("[death] t=%lu player health %d -> %d (max %d)\n", (unsigned long)GetTickCount(), lhp, hp, maxhp);
         gmv_gl_death_capture_arm(hp, maxhp);

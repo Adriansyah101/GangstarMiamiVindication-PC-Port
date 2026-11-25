@@ -1,4 +1,4 @@
-# An Xbox pad and nothing else: skip the intro and the warning, work the menu, into the city, walk, camera, pause; then keyboard and pad in turn, unplug
+# Xbox pad only: intro, warning, menu, city, walk, camera, pause; keyboard/pad handover; unplug
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
@@ -9,13 +9,13 @@ ini PAD_TEST=xbox
 save Gangstar2.sav
 waitlog \[intro\] playing
 wait 2
-padfor 300 A                       # the intro
+padfor 300 A
 wait 6
-padfor 300 A                       # the warning
+padfor 300 A
 wait 14
 shot menu
-padfor 2600 lx=-32767 ly=-32767    # the pointer to the top left corner
-padfor 621 lx=20000                # 214 view units a second with Xbox's dead zone: to CONTINUE at 133, 300
+padfor 2600 lx=-32767 ly=-32767
+padfor 621 lx=20000
 padfor 1402 ly=20000
 wait 1
 shot pointer
@@ -23,32 +23,32 @@ padfor 150 A
 wait 35
 shot start
 leftmenu menu start
-pad ly=-32767                      # the left stick forward
+pad ly=-32767
 wait 3
 pad
 shot walked
 moved start walked
-pad rx=32767                       # the right stick turns the camera
+pad rx=32767
 wait 2
 pad
 shot turned
 moved walked turned
-padfor 150 START                   # the pause menu, and B out of it: on the Mac too menus only answer to Esc and the pointer
+padfor 150 START
 wait 2
 shot paused
 leftmenu turned paused
 padfor 150 B
 wait 3
-holdscan 11                        # the keyboard takes over, which makes the game rescan
+holdscan 11
 wait 2
 releasescan 11
 shot keyboard
-pad ly=-32767                      # and the pad again, after the rescan
+pad ly=-32767
 wait 2
 pad
 shot pad-again
 moved keyboard pad-again
-pad ly=-32767                      # unplugged while pushed: stops, the game goes on
+pad ly=-32767
 wait 1
 pad unplug
 wait 3

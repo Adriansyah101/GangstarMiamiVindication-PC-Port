@@ -1,4 +1,4 @@
-# Continue your save into the city: walk, turn the camera; the keys of a QWERTY keyboard, by their place
+# Save into the city: walk, turn the camera; QWERTY keys by position
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720
@@ -11,12 +11,12 @@ wait 12
 click 0.13 0.39
 wait 35
 shot start
-holdscan 2C              # Z: no move
+holdscan 2C
 wait 3
 releasescan 2C
 shot z-key
 still start z-key
-holdscan 11              # W: forward
+holdscan 11
 wait 3
 releasescan 11
 shot walked

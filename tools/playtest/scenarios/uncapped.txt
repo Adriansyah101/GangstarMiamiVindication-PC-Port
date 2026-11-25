@@ -1,4 +1,4 @@
-# The frame rate with no pacer, in the city, for comparing two builds: run it with -Exe on each and read [framepace] in the logs
+# Uncapped frame rate in the city; compare [framepace] across builds with -Exe
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

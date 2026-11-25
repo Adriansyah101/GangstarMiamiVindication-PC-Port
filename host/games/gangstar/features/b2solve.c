@@ -1,46 +1,3 @@
-/* b2solve.c -- b2World::Solve without walking every body in the world, with identical results.
-
-   PERF_PROFILE runs showed Box2D's Solve (0x1c1a60) taking 8-9% of the CPU in the
-   city: the world holds ~15,000 bodies, all but ~50-90 of them static (the city's collision), and
-   Solve walks the whole body list three times a step (clear the island flag, find island seeds,
-   sync the shapes of moved bodies), ~0.31 ms of its ~0.37 ms, at up to 240 steps a second with
-   PHYSICS_SYNC.  The islands themselves cost ~0.02 ms.
-
-   Solve, as read (Gameloft's build of Box2D 2.0; world fields at the offsets below):
-     positionIterationCount = 0; b2Island island(bodyCount, contactCount, jointCount, &stack, listener)
-     every body:    flags &= ~island(4)
-     every contact: flags &= ~island(4);   every joint: islandFlag = 0
-     stack = alloc(bodyCount * 4)
-     every body in list order, unless flags & (island|sleep|frozen) or static: depth-first island
-       through contact edges (contact not nonSolid/island and touching) and joint edges, statics
-       added but not crossed; island.Solve(step, gravity, correctPositions, allowSleep);
-       positionIterationCount = max(.., island's); statics of the island lose the island flag
-     free(stack)
-     every body in list order, unless sleeping/frozen or static: SynchronizeShapes, and the
-       boundary listener's Violation(body) when it returns false
-     broadphase Commit; ~b2Island
-
-   For a static body the three body loops do nothing at all as long as its island flag is clear:
-   the seed and sync loops skip statics, and the clear loop only clears that flag.  A static only
-   gets the flag inside Solve's own island search, which always clears it again (every body it
-   flags lands in the island, and the island's statics are cleared after its solve).  So this
-   copy of Solve runs the same steps with the three body loops over a short list instead: every
-   body that is not static or has the island flag, in the world list's order.  Same calls in the
-   same order with the same arguments, same writes.  The contact and joint loops are kept as they
-   are (a few dozen entries).
-
-   The short list follows the only code that changes the body list or a body's type (the writes
-   of world+0x19230, body+0x5c/+0x60 and body+0x2 in the binary):
-     b2World::CreateBody 0x1c1ed0 (new body at the list head),  b2World::DestroyBody 0x1c3960,
-     b2Body::SetMass 0x1bfd30 and SetMassFromShapes 0x1c01f0 (static <-> dynamic),
-     b2World::b2World 0x1c3710 (a new world: list rebuilt by one walk at its first step).
-   Each is hooked at its entry (its first instructions run from a trampoline) and adjusts the list
-   after the original returns.  A body made non-static later is put in its list position by a walk
-   from the list head (it is a new body, near the head).
-
-   Dev: GMV_B2_VERIFY=1 in the environment (with GMV_PERF_PROFILE=1 for its report) compares the short list with a full walk at every
-   step, logs any difference and then uses the full walk's.  GMV_FAST_B2SOLVE=0 keeps the original. */
-
 #include "compat.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -50,27 +7,26 @@
 #include "shims.h"
 #include "gangstar.h"
 
-#define BS_CALLSITE  0x001c36abu   /* in b2World::Step (0x1c3620): call 0x1c1a60 Solve            */
-#define BS_SOLVE     0x001c1a60u   /* b2World::Solve(world, step)                                 */
+#define BS_CALLSITE  0x001c36abu   /* call 0x1c1a60 */
+#define BS_SOLVE     0x001c1a60u
 #define BS_SOLVE_END 0x001c1d55u
-#define BS_SOLVE_FNV 0x7fd6d454u   /* FNV-1a of Solve's bytes, as analyzed                         */
-#define BS_CREATE    0x001c1ed0u   /* b2World::CreateBody(world, def) -> body                     */
-#define BS_DESTROY   0x001c3960u   /* b2World::DestroyBody(world, body)                           */
-#define BS_SETMASS   0x001bfd30u   /* b2Body::SetMass(body, massData)                             */
-#define BS_SETMASSFS 0x001c01f0u   /* b2Body::SetMassFromShapes(body)                             */
-#define BS_WORLDCTOR 0x001c3710u   /* b2World::b2World(world, aabb, gravity, doSleep)             */
-#define BS_ISL_CTOR  0x001c0e10u   /* b2Island::b2Island(isl, bodyCap, contactCap, jointCap, alloc, listener) */
-#define BS_ISL_DTOR  0x001c0d70u   /* b2Island::~b2Island(isl)                                    */
-#define BS_ISL_SOLVE 0x001c0f50u   /* b2Island::Solve(isl, step, gravity, correctPositions, allowSleep) */
-#define BS_SYNC      0x001c0420u   /* bool b2Body::SynchronizeShapes(body)                        */
-#define BS_ALLOC     0x001bfc60u   /* b2StackAllocator::Allocate(alloc, size)                     */
-#define BS_FREE      0x001bfc00u   /* b2StackAllocator::Free(alloc, p)                            */
-#define BS_COMMIT    0x001b8f20u   /* b2BroadPhase::Commit(bp)                                    */
+#define BS_SOLVE_FNV 0x7fd6d454u
+#define BS_CREATE    0x001c1ed0u
+#define BS_DESTROY   0x001c3960u
+#define BS_SETMASS   0x001bfd30u
+#define BS_SETMASSFS 0x001c01f0u
+#define BS_WORLDCTOR 0x001c3710u
+#define BS_ISL_CTOR  0x001c0e10u
+#define BS_ISL_DTOR  0x001c0d70u
+#define BS_ISL_SOLVE 0x001c0f50u
+#define BS_SYNC      0x001c0420u
+#define BS_ALLOC     0x001bfc60u
+#define BS_FREE      0x001bfc00u
+#define BS_COMMIT    0x001b8f20u
 
-/* b2World */
-#define W_ALLOC      0x44          /* b2StackAllocator                                            */
-#define W_LOCK       0x191d4       /* bool m_lock (set during Step)                               */
-#define W_BP         0x191d8       /* b2BroadPhase*                                               */
+#define W_ALLOC      0x44
+#define W_LOCK       0x191d4
+#define W_BP         0x191d8
 #define W_BODIES     0x19230
 #define W_JOINTS     0x19234
 #define W_CONTACTS   0x19238
@@ -78,16 +34,12 @@
 #define W_NCONTACT   0x19240
 #define W_NJOINT     0x19244
 #define W_GRAVITY    0x19248
-#define W_ALLOWSLEEP 0x19250       /* bool                                                        */
-#define W_BOUNDARY   0x1925c       /* b2BoundaryListener*                                         */
-#define W_LISTENER   0x19264       /* b2ContactListener*                                          */
-#define W_POSITER    0x19270       /* int32 m_positionIterationCount                              */
-#define W_CORRECT    0x19274       /* bool                                                        */
-/* b2Body: u16 flags +0 (frozen 2, island 4, sleep 8), u16 type +2 (0 = static), world +0x58,
-   prev +0x5c, next +0x60, jointList +0x6c, contactList +0x70.  Contact: u32 flags +4 (nonSolid 1,
-   island 4), manifoldCount +8, next +0x10.  Joint: next +0xc, bool islandFlag +0x3c.  Edges:
-   other +0, contact/joint +4, next +0xc.  b2Island (0x30): bodies +8, contacts +0xc, joints
-   +0x10, bodyCount +0x14, jointCount +0x18, contactCount +0x1c, positionIterationCount +0x2c. */
+#define W_ALLOWSLEEP 0x19250
+#define W_BOUNDARY   0x1925c
+#define W_LISTENER   0x19264
+#define W_POSITER    0x19270
+#define W_CORRECT    0x19274
+/* +0x58 +0x5c +0x60 +0x6c +0x70 0x30 +0xc +0x10 */
 
 #define AT(p, o, T) (*(T *)((uint8_t *)(p) + (o)))
 #define U8(p, o)  AT(p, o, uint8_t)
@@ -111,16 +63,16 @@ typedef void (*bs_free_fn)(void *alloc, void *p);
 typedef void (*bs_commit_fn)(void *bp);
 typedef void (*bs_violation_fn)(void *listener, void *b);
 
-static bs_create_fn g_create;            /* trampolines: the hooked functions' originals */
+static bs_create_fn g_create;
 static bs_destroy_fn g_destroy;
 static bs_setmass_fn g_setmass;
 static bs_setmassfs_fn g_setmassfs;
 static bs_wctor_fn g_wctor;
 
 static volatile LONG g_lockv;
-static uint8_t *g_world;                 /* the world the list belongs to (NULL: rebuild)      */
+static uint8_t *g_world;
 static int g_dirty = 1;
-static uint8_t **g_a, **g_snap, **g_chk; /* the list, the step's copy, the verify walk's       */
+static uint8_t **g_a, **g_snap, **g_chk;
 static int g_n, g_cap, g_snapcap, g_chkcap;
 static int g_verify, g_on;
 
@@ -180,7 +132,6 @@ static void bs_insert(int at, uint8_t *b)
     g_n++;
 }
 
-/* Every kept body of w in list order into *out; -1 when out of memory. */
 static int bs_walk(uint8_t *w, uint8_t ***out, int *cap)
 {
     int n = 0;
@@ -208,7 +159,6 @@ static int bs_rebuild(uint8_t *w)
     return 1;
 }
 
-/* GMV_B2_VERIFY: the list against a full walk; on a difference the walk's list is used. */
 static void bs_check(uint8_t *w)
 {
     int n = bs_walk(w, &g_chk, &g_chkcap);
@@ -234,6 +184,7 @@ static void bs_check(uint8_t *w)
     }
 }
 
+/* 0x1c1a60 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void bs_solve(uint8_t *w, void *step)
 {
@@ -343,8 +294,7 @@ static void bs_solve(uint8_t *w, void *step)
     ((bs_isl_fn)(uintptr_t)BS_ISL_DTOR)(isl);
 }
 
-/* ---- the hooks that keep the list ---- */
-
+/* 0x1c1ed0 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void *bs_create(uint8_t *w, const void *def)
 {
@@ -356,15 +306,16 @@ static void *bs_create(uint8_t *w, const void *def)
     if (w != g_world)
         g_dirty = 1;
     else if (bs_keep(b))
-        bs_insert(0, b);                 /* the new body is the list head */
+        bs_insert(0, b);
     bs_unlock();
     return b;
 }
 
+/* 0x1c3960 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void bs_destroy(uint8_t *w, uint8_t *b)
 {
-    int locked = U8(w, W_LOCK);          /* a locked world keeps the body */
+    int locked = U8(w, W_LOCK);
     g_destroy(w, b);
     if (locked)
         return;
@@ -378,7 +329,6 @@ static void bs_destroy(uint8_t *w, uint8_t *b)
     bs_unlock();
 }
 
-/* After a mass change: a body that is now kept goes to its list position. */
 static void bs_massed(uint8_t *b)
 {
     uint8_t *w = PTR(b, 0x58);
@@ -400,6 +350,7 @@ static void bs_massed(uint8_t *b)
     bs_unlock();
 }
 
+/* 0x1bfd30 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void bs_setmass(uint8_t *b, const void *md)
 {
@@ -407,6 +358,7 @@ static void bs_setmass(uint8_t *b, const void *md)
     bs_massed(b);
 }
 
+/* 0x1c01f0 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void bs_setmassfs(uint8_t *b)
 {
@@ -414,6 +366,7 @@ static void bs_setmassfs(uint8_t *b)
     bs_massed(b);
 }
 
+/* 0x1c3710 */
 __attribute__((cdecl, force_align_arg_pointer))
 static uint32_t bs_wctor(uint8_t *w, void *aabb, void *grav, uint32_t sleep)
 {
@@ -443,18 +396,6 @@ void gmv_b2solve_report(double seconds)
 }
 #endif
 
-/* ---- install ---- */
-
-static int bs_patch(uint32_t va, const unsigned char *buf, size_t n)
-{
-    DWORD old;
-    if (!VirtualProtect((void *)(uintptr_t)va, n, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    memcpy((void *)(uintptr_t)va, buf, n);
-    VirtualProtect((void *)(uintptr_t)va, n, old, &old);
-    return 1;
-}
-
 static void bs_rel(unsigned char *at, uint32_t from_end, uint32_t to)
 {
     int32_t rel = (int32_t)(to - from_end);
@@ -463,7 +404,7 @@ static void bs_rel(unsigned char *at, uint32_t from_end, uint32_t to)
 
 static const struct bs_hook {
     uint32_t fn;
-    const char *pro;                     /* whole instructions moved to the trampoline */
+    const char *pro;
     unsigned len;
     void *to;
     void **orig;
@@ -478,18 +419,14 @@ static const struct bs_hook {
 
 void gmv_apply_b2solve(void)
 {
-    const char *e = gmv_dbgenv("GMV_FAST_B2SOLVE");
-    if (e && *e == '0') {
+    if (gmv_env_off(gmv_dbgenv("GMV_FAST_B2SOLVE"))) {
         gmv_log("[b2solve] FAST_B2SOLVE=0: the original b2World::Solve kept\n");
         return;
     }
     uint32_t h = 0x811c9dc5u;
     for (uint32_t a = BS_SOLVE; a < BS_SOLVE_END; a++)
         h = (h ^ *(const uint8_t *)(uintptr_t)a) * 0x01000193u;
-    const unsigned char *site = (const unsigned char *)(uintptr_t)BS_CALLSITE;
-    int32_t rel;
-    memcpy(&rel, site + 1, 4);
-    int ok = h == BS_SOLVE_FNV && site[0] == 0xe8 && BS_CALLSITE + 5 + (uint32_t)rel == BS_SOLVE;
+    int ok = h == BS_SOLVE_FNV && code_call_target(BS_CALLSITE) == BS_SOLVE;
     for (int i = 0; ok && i < BS_NHOOK; i++)
         ok = !memcmp((const void *)(uintptr_t)g_hooks[i].fn, g_hooks[i].pro, g_hooks[i].len);
     if (!ok) {
@@ -501,7 +438,7 @@ void gmv_apply_b2solve(void)
         gmv_log("[b2solve] VirtualAlloc for the trampolines failed (%lu); skipped\n", GetLastError());
         return;
     }
-    for (int i = 0; i < BS_NHOOK; i++) {     /* trampolines first: the original's first bytes, then back */
+    for (int i = 0; i < BS_NHOOK; i++) {
         unsigned char *t = tr + i * 16;
         memcpy(t, g_hooks[i].pro, g_hooks[i].len);
         t[g_hooks[i].len] = 0xe9;
@@ -515,18 +452,13 @@ void gmv_apply_b2solve(void)
         g_verify = gmv_env_on(v);
     }
     for (int i = 0; i < BS_NHOOK; i++) {
-        unsigned char j[5] = { 0xe9 };
-        bs_rel(j + 1, g_hooks[i].fn + 5, (uint32_t)(uintptr_t)g_hooks[i].to);
-        if (!bs_patch(g_hooks[i].fn, j, 5)) {
+        if (!code_jmp(g_hooks[i].fn, g_hooks[i].to)) {
             gmv_log("[b2solve] write at 0x%06x failed (%lu)\n", g_hooks[i].fn, GetLastError());
-            /* the hooks already written only keep the list, which nothing reads without the call below */
             FlushInstructionCache(GetCurrentProcess(), NULL, 0);
             return;
         }
     }
-    unsigned char c[4];
-    bs_rel(c, BS_CALLSITE + 5, (uint32_t)(uintptr_t)bs_solve);
-    if (!bs_patch(BS_CALLSITE + 1, c, 4)) {
+    if (!code_call(BS_CALLSITE, (void *)bs_solve)) {
         gmv_log("[b2solve] write at 0x%06x failed (%lu)\n", BS_CALLSITE, GetLastError());
         FlushInstructionCache(GetCurrentProcess(), NULL, 0);
         return;

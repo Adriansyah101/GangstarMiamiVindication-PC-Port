@@ -1,35 +1,3 @@
-/* customradio.c -- CUSTOM_RADIO: a sixth radio station that plays the player's own music
-   (an enhancement; off under ORIGINAL_MAC_EXPERIENCE).
-
-   The iPhone version could play the iPod's music instead of the game's (MusicPlayer, a playlist
-   choice in the volume menu); the Mac build kept the class but every method is an empty stub
-   (0x180e08..0x180e7e, MacOSXMusicPlayer 0x180a72..0x180c96 calls only stubs).  Here the player's
-   music is a station of its own next to the game's five instead.
-
-   the patches makes the music manager count six stations ([mm+0x270]) and answers the song pick
-   for the sixth with -1, the manager's own "nothing playing" slot (its init sets [mm+0x218] = -1
-   at 0x60ae9; every reader range-checks it), so after its tuning noise the game plays nothing
-   there.  This file does the rest:
-   - The songs are the files in the "custom radio" folder next to the exe (mp3, ogg, flac, wav, m4a,
-     aac, wma), played in a shuffled order that is re-dealt (and the folder read again) when every
-     song has played.
-   - A decoder thread turns them into 16-bit stereo at the output rate (a linear resample) and keeps
-     about 3 s ahead in a ring.  mp3, ogg, flac and wav go through the host's own decoders
-     (shims/songdec.c: dr_libs and stb_vorbis, the same code on Windows and Linux); m4a, aac and wma,
-     and a file those decoders will not open, through Media Foundation (already used for the intro
-     movie).
-   - The audio thread (shimsaudio.c) calls gmv_cr_mix after the game's render.  While the radio
-     is on ([mm+0x220] & 1, manager ready & 2, none of the 0x10/0x20/0x80 holds), the sixth station
-     is tuned in and its noise is over ([mm+0x218] == -1), it adds the ring to the game's mix at the
-     game's MUSIC volume -- vox group 1 (mask 2, which the options' music slider 0x5ed9e sets and the
-     pause 0x5ef42 mutes), read from the audio device *0x64d5e0 at +0x178 + 1*0x14 {start, target,
-     elapsed, duration} -- times CUSTOM_RADIO_VOLUME (its slider on the SOUND page), fading over ~40 ms on every change.  When it is
-     not heard it takes nothing from the ring, so the song waits where it was.
-
-   Linux has no Media Foundation: there the system's ffmpeg program takes its place, decoding each of those songs
-   straight to 16-bit stereo at the output rate (ffpipe_linux.c).  With no ffmpeg installed the station leaves out
-   the m4a, aac and wma songs; with nothing else in the folder the radio keeps its five, as with an empty folder. */
-
 #ifdef _WIN32
 #define COBJMACROS
 #endif
@@ -56,15 +24,15 @@
 #include "shims.h"
 #include "gangstar.h"
 
-#define CR_MM_PP        0x0063e030u   /* -> global -> music manager (NULL until first use)      */
-#define CR_AUDIO_DEVICE 0x0064d5e0u   /* vox audio device (group volumes at +0x178, 0x14 each)  */
-#define CR_MUSIC_GROUP  1             /* mask 2: the options' MUSIC slider                       */
+#define CR_MM_PP        0x0063e030u
+#define CR_AUDIO_DEVICE 0x0064d5e0u   /* +0x178 0x14 */
+#define CR_MUSIC_GROUP  1
 
-#define CR_RING   (1u << 17)          /* stereo frames (~3 s at 44.1 kHz)                        */
+#define CR_RING   (1u << 17)
 #define CR_MAXSONGS 4096
-#define CR_GAP_MS 600                 /* silence between two songs                               */
+#define CR_GAP_MS 600
 
-#ifdef _WIN32                         /* paths: UTF-16 on Windows, UTF-8 on Linux */
+#ifdef _WIN32
 typedef wchar_t cr_ch;
 #define CR_DIRMAX MAX_PATH
 #define cr_strdup _wcsdup
@@ -76,25 +44,25 @@ typedef char cr_ch;
 static const char *const cr_exts[] = { ".mp3", ".ogg", ".m4a", ".aac", ".wma", ".wav", ".flac" };
 #endif
 
-static CRITICAL_SECTION cr_lock;      /* the song list */
+static CRITICAL_SECTION cr_lock;
 static cr_ch    cr_dir[CR_DIRMAX];
 static cr_ch   *cr_songs[CR_MAXSONGS];
 static int      cr_nsongs;
-static int      cr_order[CR_MAXSONGS], cr_next;   /* the shuffled bag and how far it is dealt */
-static int      cr_last = -1;                     /* the song played last (not first in a new bag) */
+static int      cr_order[CR_MAXSONGS], cr_next;
+static int      cr_last = -1;
 static uint32_t cr_rng;
 
-static volatile LONG cr_on;           /* the setting in force */
+static volatile LONG cr_on;
 static volatile LONG cr_inited, cr_thread_up;
-static volatile LONG cr_skip;         /* decoder: drop the song being played */
-static volatile LONG cr_rate;         /* output rate, known once the audio thread first mixes */
-static volatile float cr_user_vol = 1.0f;   /* CUSTOM_RADIO_VOLUME (the SOUND page's slider) */
+static volatile LONG cr_skip;
+static volatile LONG cr_rate;
+static volatile float cr_user_vol = 1.0f;
 
 static int16_t  cr_ring[CR_RING * 2];
-static volatile LONG cr_wr, cr_rd;    /* frame counters; the ring holds cr_wr - cr_rd frames */
+static volatile LONG cr_wr, cr_rd;
 
-static float    cr_gain;              /* audio thread: the gain now */
-static int      cr_heard;             /* audio thread: heard at the last mix (for the log) */
+static float    cr_gain;
+static int      cr_heard;
 
 static uint32_t cr_rand(void)
 {
@@ -159,7 +127,6 @@ static void cr_utf8(const char *s, char *out, int cap)
 }
 #endif
 
-/* Deal a new shuffled bag (cr_lock held). */
 static void cr_shuffle(void)
 {
     for (int i = 0; i < cr_nsongs; i++)
@@ -174,7 +141,6 @@ static void cr_shuffle(void)
     cr_next = 0;
 }
 
-/* Read the folder again; the number of songs. */
 #ifndef _WIN32
 static int cr_have_ffmpeg(void);
 
@@ -250,11 +216,10 @@ static int cr_scan(void)
 }
 #endif
 
-/* The next song's path (a copy to free), or NULL when there is none. */
 static cr_ch *cr_take_next(void)
 {
     if (cr_next >= cr_nsongs)
-        cr_scan();                      /* every song has played: read the folder, deal again */
+        cr_scan();
     EnterCriticalSection(&cr_lock);
     cr_ch *p = NULL;
     if (cr_next < cr_nsongs) {
@@ -265,14 +230,11 @@ static cr_ch *cr_take_next(void)
     return p;
 }
 
-/* ---- the ring (one writer: the decoder; one reader: the audio thread) ---- */
-
 static uint32_t cr_fill(void)
 {
     return (uint32_t)(__atomic_load_n(&cr_wr, __ATOMIC_ACQUIRE) - __atomic_load_n(&cr_rd, __ATOMIC_ACQUIRE));
 }
 
-/* Decoder: put n stereo frames in, waiting for room; 0 if it should stop. */
 static int cr_put(const int16_t *f, uint32_t n)
 {
     while (n) {
@@ -296,22 +258,18 @@ static int cr_put(const int16_t *f, uint32_t n)
     return 1;
 }
 
-/* ---- decoding ---- */
-
-/* A release log does not name the player's songs. */
 #if GMV_DEV
 #define CR_NAME(name) (name)
 #else
 #define CR_NAME(name) "a song"
 #endif
 
-typedef struct {              /* linear resampler from the song's rate to the output's */
-    double step, pos;         /* source frames per output frame; position in {last, in[0..n-1]} */
+typedef struct {
+    double step, pos;
     int16_t last[2];
     int primed;
 } cr_rs;
 
-/* Resample n stereo frames and put them in the ring; 0 if it should stop. */
 static int cr_rs_put(cr_rs *rs, const int16_t *in, uint32_t n)
 {
     if (!n)
@@ -325,7 +283,7 @@ static int cr_rs_put(cr_rs *rs, const int16_t *in, uint32_t n)
     }
     int16_t out[2 * 1024];
     uint32_t o = 0;
-    while (rs->pos < (double)n) {         /* x[k] = k == 0 ? last : in[k - 1]; needs x[idx + 1] */
+    while (rs->pos < (double)n) {
         uint32_t idx = (uint32_t)rs->pos;
         double f = rs->pos - idx;
         const int16_t *a = idx ? in + 2 * (idx - 1) : rs->last, *b = in + 2 * idx;
@@ -343,14 +301,13 @@ static int cr_rs_put(cr_rs *rs, const int16_t *in, uint32_t n)
     return cr_put(out, o);
 }
 
-/* Play one file with the host's own decoders (songdec.c); 0 if they will not open it or it holds no sound. */
 static int cr_play_builtin(const cr_ch *path, const char *name)
 {
     gmv_song *s = gmv_song_open(path);
     if (!s)
         return 0;
     uint32_t out = (uint32_t)cr_rate, rate = gmv_song_rate(s);
-    static int16_t buf[2 * 4096];             /* one decoder thread */
+    static int16_t buf[2 * 4096];
     cr_rs rs = { (double)rate / out, 0, {0, 0}, 0 };
     uint64_t frames = 0;
     size_t n;
@@ -367,7 +324,7 @@ static int cr_play_builtin(const cr_ch *path, const char *name)
 }
 
 #ifdef _WIN32
-static int cr_mf_ok;          /* Media Foundation started */
+static int cr_mf_ok;
 
 static HRESULT cr_set_pcm(IMFSourceReader *r, UINT32 rate)
 {
@@ -387,7 +344,6 @@ static HRESULT cr_set_pcm(IMFSourceReader *r, UINT32 rate)
     return hr;
 }
 
-/* Play one file with Media Foundation; 0 if it could not be opened. */
 static int cr_play_mf(const wchar_t *path, const char *name)
 {
     IMFSourceReader *r = NULL;
@@ -399,7 +355,7 @@ static int cr_play_mf(const wchar_t *path, const char *name)
     IMFSourceReader_SetStreamSelection(r, (DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
     IMFSourceReader_SetStreamSelection(r, (DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
     UINT32 out = (UINT32)cr_rate;
-    if (FAILED(cr_set_pcm(r, out)) && FAILED(hr = cr_set_pcm(r, 0))) {   /* else at its own rate */
+    if (FAILED(cr_set_pcm(r, out)) && FAILED(hr = cr_set_pcm(r, 0))) {
         gmv_log("[radio] custom station: \"%s\" has no audio Windows can decode (0x%08lx); next song\n", CR_NAME(name),
                 (unsigned long)hr);
         IMFSourceReader_Release(r);
@@ -443,7 +399,7 @@ static int cr_play_mf(const wchar_t *path, const char *name)
             if (SUCCEEDED(IMFMediaBuffer_Lock(mb, &p, &maxlen, &len)) && p) {
                 uint32_t n = len / (2 * ch);
                 const int16_t *in = (const int16_t *)p;
-                if (ch != 2) {                          /* mono doubled; more: the first two */
+                if (ch != 2) {
                     if (stcap < (size_t)n * 2) {
                         free(st);
                         stcap = (size_t)n * 2;
@@ -470,7 +426,6 @@ static int cr_play_mf(const wchar_t *path, const char *name)
     return 1;
 }
 
-/* Play one file into the ring; 0 if it could not be opened. */
 static int cr_play_file(const wchar_t *path)
 {
     char name[MAX_PATH * 3];
@@ -512,7 +467,7 @@ static DWORD WINAPI cr_thread(void *param)
         int ok = cr_play_file(p);
         free(p);
         if (!ok) {
-            if (++fails >= 8) { Sleep(2000); fails = 0; }   /* a folder of files that will not open */
+            if (++fails >= 8) { Sleep(2000); fails = 0; }
             continue;
         }
         fails = 0;
@@ -521,7 +476,6 @@ static DWORD WINAPI cr_thread(void *param)
     return 0;
 }
 #else
-/* Is there an ffmpeg to run?  Asked once; said once in the log when there is not. */
 static int cr_have_ffmpeg(void)
 {
     static int known, have;
@@ -538,7 +492,6 @@ static int cr_have_ffmpeg(void)
     return have;
 }
 
-/* Play one file into the ring; 0 if it could not be played. */
 static int cr_play_file(const char *path)
 {
     const char *base = strrchr(path, '/');
@@ -597,7 +550,7 @@ static DWORD WINAPI cr_thread(void *param)
         int ok = cr_play_file(p);
         free(p);
         if (!ok) {
-            if (++fails >= 8) { Sleep(2000); fails = 0; }   /* a folder of files that will not open */
+            if (++fails >= 8) { Sleep(2000); fails = 0; }
             continue;
         }
         fails = 0;
@@ -606,8 +559,6 @@ static DWORD WINAPI cr_thread(void *param)
     return 0;
 }
 #endif
-
-/* ---- the game's side ---- */
 
 void gmv_cr_set_volume(float v)
 {
@@ -619,7 +570,6 @@ int gmv_cr_songs(void)
     return cr_inited ? cr_nsongs : 0;
 }
 
-/* Turn the station's playback on or off; the number of songs found (read again when on). */
 int gmv_cr_enable(int on)
 {
     cr_init();
@@ -644,7 +594,7 @@ int gmv_cr_enable(int on)
     return n;
 }
 
-/* Audio thread: is the custom station being listened to?  Plain reads of the manager's words. */
+/* [mm+0x218] [mm+0x220] [mm+0x270] */
 static int cr_listening(void)
 {
     unsigned char **mmp = *(unsigned char ***)(uintptr_t)CR_MM_PP;
@@ -656,7 +606,6 @@ static int cr_listening(void)
            *(const volatile int *)(mm + 0x218) == -1 && *(const volatile int *)(mm + 0x270) > GMV_CR_STATION;
 }
 
-/* Audio thread: the game's MUSIC group volume now (as the device ramps it). */
 static float cr_music_volume(void)
 {
     const unsigned char *dev = *(unsigned char *const *)(uintptr_t)CR_AUDIO_DEVICE;
@@ -668,7 +617,6 @@ static float cr_music_volume(void)
     return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-/* Audio thread, after the game's render: add the custom station to the mix. */
 void gmv_cr_mix(int16_t *buf, uint32_t frames, uint32_t chans, uint32_t rate)
 {
     if (!cr_thread_up || chans != 2)
@@ -683,14 +631,14 @@ void gmv_cr_mix(int16_t *buf, uint32_t frames, uint32_t chans, uint32_t rate)
     }
     float target = heard ? cr_music_volume() * cr_user_vol : 0.0f;
     if (cr_gain <= 0 && target <= 0)
-        return;                                         /* silent: the song waits */
+        return;
     float step = 1.0f / (0.04f * (float)rate);
     uint32_t have = cr_fill(), r = (uint32_t)cr_rd, used = 0;
     for (uint32_t i = 0; i < frames; i++) {
         if (cr_gain < target) { cr_gain += step; if (cr_gain > target) cr_gain = target; }
         else if (cr_gain > target) { cr_gain -= step; if (cr_gain < target) cr_gain = target; }
         if (used >= have)
-            continue;                                   /* the decoder is behind: silence */
+            continue;
         uint32_t at = ((r + used) & (CR_RING - 1)) * 2;
         used++;
         for (int c = 0; c < 2; c++) {

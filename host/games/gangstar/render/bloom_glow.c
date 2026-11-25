@@ -1,4 +1,3 @@
-/* bloom_glow.c -- BLOOM_LIGHTS and BLOOM_WINDOWS: the glow layer */
 #include <stdio.h>
 #include <string.h>
 #include "compat.h"
@@ -10,36 +9,14 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- BLOOM_LIGHTS / BLOOM_WINDOWS: the glow layer (with BLOOM, so off by default and under
-   ORIGINAL_MAC_EXPERIENCE) ----
-   A survey of the game's draws found its lights too dim for the bloom's brightness threshold.  The street-lamp
-   cones, neon, crane and highway lights are additive draws (depth-tested, from 0x50a5ad) of a nearly
-   black texture (95, average 9,7,9).  The lit windows are painted into the buildings' one wall texture
-   and darkened by the lighting along with it.  (The two-texture setup with unit 1 added is the
-   characters' and the vehicles' shine: unit 1 holds sky reflection maps.)  So the screen FBO gets a
-   second colour attachment, the glow layer (RGBA16F, multisampled like the screen).  It is written while
-   the world is drawn and read by the bloom's bright pass:
-   - Every world draw also writes the layer, through its own blending on draw buffer 1 (glBlendFunci).
-     Depth-tested additive draws add their colour (BLOOM_LIGHTS).  Opaque draws clear it, and blended ones
-     fade it by their own destination factor.  So whatever stands in front hides a light's glow as it
-     hides the light.
-   - Opaque single-texture draws (the buildings) are drawn a second time, into the layer alone, through
-     a small shader, at night by the game's clock (the patches, g_tod_ms).  It adds the texels that look
-     like a lit window, times BLOOM_WINDOWS, in the fog the world has.  At night the game binds its night
-     atlases (night<n>.tga): navy walls, the lit windows and signs warm.  The shader knows one by its last
-     mipmap (the whole atlas): dark, and bluer than red; the day atlases are bright, their cream walls
-     warm.  In a night atlas a lit texel is bright (0.42 up) and warm (red or green above blue by 0.06 up).
-   - The sky's draws and the draws without a depth test (the sun and moon) leave the layer alone.
-   Fixed-function draws and gl_FragColor write every draw buffer, so neither the game's draws nor the
-   host's shaders change.  The layer needs MSAA (the screen FBO) and per-buffer blending (OpenGL 4);
-   without them it is logged and left out.  After the bloom pass only the screen itself is drawn. */
-#define BG_LIGHT_GAIN 2.0f                              /* BLOOM_LIGHTS=1: a light glows at twice its colour */
+/* BLOOM_LIGHTS BLOOM_WINDOWS 0x50a5ad */
+#define BG_LIGHT_GAIN 2.45f
 
 static const char bg_fs_main[] =
     "uniform float gain, fogon;\n"
     "void main() {\n"
     "    vec4 t = texture2DProj(t0, gl_TexCoord[0]);\n"
-    "    vec3 a = texture2DProj(t0, gl_TexCoord[0], 16.0).rgb;\n"   /* the last mipmap: the atlas's average */
+    "    vec3 a = texture2DProj(t0, gl_TexCoord[0], 16.0).rgb;\n"
     "    float k = smoothstep(0.42, 0.6, max(t.r, max(t.g, t.b))) * smoothstep(0.06, 0.18, max(t.r, t.g) - t.b)\n"
     "            * step(a.r + 0.015, a.b) * step(max(a.r, max(a.g, a.b)), 0.33);\n"
     "    float f = fogon > 0.0 ? fog_clear() : 1.0;\n"
@@ -48,8 +25,8 @@ static const char bg_fs_main[] =
     "}\n";
 
 bg_t bg;
+unsigned g_cp_mark;
 
-/* The lit windows' program, once BLOOM_WINDOWS is on (at the start, or later from the options menu). */
 static void bg_windows_init(void)
 {
     static int tried;
@@ -71,7 +48,7 @@ static void bg_windows_init(void)
     bg.u_fogp = aof.GetUniformLocation(bg.p, "fogp");
     bg.u_hgt = aof.GetUniformLocation(bg.p, "hgt");
     GLint prog = 0;
-    prog = gmv_gl_cur_prog();                       /* GL_CURRENT_PROGRAM, QUERY_FREE */
+    prog = gmv_gl_cur_prog();
     aof.UseProgram(bg.p);
     aof.Uniform1i(aof.GetUniformLocation(bg.p, "t0"), 0);
     aof.UseProgram((GLuint)prog);
@@ -95,14 +72,14 @@ static int bg_init(void)
         return 0;
     }
     GLint rb = 0, dfb = 0;
-    glGetIntegerv(0x8CA7, &rb);                         /* GL_RENDERBUFFER_BINDING */
+    glGetIntegerv(0x8CA7, &rb);
     dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING);
     msf.GenRenderbuffers(1, &g_ms_glow);
     msf.BindRenderbuffer(MS_RENDERBUFFER, g_ms_glow);
-    msf.RenderbufferStorageMultisample(MS_RENDERBUFFER, g_msaa, 0x881A, g_ms_w, g_ms_h);  /* RGBA16F */
+    msf.RenderbufferStorageMultisample(MS_RENDERBUFFER, g_msaa, 0x881A, g_ms_w, g_ms_h);
     msf.BindRenderbuffer(MS_RENDERBUFFER, (GLuint)rb);
     msf.BindFramebuffer(MS_DRAW_FB, g_ms_fbo);
-    msf.FramebufferRenderbuffer(MS_DRAW_FB, 0x8CE1, MS_RENDERBUFFER, g_ms_glow);   /* COLOR_ATTACHMENT1 */
+    msf.FramebufferRenderbuffer(MS_DRAW_FB, 0x8CE1, MS_RENDERBUFFER, g_ms_glow);
     GLenum st = msf.CheckFramebufferStatus(MS_DRAW_FB);
     if (st != 0x8CD5)
         msf.FramebufferRenderbuffer(MS_DRAW_FB, 0x8CE1, MS_RENDERBUFFER, 0);
@@ -112,16 +89,14 @@ static int bg_init(void)
         g_ms_glow = 0;
         return 0;
     }
-    bg.frame = g_frame_no - 1;                          /* cleared at the next world draw */
+    bg.frame = g_frame_no - 1;
     bg_windows_init();
     gmv_log("[bloom] glow layer ready (%dx%d, %d samples): lights %g, windows %g%s\n", g_ms_w, g_ms_h, g_msaa,
             g_bloom_lights, g_bloom_windows, g_tod_ms < 0 && g_bloom_windows > 0 ? " (the game's clock not read yet)" : "");
     return 1;
 }
 
-/* How much the windows are lit by the game's clock: off by day, rising from 18:30 to 20:00, all night,
-   falling from 5:00 to 6:30. */
-static float bg_night(void)
+float bg_night(void)
 {
     if (g_tod_ms < 0)
         return 0;
@@ -130,7 +105,6 @@ static float bg_night(void)
     return n * n * (3 - 2 * n);
 }
 
-/* What the bloom's bright pass multiplies the layer by. */
 float bg_gain(void)
 {
     return g_bloom_lights > 0 ? g_bloom_lights * BG_LIGHT_GAIN : 1.0f;
@@ -150,8 +124,6 @@ static void bg_frame_log(void)
     bg.lights = bg.windows = 0;
 }
 
-/* Before a draw, in the game's state: draw buffer 1's blending for it.  0 = the layer is not being
-   drawn, 1 = set, 2 = also bg_draw_end's windows pass after the draw. */
 int bg_draw_begin(GLenum mode)
 {
     bg.light = 0;
@@ -164,13 +136,13 @@ int bg_draw_begin(GLenum mode)
         return 0;
     bg_windows_init();
     if (g_glow_bufs != 2 || bg.frame != g_frame_no) {
-        static const GLenum both[2] = {0x8CE0, 0x8CE1};  /* COLOR_ATTACHMENT0, 1 */
+        static const GLenum both[2] = {0x8CE0, 0x8CE1};
         bg.DrawBuffers(2, both);
         g_glow_bufs = 2;
-        if (bg.frame != g_frame_no) {                   /* the frame's first world draw */
+        if (bg.frame != g_frame_no) {
             static const GLfloat zero[4];
-            GLboolean cm[4], sc = glIsEnabled(GL_SCISSOR_TEST);
-            glGetBooleanv(GL_COLOR_WRITEMASK, cm);
+            const GLboolean *cm = g_glt.cmask;
+            GLboolean sc = (GLboolean)g_glt.scissor;
             if (sc) glDisable(GL_SCISSOR_TEST);
             bg.ColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             bg.ClearBufferfv(GL_COLOR, 1, zero);
@@ -183,8 +155,8 @@ int bg_draw_begin(GLenum mode)
     }
     GLenum s = GL_ZERO, d = GL_ZERO;
     int kind = 1;
-    if (g_sky_draw || g_sky_glow_draw || !g_ao_depth_on)
-        d = GL_ONE;                                     /* left alone */
+    if (g_sky_draw || g_sky_glow_draw || g_cp_draw || !g_ao_depth_on)
+        d = GL_ONE;
     else if (g_blend_on && g_blend_dst == GL_ONE) {
         d = GL_ONE;
         if (g_bloom_lights > 0) {
@@ -203,8 +175,6 @@ int bg_draw_begin(GLenum mode)
     return kind;
 }
 
-/* After the draw (bg_draw_begin gave 2), before the fog's clip plane goes: the same draw again into the
-   glow layer alone, through the windows' shader. */
 void bg_draw_end(int kind, int elems, GLenum mode, GLint first, GLsizei count, GLenum type, const void *idx)
 {
     static void(APIENTRY * da)(GLenum, GLint, GLsizei);
@@ -218,7 +188,7 @@ void bg_draw_end(int kind, int elems, GLenum mode, GLint first, GLsizei count, G
     GLfloat u[30];
     int fog = (g_fog_all || g_ao_fog_on) && g_ao_fogp[0] == 0x2601 && g_ao_fogp[2] > g_ao_fogp[1] && fh_params(u);
     GLint prog = 0;
-    prog = gmv_gl_cur_prog();                       /* GL_CURRENT_PROGRAM, QUERY_FREE */
+    prog = gmv_gl_cur_prog();
     glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     bg.ColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     bg.BlendFunci(1, GL_ONE, GL_ONE);
@@ -243,7 +213,28 @@ void bg_draw_end(int kind, int elems, GLenum mode, GLint first, GLsizei count, G
     bg.windows++;
 }
 
-/* After the game's glClear: a colour clear filled the layer with the clear colour. */
+int bg_cp_mark(void)
+{
+    if (!g_cp_draw || !g_bloom_want || g_glt.last_fb)
+        return 0;
+    int sc = 0;
+    if (g_cp_mark != g_frame_no + 1) {
+        g_cp_mark = g_frame_no + 1;
+        sc = g_glt.scissor;
+        if (sc)
+            glDisable(GL_SCISSOR_TEST);
+        glStencilMask(BG_CP_BIT);
+        glClearStencil(0);
+        glClear(GL_STENCIL_BUFFER_BIT);
+        glClearStencil(g_glt.st_clear);
+    }
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_ALWAYS, BG_CP_BIT, BG_CP_BIT);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glStencilMask(BG_CP_BIT);
+    return 1 + sc;
+}
+
 void bg_clear(GLbitfield m)
 {
     static const GLfloat zero[4];
@@ -251,7 +242,6 @@ void bg_clear(GLbitfield m)
         bg.ClearBufferfv(GL_COLOR, 1, zero);
 }
 
-/* Only the screen drawn from here on (the bloom pass, the 2D layer). */
 void bg_single(void)
 {
     if (g_glow_bufs != 2 || bg.ready <= 0)
@@ -265,21 +255,17 @@ void bg_single(void)
     g_glow_bufs = 1;
 }
 
-/* GAMEPATCH_TAB: AMBIENT_OCCLUSION, BLOOM (with the glow layer at 2), FOG_MODE, WATER_REFLECTIONS,
-   VEHICLE_REFLECTIONS, DYNAMIC_SHADOWS and SHADOW_QUALITY from the options menu.  The wrappers they need are in
-   from the start (gmv_gl_resolve); the new values are taken after a present, so no frame is drawn half with the old
-   ones. */
 static const char *const g_post_keys[] = {"AMBIENT_OCCLUSION", "BLOOM", "FOG_MODE", "WATER_REFLECTIONS",
                                           "VEHICLE_REFLECTIONS", "BLOOM_THRESHOLD", "DYNAMIC_SHADOWS",
-                                          "SHADOW_QUALITY"};
+                                          "SHADOW_QUALITY", "ALPHA_TO_COVERAGE", "POST_AA"};
 #define POST_N (sizeof g_post_keys / sizeof *g_post_keys)
-static float g_post_next[POST_N] = {-1, -1, -1, -1, -1, -1, -1, -1};   /* -1 = no change */
+static float g_post_next[POST_N] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 
 int gmv_set_post(const char *key, float v)
 {
     if (!g_tab_live)
         return 0;
-    if (!strcmp(key, "FOG_HEIGHT")) {                   /* metres; read at each draw */
+    if (!strcmp(key, "FOG_HEIGHT")) {
         g_fog_height = v < 0 ? 0 : v * 100;
         return 1;
     }
@@ -308,7 +294,7 @@ static void post_sync(void)
     }
     if (n[2] >= 0 && (int)n[2] != g_fog_mode) {
         g_fog_mode = gmv_fog_mode_set((int)n[2]);
-        if (g_fog_game_set) {                           /* the fog colour for the new mode, before the game sets it again */
+        if (g_fog_game_set) {
             const GLfloat *c = g_fog_all && sky.n ? sky.hz : g_fog_game;
             glFogfv(GL_FOG_COLOR, c);
             memcpy(g_fog_col, c, sizeof g_fog_col);
@@ -316,22 +302,24 @@ static void post_sync(void)
     }
     if (n[3] >= 0) g_ssr_want = n[3] != 0;
     if (n[4] >= 0) g_vr_want = n[4] != 0;
-    if (n[5] >= 0) g_bloom_threshold = n[5] > 0.95f ? 0.95f : n[5];   /* read at each bloom pass */
+    if (n[5] >= 0) g_bloom_threshold = n[5] > 0.95f ? 0.95f : n[5];
     if (n[6] >= 0) g_ds_want = n[6] != 0;
-    if (n[7] >= 0) g_shadow_quality = (int)(n[7] + 0.5f) == 1 ? 1 : 2;   /* the map: at the next frame's first caster */
+    if (n[7] >= 0) g_shadow_quality = (int)(n[7] + 0.5f) == 1 ? 1 : 2;
+    if (n[8] >= 0) g_a2c_want = n[8] != 0;
+    if (n[9] >= 0) g_paa_want = n[9] >= 1.5f ? 2 : n[9] >= 0.5f;
     int bgw = g_bloom_want && (g_bloom_lights > 0 || g_bloom_windows > 0);
     if (bgw != g_bg_want) {
         if (!bgw)
             bg_single();
         g_bg_want = bgw;
-        bl.w = 0;                                       /* the bloom's textures again, with or without the layer's */
+        bl.w = 0;
     }
     for (size_t i = 0; i < POST_N; i++)
         n[i] = -1;
     gmv_log("[post] now: ambient occlusion %d, bloom %d (threshold %g, lights %g, windows %g), fog mode %d, "
-            "water reflections %d, vehicle reflections %d, dynamic shadows %d (quality %d)\n", g_ao_want, g_bloom_want,
-            g_bloom_threshold, g_bloom_lights, g_bloom_windows, g_fog_mode, g_ssr_want, g_vr_want, g_ds_want,
-            g_shadow_quality);
+            "water reflections %d, vehicle reflections %d, dynamic shadows %d (quality %d), alpha to coverage %d, "
+            "post AA %d\n", g_ao_want, g_bloom_want, g_bloom_threshold, g_bloom_lights, g_bloom_windows, g_fog_mode,
+            g_ssr_want, g_vr_want, g_ds_want, g_shadow_quality, g_a2c_want, g_paa_want);
 }
 
 void live_sync(void)

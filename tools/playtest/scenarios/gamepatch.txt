@@ -13,3 +13,9 @@ click 0.12 0.70
 wait 3
 shot gamepatch
 expectlog ^\[gamepatch\] options menu: VIDEO .* and GAMEPATCH .* registered
+expectlog ^\[config\] TIME_OF_DAY blank or not in GangstarMV\.ini: 1$
+expectlog ^\[config\] RANDOM_TIME_OF_DAY blank or not in GangstarMV\.ini: 1$
+expectlog ^\[config\] AI_STEERING_FIX blank or not in GangstarMV\.ini: 1$
+expectlog ^\[gamepatch\] AI drivers steer by the heading on the ground at 0x0006ecc1
+expectlog ^\[config\] BOAT_SEAT_FIX blank or not in GangstarMV\.ini: 1$
+expectlog ^\[gamepatch\] a swimmer the script seats in a vehicle stops swimming first at 0x000cf25d

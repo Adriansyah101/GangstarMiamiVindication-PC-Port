@@ -1,26 +1,3 @@
-/* shimsvideo.c -- the intro-movie player.
-
-   The Mac build plays Contents/Resources/intro.mov (H.264 video + AAC audio) through QTMovie
-   before the main menu.  We don't link QuickTime; instead the host decodes the file with Windows
-   Media Foundation (IMFSourceReader, which uses the OS's built-in H.264/AAC decoders -- no extra
-   DLLs to ship), draws each frame to the game's GL window as a letterboxed textured quad, and plays
-   the audio through a stream of its own (shimsaudio.c).  gmv_intro_play() is a blocking, skippable phase that the run loop
-   (shimsappkit.c) calls at the exact point it used to fire the simulated QTMovieDidEndNotification;
-   when it returns, the game advances to the menu as before.
-
-   Audio/video sync: we read samples from both streams in timestamp order (ANY_STREAM), push video
-   frames into a small look-ahead queue, and feed audio to the stream as it arrives.  Reading ahead to
-   fill the video queue also queues the interleaved audio ahead of the device, so pacing a video
-   frame (sleeping until its presentation time) never starves the audio.
-
-   Linux has no Media Foundation: there the system's ffmpeg program decodes the file (ffpipe_linux.c), one run for
-   the pictures (raw BGRA at the movie's own frame rate) and one for the sound (16-bit stereo); frame i is shown at
-   i / rate.  With no ffmpeg installed the game goes on to its menu, as with NO_INTRO.
-
-   Toggles:  GMV_NO_INTRO=1 skips playback entirely (old behaviour).
-             GMV_INTRO_FLIP=1 flips the picture vertically (if a decoder delivers the other parity).
-             GMV_INTRO_TRACE=1 logs stream setup and timing. */
-
 #ifdef _WIN32
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -63,7 +40,6 @@
 
 static int g_trace;
 
-/* ---- GL 2.x entries we may need to neutralise before immediate-mode drawing -------------- */
 static void (APIENTRY *p_glUseProgram)(GLuint);
 static void (APIENTRY *p_glActiveTexture)(GLenum);
 static void (APIENTRY *p_glBindBuffer)(GLenum, GLuint);
@@ -79,7 +55,6 @@ static void resolve_gl2(void)
     p_glBindBuffer   = (void (APIENTRY *)(GLenum, GLuint))(uintptr_t)gl_real("glBindBuffer");
 }
 
-/* ---- video frame look-ahead queue -------------------------------------------------------- */
 #define VQ_CAP 8
 struct vframe { unsigned char *buf; size_t cap; int w, h, flip; LONGLONG ts; };
 static struct vframe g_vq[VQ_CAP];
@@ -97,9 +72,8 @@ static struct vframe *vq_push_slot(void)
 static struct vframe *vq_front(void) { return g_vq_count ? &g_vq[g_vq_head] : NULL; }
 static void vq_pop(void) { if (g_vq_count) { g_vq_head = (g_vq_head + 1) % VQ_CAP; g_vq_count--; } }
 
-/* ---- audio ------------------------------------------------------------------------------- */
 static void *g_snd;
-static size_t g_snd_ahead;              /* most PCM to hold ahead of the device: one second */
+static size_t g_snd_ahead;
 
 static void audio_close(void)
 {
@@ -109,7 +83,6 @@ static void audio_close(void)
     }
 }
 
-/* Queue one decoded PCM chunk, waiting (while pumping) if the device is a full second behind. */
 static void audio_submit(const unsigned char *pcm, size_t len)
 {
     if (!g_snd || !len)
@@ -121,13 +94,12 @@ static void audio_submit(const unsigned char *pcm, size_t len)
         while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
 #endif
         Sleep(1);
-        if (++spins > 2000)             /* ~2s hard cap: never hang on a stuck device */
+        if (++spins > 2000)
             return;
     }
     gmv_snd_write(g_snd, pcm, len);
 }
 
-/* PAD_MENU: a pad button pressed since the intro began also skips it (one already held then does not). */
 static unsigned g_pad_held;
 static int g_pad_skipped;
 
@@ -138,7 +110,7 @@ static int intro_pad_press(void)
     unsigned b;
     int hat;
     DWORD now = GetTickCount();
-    if (now - last < 10)                        /* the pacing loop spins; read the pads every 10 ms */
+    if (now - last < 10)
         return 0;
     last = now;
     const char *e = gmv_getenv("GMV_PAD_MENU");
@@ -148,12 +120,10 @@ static int intro_pad_press(void)
         g_pad_skipped = 1;
         return 1;
     }
-    g_pad_held &= b;                            /* released ones count again */
+    g_pad_held &= b;
     return 0;
 }
 
-/* After a pad skip, wait (up to 1 s) for the buttons to come up, so the press does not reach the
-   game's first pad read as a new press. */
 static void intro_pad_release(void)
 {
     for (int i = 0; i < 100; i++) {
@@ -167,7 +137,6 @@ static void intro_pad_release(void)
     }
 }
 
-/* ---- the events during playback; sets *skip on a skip key/click/pad button (closing the window ends the game there) --- */
 static int intro_pump(int *skip)
 {
     if (intro_pad_press())
@@ -176,18 +145,17 @@ static int intro_pump(int *skip)
     return 0;
 }
 
-/* ---- draw one frame as a letterboxed, aspect-correct textured quad ----------------------- */
 static void draw_frame(GLuint tex, const struct vframe *f)
 {
     int winw = 1024, winh = 768;
-    gmv_gl_render_size(&winw, &winh);               /* the screen the frame is drawn into */
+    gmv_gl_render_size(&winw, &winh);
     if (winw < 1) winw = 1;
     if (winh < 1) winh = 1;
 
     resolve_gl2();
-    if (p_glUseProgram) p_glUseProgram(0);          /* immediate mode: no shader program bound */
+    if (p_glUseProgram) p_glUseProgram(0);
     if (p_glActiveTexture) p_glActiveTexture(GL_TEXTURE0);
-    if (p_glBindBuffer) gmv_gl_bind_buffer(0x8892 /*GL_ARRAY_BUFFER*/, 0);    /* noted for QUERY_FREE */
+    if (p_glBindBuffer) gmv_gl_bind_buffer(0x8892 /* 0x8892 GL_ARRAY_BUFFER */, 0);
 
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -208,16 +176,14 @@ static void draw_frame(GLuint tex, const struct vframe *f)
     glEnable(GL_TEXTURE_2D);
     glColor4f(1.f, 1.f, 1.f, 1.f);
 
-    glClearColor(0.f, 0.f, 0.f, 1.f);               /* black letterbox bars */
+    glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    /* fit the frame inside the window preserving aspect ratio */
     float wa = (float)winw / (float)winh, va = (float)f->w / (float)f->h;
     float sx = 1.f, sy = 1.f;
-    if (va > wa) sy = wa / va;                       /* pillar/letterbox */
+    if (va > wa) sy = wa / va;
     else         sx = va / wa;
 
-    /* texcoords: row 0 of our buffer is the visual top unless the source was bottom-up (f->flip) */
     float t0 = f->flip ? 1.f : 0.f, t1 = f->flip ? 0.f : 1.f;
     glBegin(GL_QUADS);
         glTexCoord2f(0.f, t0); glVertex2f(-sx,  sy);
@@ -233,12 +199,10 @@ static void draw_frame(GLuint tex, const struct vframe *f)
     gmv_gl_present_raw();
 }
 
-/* ---- the playback clock: the first frame shown starts it; ts in 100 ns units ------------- */
 static int g_clock_started;
 static LONGLONG g_base_ts;
 static LARGE_INTEGER g_freq, g_t0;
 
-/* Wait until the front frame's time (or a skip), draw it and drop it from the queue. */
 static void show_front(GLuint tex, struct vframe *f, int *skip)
 {
     if (!g_clock_started) {
@@ -248,13 +212,10 @@ static void show_front(GLuint tex, struct vframe *f, int *skip)
         QueryPerformanceCounter(&g_t0);
     }
 
-    /* pace: present when wall-clock elapsed reaches this frame's media time */
     double target_ms = (double)(f->ts - g_base_ts) / 10000.0;
     for (;;) {
         if (intro_pump(skip) || *skip) break;
-        LARGE_INTEGER now;
-        QueryPerformanceCounter(&now);
-        double elapsed_ms = (double)(now.QuadPart - g_t0.QuadPart) * 1000.0 / (double)g_freq.QuadPart;
+        double elapsed_ms = (double)(gmv_qpc() - g_t0.QuadPart) * 1000.0 / (double)g_freq.QuadPart;
         if (elapsed_ms + 1.0 >= target_ms)
             break;
         double wait = target_ms - elapsed_ms;
@@ -283,9 +244,8 @@ static void intro_end(GLuint tex, int skip, int presented)
         intro_pad_release();
     }
 
-    /* let any already-queued audio finish briefly, unless the user skipped */
     if (!skip && g_snd) {
-        for (int i = 0; i < 40; i++) {   /* up to ~0.4s tail */
+        for (int i = 0; i < 40; i++) {
             if (gmv_snd_queued(g_snd) <= 0) break;
             int s2 = 0; intro_pump(&s2);
             Sleep(10);
@@ -298,7 +258,6 @@ static void intro_end(GLuint tex, int skip, int presented)
     g_vq_head = g_vq_tail = g_vq_count = 0;
 }
 
-/* The movie to play, or NULL (off, none, or not there). */
 static const char *intro_path(int *flip)
 {
     g_trace = 0;
@@ -319,7 +278,6 @@ static const char *intro_path(int *flip)
 }
 
 #ifdef _WIN32
-/* ---- media-type setup helpers ------------------------------------------------------------ */
 static HRESULT set_output(IMFSourceReader *r, DWORD stream, const GUID *major, const GUID *sub)
 {
     IMFMediaType *t = NULL;
@@ -331,7 +289,6 @@ static HRESULT set_output(IMFSourceReader *r, DWORD stream, const GUID *major, c
     return hr;
 }
 
-/* Resolve which real stream index is video and which is audio (ANY_STREAM reports the real index). */
 static void resolve_streams(IMFSourceReader *r, DWORD *vidx, DWORD *aidx)
 {
     *vidx = (DWORD)-1;
@@ -339,7 +296,7 @@ static void resolve_streams(IMFSourceReader *r, DWORD *vidx, DWORD *aidx)
     for (DWORD i = 0; i < 16; i++) {
         BOOL sel = FALSE;
         if (FAILED(IMFSourceReader_GetStreamSelection(r, i, &sel)) )
-            break;                      /* past the last stream */
+            break;
         if (!sel)
             continue;
         IMFMediaType *t = NULL;
@@ -354,12 +311,11 @@ static void resolve_streams(IMFSourceReader *r, DWORD *vidx, DWORD *aidx)
     }
 }
 
-/* Decode one video sample into a queue slot (normalised to a packed BGRA buffer). */
 static void take_video(IMFSample *s, int w, int h, LONG stride, int flip, LONGLONG ts)
 {
     struct vframe *f = vq_push_slot();
     if (!f)
-        return;                          /* queue full: shouldn't happen (caller drains first) */
+        return;
     size_t need = (size_t)w * (size_t)h * 4u;
     if (f->cap < need) {
         unsigned char *nb = realloc(f->buf, need);
@@ -371,7 +327,7 @@ static void take_video(IMFSample *s, int w, int h, LONG stride, int flip, LONGLO
 
     IMFMediaBuffer *mb = NULL;
     if (FAILED(IMFSample_ConvertToContiguousBuffer(s, &mb)) || !mb) {
-        g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;  /* undo push */
+        g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;
         return;
     }
     BYTE *p = NULL; DWORD maxlen = 0, curlen = 0;
@@ -381,12 +337,11 @@ static void take_video(IMFSample *s, int w, int h, LONG stride, int flip, LONGLO
             memcpy(f->buf + (size_t)y * w * 4, p + (size_t)y * pitch, (size_t)w * 4);
         IMFMediaBuffer_Unlock(mb);
     } else {
-        g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;  /* undo push */
+        g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;
     }
     IMFMediaBuffer_Release(mb);
 }
 
-/* Feed one audio sample to the stream. */
 static void take_audio(IMFSample *s)
 {
     IMFMediaBuffer *mb = NULL;
@@ -410,7 +365,6 @@ void gmv_intro_play(void)
     gmv_trace("[intro] playing %s via Media Foundation\n", path);
     gmv_gl_make_current_raw();
 
-    /* path (may use forward slashes) -> wide, backslashes */
     WCHAR wpath[1024];
     int n = MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, 1024);
     if (n <= 0) { gmv_log("[intro] path conversion failed\n"); return; }
@@ -425,9 +379,6 @@ void gmv_intro_play(void)
         return;
     }
 
-    /* Ask the Source Reader to insert the Video Processor MFT so we can request RGB32 output; the
-       H.264 decoder itself only emits YUV (NV12), so without this SetCurrentMediaType(RGB32) returns
-       MF_E_INVALIDMEDIATYPE. */
     IMFAttributes *rattr = NULL;
     if (SUCCEEDED(MFCreateAttributes(&rattr, 1)))
         IMFAttributes_SetUINT32(rattr, &MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
@@ -462,20 +413,19 @@ void gmv_intro_play(void)
         return;
     }
 
-    /* read back the actual video geometry + stride */
     int vw = 0, vh = 0; LONG stride = 0;
     {
         IMFMediaType *vt = NULL;
         if (SUCCEEDED(IMFSourceReader_GetCurrentMediaType(reader,
                 (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, &vt)) && vt) {
-            UINT64 fs = 0;                       /* MF_MT_FRAME_SIZE: width<<32 | height */
+            UINT64 fs = 0;
             if (SUCCEEDED(IMFMediaType_GetUINT64(vt, &MF_MT_FRAME_SIZE, &fs))) {
                 vw = (int)(fs >> 32);
                 vh = (int)(fs & 0xffffffffULL);
             }
             UINT32 st = 0;
             if (SUCCEEDED(IMFMediaType_GetUINT32(vt, &MF_MT_DEFAULT_STRIDE, &st)))
-                stride = (LONG)(INT32)st;        /* stored unsigned but is a signed stride */
+                stride = (LONG)(INT32)st;
             else
                 stride = (LONG)vw * 4;
             IMFMediaType_Release(vt);
@@ -488,10 +438,9 @@ void gmv_intro_play(void)
         if (co_owned) CoUninitialize();
         return;
     }
-    if (stride < 0) flip = !flip;       /* bottom-up source -> show upright */
+    if (stride < 0) flip = !flip;
     if (g_trace) gmv_trace("[intro] video %dx%d stride=%ld flip=%d audio=%d\n", vw, vh, stride, flip, have_audio);
 
-    /* open the stream from the actual PCM format */
     if (have_audio) {
         IMFMediaType *at = NULL;
         if (SUCCEEDED(IMFSourceReader_GetCurrentMediaType(reader,
@@ -525,7 +474,6 @@ void gmv_intro_play(void)
     intro_start();
 
     for (;;) {
-        /* fill the look-ahead queue (reading ahead also buffers audio ahead of the device) */
         while (g_vq_count < VQ_CAP && !eos && !skip) {
             if (intro_pump(&skip)) break;
             DWORD actual = 0, flags = 0;
@@ -536,7 +484,7 @@ void gmv_intro_play(void)
             if (FAILED(rhr)) { eos = 1; break; }
             if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { eos = 1; if (sample) IMFSample_Release(sample); break; }
             if (!sample)
-                continue;               /* a stream tick / gap */
+                continue;
             if (actual == vidx)
                 take_video(sample, vw, vh, stride, flip, ts);
             else if (actual == aidx && have_audio)
@@ -564,10 +512,8 @@ void gmv_intro_play(void)
     gmv_trace("[intro] done\n");
 }
 #else
-/* ---- Linux: two ffmpeg runs, the pictures and the sound ---------------------------------- */
-#define INTRO_RATE 48000                        /* the sound's rate out of ffmpeg (SDL converts it) */
+#define INTRO_RATE 48000
 
-/* One field of ffprobe's "key=value" lines, or 0. */
 static long probe_field(const char *s, const char *key, long *den)
 {
     size_t n = strlen(key);
@@ -617,7 +563,7 @@ void gmv_intro_play(void)
     const char *vargs[] = {"ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:v:0", "-an", "-f", "rawvideo",
                            "-pix_fmt", "bgra", "-r", rate, "pipe:1", NULL};
     const char *aargs[] = {"ffmpeg", "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-vn", "-f", "s16le",
-                           "-ac", "2", "-ar", "48000", "pipe:1", NULL};   /* INTRO_RATE */
+                           "-ac", "2", "-ar", "48000", "pipe:1", NULL};
     int vfd, afd = -1, vpid = gmv_ff_start(vargs, &vfd), apid = -1;
     if (vpid < 0) {
         gmv_log("[intro] ffmpeg did not start (%s); skipping\n", strerror(errno));
@@ -642,7 +588,6 @@ void gmv_intro_play(void)
     intro_start();
 
     for (;;) {
-        /* the pictures a few frames ahead */
         while (g_vq_count < VQ_CAP && !eos && !skip) {
             if (intro_pump(&skip)) break;
             struct vframe *f = vq_push_slot();
@@ -654,7 +599,7 @@ void gmv_intro_play(void)
                 }
             }
             if (f->cap < fbytes || gmv_ff_read(vfd, f->buf, fbytes) < fbytes) {
-                g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;  /* undo push */
+                g_vq_tail = (g_vq_tail + VQ_CAP - 1) % VQ_CAP; g_vq_count--;
                 eos = 1;
                 break;
             }
@@ -662,7 +607,6 @@ void gmv_intro_play(void)
             f->ts = (LONGLONG)(frame++ * 10000000LL * fden / fnum);
         }
 
-        /* the sound up to a second ahead of the device */
         while (afd >= 0 && !skip && (size_t)gmv_snd_queued(g_snd) < g_snd_ahead) {
             unsigned char pcm[16384];
             size_t k = gmv_ff_read(afd, pcm, sizeof pcm) & ~(size_t)3;

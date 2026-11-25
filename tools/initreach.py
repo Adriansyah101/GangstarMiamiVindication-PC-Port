@@ -1,12 +1,3 @@
-"""Which imports can the static initializers reach?  Static analysis only.
-
-Walks the code reachable from every __mod_init_func entry by recursive descent: direct
-calls and jumps are followed, calls through symbol stubs or non-lazy pointers are recorded
-as imports, and indirect calls through registers/memory (virtual calls, function pointers)
-are counted as unknowns, since their targets are not visible statically.
-
-usage: python -I initreach.py <macho> [--report report.txt]
-"""
 import collections
 import os
 import struct
@@ -19,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse, symbols, INDIRECT_SYMBOL_LOCAL, INDIRECT_SYMBOL_ABS  # noqa: E402
 
 ENDERS = {x86.X86_INS_RET, x86.X86_INS_RETF, x86.X86_INS_HLT, x86.X86_INS_UD2, x86.X86_INS_INT3}
-
 
 def main():
     path = sys.argv[1]
@@ -38,7 +28,6 @@ def main():
                 return struct.unpack_from("<I", data, seg["fileoff"] + a - seg["vmaddr"])[0]
         return None
 
-    # import name for each stub and each non-lazy pointer slot
     imp_at = {}
     for (segname, sname), s in sects.items():
         kind = s["flags"] & 0xFF
@@ -50,7 +39,7 @@ def main():
             if idx & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS):
                 continue
             sym = syms[idx]
-            if (sym["type"] & 0x0E) == 0x0E:    # the game's own (weak) definition
+            if (sym["type"] & 0x0E) == 0x0E:
                 imp_at[s["addr"] + j * stride] = ("self", sym["value"])
             else:
                 imp_at[s["addr"] + j * stride] = ("import", sym["name"])
@@ -71,13 +60,12 @@ def main():
     init = sects[("__DATA", "__mod_init_func")]
     roots = [u32(a) for a in range(init["addr"], init["addr"] + init["size"], 4)]
 
-    imports = collections.defaultdict(set)      # import name -> initializers reaching it
-    unknown_calls = collections.Counter()       # initializer -> indirect calls seen
-    funcs_done = {}                             # function start -> (imports, callees, indirect)
+    imports = collections.defaultdict(set)
+    unknown_calls = collections.Counter()
+    funcs_done = {}
     bad = []
 
     def walk_function(start):
-        """Intra-procedural recursive descent; returns (imports, callees, n_indirect)."""
         if start in funcs_done:
             return funcs_done[start]
         imps, callees, nind = set(), set(), 0
@@ -103,7 +91,6 @@ def main():
                     break
                 nxt = a + ins.size
                 op = ins.operands[0] if ins.operands else None
-                # loads through a non-lazy pointer: data imports (or a function's address)
                 if ins.id != x86.X86_INS_CALL:
                     for o in ins.operands:
                         if o.type == x86.X86_OP_MEM and o.mem.base == 0 and o.mem.index == 0:
@@ -113,7 +100,7 @@ def main():
                 if ins.id == x86.X86_INS_CALL:
                     if op.type == x86.X86_OP_IMM:
                         t = op.imm & 0xFFFFFFFF
-                        if t != nxt:            # call $+5 is the PIC idiom, not a call
+                        if t != nxt:
                             if stubs["addr"] <= t < stubs["addr"] + stubs["size"]:
                                 kind, v = imp_at.get(t, ("?", None))
                                 if kind == "import":
@@ -138,9 +125,9 @@ def main():
                             elif kind == "self":
                                 callees.add(v)
                         else:
-                            todo.append(t)      # tail call or intra-function jump: same walk
+                            todo.append(t)
                     else:
-                        nind += 1               # switch tables / tail calls through pointers
+                        nind += 1
                     break
                 elif ins.group(capstone.CS_GRP_JUMP) and op is not None and op.type == x86.X86_OP_IMM:
                     todo.append(op.imm & 0xFFFFFFFF)
@@ -193,7 +180,6 @@ def main():
         print("  0x%06x %6d %6d" % (r, n, unknown_calls[r]), file=out)
     for start, a in bad[:20]:
         print("  decode problem in function 0x%06x at 0x%06x" % (start, a), file=out)
-
 
 if __name__ == "__main__":
     main()

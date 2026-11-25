@@ -1,7 +1,4 @@
-# A benchmark in the busy city (dev build): every graphics enhancement, DRAW_DISTANCE=2, the densities at 3, MSAA 4,
-# no frame cap, PERF_PROFILE. 30 s standing still (the GPU passes, the draws), then 20 s walking (streaming, files).
-# To compare two builds, run it with -Exe on each and read the [perf] lines; tools\playtest\bench.ps1 does that and
-# can pick the GPU.
+# City benchmark (dev): all graphics enhancements, DRAW_DISTANCE=2, densities 3, MSAA 4, uncapped; 30 s still, 20 s walking
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1600
@@ -42,3 +39,4 @@ shot walked
 moved still-end walked
 expectlog ^\[perf\] [\d.]+ s:
 expectlog ^\[perf\] GPU, \d+ frames
+nolog ^\[collision\] probe at

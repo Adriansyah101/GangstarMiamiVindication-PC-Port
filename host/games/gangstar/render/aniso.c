@@ -1,4 +1,3 @@
-/* aniso.c -- ANISOTROPIC_FILTERING */
 #include <stdlib.h>
 #include <string.h>
 #include "compat.h"
@@ -10,27 +9,15 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- ANISOTROPIC_FILTERING: an enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE ----
-   The engine's texture-state code (0x501010) already sets GL_TEXTURE_MAX_ANISOTROPY_EXT on a texture
-   whose anisotropy is dirty: min(the texture's own level, the GPU maximum it read with 0x84FF at
-   0x505d2b).  So by default every texture gets exactly the level the game asks for, as on the Mac.
-   ANISOTROPIC_FILTERING=N (2-16) raises that to at least N, capped at the GPU maximum, on every level
-   the game sets and on every texture it gives a mipmapped minifying filter.  Only the GPU's sampling
-   changes; nothing the game reads back does.  The first distinct levels the game asks for are logged
-   as [aniso] lines.
-   With GAMEPATCH_TAB the wrappers are in from the start whatever the level, and they note each
-   texture's target, its own level and whether its filter is mipmapped, so a new level from the
-   options menu's TEXTURE FILTERING (gmv_set_aniso) can be put on every live texture after the next
-   present: the larger of the texture's own level and the new one, as if it had been there from the
-   start. */
-float g_aniso;                                   /* GMV_ANISOTROPIC_FILTERING; <= 1 = off */
-static float g_aniso_max = -1, g_aniso_lvl = -1;        /* the GPU's maximum; the level in use */
-static float g_aniso_want = -1;                         /* gmv_set_aniso's level, for aniso_sync */
+/* ANISOTROPIC_FILTERING 0x501010 0x84FF 0x505d2b */
+float g_aniso;
+static float g_aniso_max = -1, g_aniso_lvl = -1;
+static float g_aniso_want = -1;
 typedef struct {
-    unsigned char target, mip, set;                     /* target 1 = 2D, 2 = cube map; set: own level given */
+    unsigned char target, mip, set;
     float own;
 } af_tex;
-static af_tex *g_af;                                    /* by texture name */
+static af_tex *g_af;
 static GLuint g_af_n;
 
 static float aniso_level(void)
@@ -40,7 +27,7 @@ static float aniso_level(void)
             const char *ext = (const char *)glGetString(GL_EXTENSIONS);
             GLfloat mx = 1;
             if (ext && strstr(ext, "GL_EXT_texture_filter_anisotropic"))
-                glGetFloatv(0x84FF, &mx);               /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */
+                glGetFloatv(0x84FF, &mx);
             g_aniso_max = mx;
         }
         g_aniso_lvl = g_aniso < g_aniso_max ? g_aniso : g_aniso_max;
@@ -50,14 +37,13 @@ static float aniso_level(void)
     return g_aniso_lvl;
 }
 
-/* The note of the texture bound to target, or NULL. */
 static af_tex *af_entry(GLenum target)
 {
     GLint name = 0;
-    unsigned char t = target == GL_TEXTURE_2D ? 1 : target == 0x8513 ? 2 : 0;    /* GL_TEXTURE_CUBE_MAP */
+    unsigned char t = target == GL_TEXTURE_2D ? 1 : target == 0x8513 ? 2 : 0;
     if (!g_tab_live || !t)
         return NULL;
-    glGetIntegerv(t == 1 ? 0x8069 : 0x8514, &name);     /* GL_TEXTURE_BINDING_2D / _CUBE_MAP */
+    glGetIntegerv(t == 1 ? 0x8069 : 0x8514, &name);
     if (name <= 0 || name >= (1 << 20))
         return NULL;
     if ((GLuint)name >= g_af_n) {
@@ -83,7 +69,6 @@ int gmv_set_aniso(float level)
     return 1;
 }
 
-/* After a present: gmv_set_aniso's level on every noted texture. */
 void aniso_sync(void)
 {
     if (g_aniso_want < 0)
@@ -129,12 +114,12 @@ static void aniso_raise(GLenum target)
     GLfloat lvl = aniso_level(), cur = 1;
     if (lvl <= 1)
         return;
-    glGetTexParameterfv(target, 0x84FE, &cur);          /* GL_TEXTURE_MAX_ANISOTROPY_EXT */
+    glGetTexParameterfv(target, 0x84FE, &cur);
     if (cur < lvl)
         glTexParameterf(target, 0x84FE, lvl);
 }
 
-static int aniso_mip_filter(GLint f) { return f >= 0x2700 && f <= 0x2703; }    /* *_MIPMAP_* */
+static int aniso_mip_filter(GLint f) { return f >= 0x2700 && f <= 0x2703; }
 
 void af_TexParameterf(GLenum target, GLenum pname, GLfloat v)
 {
@@ -181,13 +166,13 @@ void af_DeleteTextures(GLsizei n, const GLuint *names)
 {
     static void(APIENTRY * real)(GLsizei, const GLuint *);
     if (!real) real = gl_real("glDeleteTextures");
+    gmv_gl_tex_deleted(n, names);
     for (GLsizei i = 0; names && i < n; i++)
         if (names[i] < g_af_n)
             memset(&g_af[names[i]], 0, sizeof *g_af);
     if (real) real(n, names);
 }
 
-/* PAD_ICONS (padicons.c): it sees the uploads of compressed textures and the deletes. */
 void pi_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w, GLsizei h,
                                     GLint border, GLsizei size, const void *data)
 {
@@ -201,6 +186,7 @@ void pi_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w,
         if (!real) real = gl_real("glCompressedTexImage2D");
         if (real) real(target, level, ifmt, w, h, border, size, data);
     }
+    gmv_gl_tex_size(target, level, w, h);
     if (target == GL_TEXTURE_2D)
         gmv_padicons_upload(level, ifmt, w, h, size, data);
 }

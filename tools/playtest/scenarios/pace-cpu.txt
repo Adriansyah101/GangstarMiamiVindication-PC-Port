@@ -1,5 +1,4 @@
-# The game's CPU time standing in the city at 150 ticks a second (FRAME_MS=6.6667), in front, then behind another
-# window (BACKGROUND_THROTTLE): run it with PRECISE_WAIT=1 and =0 (bench.ps1 -Ini) to compare the pacer's waits
+# CPU time in the city at 150 ticks/s (FRAME_MS=6.6667), front and background; compare PRECISE_WAIT=1/0 via bench.ps1 -Ini
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1600

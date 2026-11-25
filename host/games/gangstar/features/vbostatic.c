@@ -1,47 +1,3 @@
-/* vbostatic.c -- STATIC_VBO (a port performance fix, [Advanced], on by default and under
-   ORIGINAL_MAC_EXPERIENCE): the game's models that stay unchanged are kept in GL buffer objects.
-   Measured: time inside the draws 185 -> 77 ms a second (10.9 -> 4.7 us a draw), no crash, no
-   visible change.  The per-site counts, the event lines and the fault dump are dev only.
-
-   The game's glitch buffers (IBuffer) and where they live.
-
-   glitch keeps a buffer's data in plain memory when its usage is 4 and draws it from client arrays;
-   usages 0-2 (GL_STATIC/DYNAMIC/STREAM_DRAW) get a GL buffer object, filled at the first bind and
-   refilled with glBufferSubData when the buffer is marked changed (byte +0x12 bit 2, which its map
-   0x517b10 sets for any access but the GL-mapped ones).  The Collada mesh loaders create theirs with
-   usage 4, so the city is drawn from client arrays and the driver copies it every draw.
-
-   PERF_PROFILE: the IBuffer constructor call in createBuffer (0x501af1 -> 0x4c6ae0) is re-aimed to
-   count the buffers each game site creates by type and usage, and map 0x517b10 is hooked to count
-   the accesses asked for, on buffers with and without a GL buffer behind them.
-
-   GMV_VBO_STATIC=1 (the experiment).  First try (every usage-4 buffer made static at creation): the
-   batch mesh's per-draw index ranges (0x468f82, ~5000 a second) piled up until the driver crashed, and
-   HUD parts went missing / artefacts showed -- some buffers are written behind the engine's back.
-   Now a vertex or index buffer is only watched at creation (kept usage 4):
-   - between frames its data is checksummed, a few MB a frame in turn; one unchanged for VS_QUIET
-     checks in a row and not mapped gets usage 0 and the changed bit, so the engine's next bind makes
-     its GL buffer from the data;
-   - map on a converted buffer puts it back to usage 4 (its GL buffer deleted) before the map runs, so
-     the write lands in the data the draws then use;
-   - a converted buffer whose checksum changes all the same (written without map) is put back too
-     (these rechecks run at VS_BUDGET_STATIC a frame, so one can show stale for up to ~0.5 s);
-   - a buffer put back is never converted again; the destructors (CBuffer vtable 0x680a48 slots 0/1)
-     drop it from the watch.
-   Second try crashed in the menu (the driver reading freed client memory): bindImpl (slot 3, 0x504580)
-   frees the buffer's data after the GL upload when its caller asks (setData(size, 0, own) 0x5177f0),
-   and other objects still point into that memory.  Watched buffers are now always bound keeping it
-   (it never happened in the runs after).  The menu crash itself (frame 3420 each time): a buffer made
-   with size 0 (0x315f7a) gets its data through setData 0x5177f0, not map; on a converted buffer glitch
-   only BufferSubData's the new data into the GL buffer made at the old size, so the draw indexed past
-   the vertices.  setData is hooked too: a converted buffer goes back to client memory first.
-   Not watched: the batch ranges (0x468f82), any site past VS_SITE_MAX buffers, and the sites seen
-   writing their buffers behind the engine's back (vs_skip), which the checksum only catches late.
-
-   Buffer fields: +8 data, +0xc size, +0x10 type (0 vertex, 1 index), +0x11 usage, +0x12 flags (2 =
-   changed, 8 = has GL storage, 0x20 = GL-mapped), +0x13 map state, +0x14 driver (+0x224 + type*4 =
-   its bound-buffer cache), +0x18 GL name. */
-
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,42 +10,37 @@
 #include "gangstar.h"
 #include "glshim.h"
 
-/* Never converted: CBatchMesh's per-draw index ranges (wrapping other buffers' memory, thousands a
-   second), and the sites whose buffers were seen changed without map or setData (test runs). */
 static const uint32_t vs_skip[] = {0x468f82u, 0x315f7au, 0x3162b6u, 0x316854u, 0x469f4fu};
 
-#define VS_CTOR_SITE 0x00501af1u                        /* createBuffer: call IBuffer ctor */
+#define VS_CTOR_SITE 0x00501af1u
 #define VS_CTOR 0x004c6ae0u
-#define VS_MAP 0x00517b10u                              /* IBuffer::map(buffer, access) */
-#define VS_VTBL 0x00680a48u                             /* CBuffer vtable: [0] 0x5036c0, [1] 0x5035b0 */
+#define VS_MAP 0x00517b10u
+#define VS_VTBL 0x00680a48u                             /* 0x5036c0 0x5035b0 */
 static const unsigned char vs_map_pro[7] = {0x55, 0x89, 0xe5, 0x53, 0x8b, 0x4d, 0x08};
-#define VS_SETDATA 0x005177f0u                          /* IBuffer::setData(buffer, size, data, own) */
+#define VS_SETDATA 0x005177f0u
 static const unsigned char vs_set_pro[6] = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x28};
 typedef void (*setdata_fn)(void *buf, unsigned size, void *data, int own);
-static setdata_fn g_setdata;                            /* trampoline */
+static setdata_fn g_setdata;
 
-#define VS_QUIET 4                                      /* unchanged checks before converting */
-#define VS_BUDGET (3u << 20)                            /* bytes of watched buffers checksummed a frame */
-/* The converted ones are rechecked more slowly: map and setData already put them back, so this only
-   catches a site writing behind the engine's back (none left after vs_skip in the test runs).
-   At 3 MB a frame the rechecks took ~9% of a tick; 512 KB goes round ~30 MB in about half a second. */
+#define VS_QUIET 4
+#define VS_BUDGET (3u << 20)
 #define VS_BUDGET_STATIC (512u << 10)
 
 typedef void (*ctor_fn)(void *obj, void *drv, int type, int usage, unsigned size, void *data, int keep);
 typedef void *(*map_fn)(void *buf, int access);
 typedef void (*dtor_fn)(void *obj);
 typedef void (*bind_fn)(void *buf, int drop);
-static map_fn g_map;                                    /* trampoline */
+static map_fn g_map;
 static dtor_fn g_dtor0, g_dtor1;
 static bind_fn g_bind;
-#define VS_BIND 0x00504580u                             /* CBuffer vtable slot 3: bindImpl(buf, drop data) */
+#define VS_BIND 0x00504580u
 
-static int g_static;                                    /* STATIC_VBO */
+static int g_static;
 static volatile LONG g_lockv;
-static DWORD g_gl_tid;                                  /* the thread that presents (GL context) */
+static DWORD g_gl_tid;
 
 #define VS_SITES 64
-#define VS_SITE_MAX 2000                                /* a site past this many makes throwaway buffers */
+#define VS_SITE_MAX 2000
 static struct site {
     uint32_t ret;
     unsigned n, by_usage[6], by_type[4];
@@ -97,26 +48,25 @@ static struct site {
     unsigned long long bytes, conv_bytes;
 } g_site[VS_SITES];
 static int g_nsite;
-static unsigned g_more;                                 /* sites past the table */
+static unsigned g_more;
 
 #if GMV_DEV
-static volatile LONG g_map_n[8][2];                     /* access (0-7) x has GL storage */
+static volatile LONG g_map_n[8][2];
 #endif
 
-/* ---- watched buffers: a dense array and an open-addressing index by object ---- */
 enum { W_WATCH, W_STATIC, W_NEVER };
 typedef struct {
     uint8_t *obj;
-    uint32_t s1, s2;                                    /* checksum at the last check */
+    uint32_t s1, s2;
     uint16_t quiet;
     uint8_t state, site;
 } went;
 static went *g_w;
 static int g_nw, g_wcap;
-static int32_t *g_ix;                                   /* -1 empty */
-static uint32_t g_ixcap;                                /* power of 2 */
-static int g_cursor, g_scursor;                         /* next watched / converted entry to check */
-static uint8_t **g_byname;                              /* GL name -> the buffer last bound with it (GL thread) */
+static int32_t *g_ix;
+static uint32_t g_ixcap;
+static int g_cursor, g_scursor;
+static uint8_t **g_byname;
 static uint32_t g_bynamecap;
 static struct { unsigned conv, rev_map, rev_hash, rev_set, leaked, gone, kept; unsigned long long conv_bytes; } g_tot;
 
@@ -196,7 +146,6 @@ static void vs_add(uint8_t *obj, int site)
     g_ix[i] = g_nw++;
 }
 
-/* Remove slot i of the index (backward-shift deletion). */
 static void vs_ix_del(uint32_t i)
 {
     uint32_t m = g_ixcap - 1;
@@ -204,7 +153,6 @@ static void vs_ix_del(uint32_t i)
     for (uint32_t j = (i + 1) & m; g_ix[j] >= 0; j = (j + 1) & m) {
         int32_t k = g_ix[j];
         uint32_t h = vs_slot(g_w[k].obj);
-        /* move k back to i if its home is not in (i, j] cyclically */
         if (((j - h) & m) >= ((j - i) & m)) {
             g_ix[i] = k;
             g_ix[j] = -1;
@@ -227,7 +175,7 @@ static void vs_remove(const void *obj)
         i = (i + 1) & (g_ixcap - 1);
     vs_ix_del(i);
     int last = g_nw - 1;
-    if (k != last) {                                    /* the last entry moves into k */
+    if (k != last) {
         uint32_t j = vs_slot(g_w[last].obj);
         while (g_ix[j] != last)
             j = (j + 1) & (g_ixcap - 1);
@@ -238,7 +186,6 @@ static void vs_remove(const void *obj)
     g_tot.gone++;
 }
 
-/* Fletcher-style sums in 4 lanes of 32 bits, 16 bytes a step (SSE2) */
 __attribute__((target("sse2")))
 static void vs_sum(const uint8_t *p, uint32_t n, uint32_t *a, uint32_t *b)
 {
@@ -264,7 +211,6 @@ static void vs_sum(const uint8_t *p, uint32_t n, uint32_t *a, uint32_t *b)
     *b = s2;
 }
 
-/* The first VS_EVENTS conversions, put-backs and destructions of static buffers, logged as they happen. */
 #if GMV_DEV
 #define VS_EVENTS 300
 #endif
@@ -286,7 +232,6 @@ static void vs_event(const char *what, const uint8_t *b, int site)
 #endif
 }
 
-/* Back to client memory (under the lock). */
 static void vs_revert(uint8_t *b)
 {
     uint8_t f = b[0x12];
@@ -301,24 +246,24 @@ static void vs_revert(uint8_t *b)
             memcpy(&drv, b + 0x14, 4);
             uint32_t *cache = (uint32_t *)(drv + 0x224 + 4 * (b[0x10] & 3));
             if (*cache == name)
-                *cache = 0;                             /* GL unbinds a deleted buffer */
+                *cache = 0;
             if (del) {
-                gmv_gl_buffers_deleted(1, &name);       /* QUERY_FREE's client arrays */
+                gmv_gl_buffers_deleted(1, &name);
                 del(1, &name);
                 memset(b + 0x18, 0, 4);
             } else
                 g_tot.leaked++;
         } else if (name)
-            g_tot.leaked++;                             /* not the GL thread: left (never deleted) */
+            g_tot.leaked++;
         b[0x12] = (uint8_t)(f & ~(8 | 2));
     } else
         b[0x12] = (uint8_t)(f & ~2);
 }
 
+/* 0x4c6ae0 0x501af1 */
 static void vs_ctor(void *obj, void *drv, int type, int usage, unsigned size, void *data, int keep)
 {
-    /* createBuffer's frame: push ebp; mov ebp, esp; sub esp, 0x38 -- its return address sits 0x3c
-       above the first argument of this call. */
+    /* sub esp,0x38 0x38 0x3c */
     uintptr_t at = (uintptr_t)&obj + 0x3c;
     uint32_t ret = *(const volatile uint32_t *)at;
     ((ctor_fn)(uintptr_t)VS_CTOR)(obj, drv, type, usage, size, data, keep);
@@ -346,6 +291,7 @@ static void vs_ctor(void *obj, void *drv, int type, int usage, unsigned size, vo
     vs_unlock();
 }
 
+/* 0x517b10 +0x12 */
 static void *vs_map(void *buf, int access)
 {
     uint8_t *b = buf;
@@ -371,8 +317,6 @@ static void *vs_map(void *buf, int access)
     return g_map(buf, access);
 }
 
-/* A watched buffer keeps its data at the bind: it is what other objects point into and what a put
-   back buffer is drawn from. */
 static void vs_bind(void *buf, int drop)
 {
     if ((drop & 0xff) && g_static) {
@@ -386,7 +330,7 @@ static void vs_bind(void *buf, int drop)
     uint32_t name0;
     memcpy(&name0, (uint8_t *)buf + 0x18, 4);
     g_bind(buf, drop);
-    if (g_static) {                                     /* GL name -> buffer, for gmv_vbostatic_client */
+    if (g_static) {
         uint32_t name;
         memcpy(&name, (uint8_t *)buf + 0x18, 4);
         if (name && !name0) {
@@ -413,9 +357,6 @@ static void vs_bind(void *buf, int drop)
     }
 }
 
-/* Where an array or index pointer given while GL buffer `name` was bound lies in that buffer's data, for
-   the host's own readers of the vertices (the sky's colours, the sea).  Only for a buffer made static
-   here (its data kept and unchanged); NULL otherwise.  GL thread. */
 const void *gmv_vbostatic_client(unsigned name, uintptr_t off)
 {
     if (!g_static || name >= g_bynamecap || !g_byname[name])
@@ -423,7 +364,7 @@ const void *gmv_vbostatic_client(unsigned name, uintptr_t off)
     uint8_t *b = g_byname[name];
     const void *r = NULL;
     vs_lock();
-    int k = vs_find(b);                                 /* b is dereferenced only while it is a live buffer */
+    int k = vs_find(b);
     if (k >= 0 && g_w[k].state == W_STATIC && (b[0x12] & 8)) {
         uint32_t nm, size;
         uint8_t *data;
@@ -437,8 +378,6 @@ const void *gmv_vbostatic_client(unsigned name, uintptr_t off)
     return r;
 }
 
-/* New data (or a new size) for a buffer: glitch would only BufferSubData it into the GL buffer made at
-   the old size, so a converted one goes back to client memory first. */
 static void vs_setdata(void *buf, unsigned size, void *data, int own)
 {
     if (g_static) {
@@ -476,15 +415,13 @@ static void vs_dtor1(void *obj)
     g_dtor1(obj);
 }
 
-/* Checksum one entry: a watched one is converted after VS_QUIET quiet checks, a converted one that
-   changed goes back.  Returns the bytes read. */
 static uint32_t vs_check(went *e)
 {
     uint8_t *b = e->obj, *data;
     uint32_t size;
     memcpy(&data, b + 8, 4);
     memcpy(&size, b + 0xc, 4);
-    if (!data || !size || b[0x13])                      /* no data, or mapped right now */
+    if (!data || !size || b[0x13])
         return 0;
     uint32_t s1, s2;
     vs_sum(data, size, &s1, &s2);
@@ -502,8 +439,8 @@ static uint32_t vs_check(went *e)
     } else if (!same)
         e->quiet = 0;
     else if (++e->quiet >= VS_QUIET && b[0x11] == 4 && !(b[0x12] & 8)) {
-        b[0x11] = 0;                                    /* GL_STATIC_DRAW */
-        b[0x12] |= 2;                                   /* the next bind makes the GL buffer */
+        b[0x11] = 0;
+        b[0x12] |= 2;
         e->state = W_STATIC;
         vs_event("made static", b, e->site);
         g_tot.conv++;
@@ -514,7 +451,6 @@ static uint32_t vs_check(went *e)
     return size;
 }
 
-/* Walk the entries in the given state from *cur on, until budget bytes are checked or all were seen */
 static void vs_round(int *cur, int state, uint32_t budget)
 {
     uint32_t done = 0;
@@ -527,8 +463,6 @@ static void vs_round(int *cur, int state, uint32_t budget)
     }
 }
 
-/* Between frames, on the GL thread: checksum the watched buffers in turn, convert the quiet ones and
-   (more slowly) put back the converted ones that changed. */
 void gmv_vbostatic_frame(void)
 {
     if (!g_static)
@@ -540,27 +474,14 @@ void gmv_vbostatic_frame(void)
     vs_unlock();
 }
 
-static int vs_patch(uint32_t at, const void *bytes, size_t n)
-{
-    DWORD old;
-    if (!VirtualProtect((void *)(uintptr_t)at, n, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    memcpy((void *)(uintptr_t)at, bytes, n);
-    VirtualProtect((void *)(uintptr_t)at, n, old, &old);
-    return 1;
-}
-
 void gmv_vbostatic_install(void)
 {
     const char *e = gmv_getenv("GMV_STATIC_VBO");
     int want = gmv_env_flag(e, 1);
     if (!want && !gmv_perf_on())
         return;
-    const unsigned char *c = (const unsigned char *)(uintptr_t)VS_CTOR_SITE;
     const uint32_t *vt = (const uint32_t *)(uintptr_t)VS_VTBL;
-    int32_t rel;
-    memcpy(&rel, c + 1, 4);
-    if (c[0] != 0xe8 || VS_CTOR_SITE + 5 + (uint32_t)rel != VS_CTOR || vt[0] != 0x5036c0u || vt[1] != 0x5035b0u ||
+    if (code_call_target(VS_CTOR_SITE) != VS_CTOR || vt[0] != 0x5036c0u || vt[1] != 0x5035b0u ||
         vt[3] != VS_BIND || memcmp((const void *)(uintptr_t)VS_MAP, vs_map_pro, sizeof vs_map_pro) ||
         memcmp((const void *)(uintptr_t)VS_SETDATA, vs_set_pro, sizeof vs_set_pro)) {
         gmv_log("[vbostatic] the buffer code is not as expected; skipped\n");
@@ -569,11 +490,11 @@ void gmv_vbostatic_install(void)
     unsigned char *tr = VirtualAlloc(NULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!tr)
         return;
-    memcpy(tr, vs_map_pro, sizeof vs_map_pro);          /* map's first 3 instructions, then back */
+    memcpy(tr, vs_map_pro, sizeof vs_map_pro);
     tr[7] = 0xe9;
     int32_t r = (int32_t)(VS_MAP + 7 - (uint32_t)(uintptr_t)(tr + 12));
     memcpy(tr + 8, &r, 4);
-    unsigned char *ts = tr + 16;                        /* setData's first 3 instructions, then back */
+    unsigned char *ts = tr + 16;
     memcpy(ts, vs_set_pro, sizeof vs_set_pro);
     ts[6] = 0xe9;
     r = (int32_t)(VS_SETDATA + 6 - (uint32_t)(uintptr_t)(ts + 11));
@@ -581,20 +502,14 @@ void gmv_vbostatic_install(void)
     FlushInstructionCache(GetCurrentProcess(), tr, 4096);
     g_map = (map_fn)(void *)tr;
     g_setdata = (setdata_fn)(void *)ts;
-    unsigned char js[5] = {0xe9};
-    int32_t rs = (int32_t)((uint32_t)(uintptr_t)vs_setdata - (VS_SETDATA + 5));
-    memcpy(js + 1, &rs, 4);
     g_dtor0 = (dtor_fn)(uintptr_t)vt[0];
     g_dtor1 = (dtor_fn)(uintptr_t)vt[1];
     g_bind = (bind_fn)(uintptr_t)vt[3];
     uint32_t bnd = (uint32_t)(uintptr_t)vs_bind;
-    unsigned char j[5] = {0xe9};
-    r = (int32_t)((uint32_t)(uintptr_t)vs_map - (VS_MAP + 5));
-    memcpy(j + 1, &r, 4);
     uint32_t d[2] = {(uint32_t)(uintptr_t)vs_dtor0, (uint32_t)(uintptr_t)vs_dtor1};
-    r = (int32_t)((uint32_t)(uintptr_t)vs_ctor - (VS_CTOR_SITE + 5));
-    if (!vs_patch(VS_VTBL, d, sizeof d) || !vs_patch(VS_VTBL + 12, &bnd, 4) || !vs_patch(VS_MAP, j, 5) ||
-        !vs_patch(VS_SETDATA, js, 5) || !vs_patch(VS_CTOR_SITE + 1, &r, 4)) {
+    if (!code_write(VS_VTBL, d, sizeof d) || !code_write(VS_VTBL + 12, &bnd, 4) ||
+        !code_jmp(VS_MAP, (void *)vs_map) || !code_jmp(VS_SETDATA, (void *)vs_setdata) ||
+        !code_call(VS_CTOR_SITE, (void *)vs_ctor)) {
         gmv_log("[vbostatic] patch failed (%lu)\n", GetLastError());
         FlushInstructionCache(GetCurrentProcess(), NULL, 0);
         return;
@@ -606,7 +521,6 @@ void gmv_vbostatic_install(void)
 }
 
 #if GMV_DEV
-/* PERF_PROFILE, every 5 s: the sites (when buffers were made since), the conversions and the maps. */
 void gmv_vbostatic_report(double seconds)
 {
     if (seconds <= 0 || !g_map)
@@ -653,8 +567,6 @@ void gmv_vbostatic_report(double seconds)
             m[4][1] / seconds, m[5][0] / seconds, m[5][1] / seconds);
 }
 
-/* From the fault handler (no lock: the faulting thread may hold it): the static buffers, and the GL
-   bindings and array pointers when the fault is on the GL thread. */
 void gmv_vbostatic_fault(void)
 {
     if (!g_static)

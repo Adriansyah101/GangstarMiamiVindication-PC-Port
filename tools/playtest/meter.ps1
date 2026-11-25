@@ -1,4 +1,3 @@
-# Logs the default output device's peak meter, and whether a session of a given process is active.
 param([string]$Out, [int]$Seconds = 60)
 Add-Type -TypeDefinition @'
 using System;

@@ -18,4 +18,9 @@ expectlog ^\[gamepatch\] start-up loading screen takes
 expectlog ^\[gamepatch\] streaming wait no longer sleeps
 expectlog ^\[gamepatch\] streaming wait takes 200 items a tick
 nolog ^\[gamepatch\] full-screen fades cover the top row
+nolog ^\[aa\] ALPHA_TO_COVERAGE=1
+nolog ^\[aa\] POST_AA=
+nolog ^\[time\] (CONTINUE, |SERVICES: |TIME OF DAY page)
 nolog ^\[gamepatch\] main menu takes clicks during its background fades
+nolog ^\[gamepatch\] AI drivers steer by the heading on the ground
+nolog ^\[gamepatch\] a swimmer the script seats in a vehicle stops swimming first

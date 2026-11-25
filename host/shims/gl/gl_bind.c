@@ -1,4 +1,3 @@
-/* gl_bind.c -- CGL, and binding the game's GL imports to opengl32 */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,14 +9,12 @@
 #include "shims.h"
 #include "glshim.h"
 
-/* ---- CGL (low-level OpenGL framework C ABI; cdecl, we no-op) -------------------------- */
-
 #define FN(mach_name, host_fn) {mach_name, (void *)(host_fn)}
 
 static int cgl_set_parameter(void *ctx, int param, const void *val)
 {
     (void)ctx; (void)param; (void)val;
-    return 0;                                   /* kCGLNoError */
+    return 0;
 }
 static int cgl_get_parameter(void *ctx, int param, int *val)
 {
@@ -28,17 +25,12 @@ static int cgl_get_parameter(void *ctx, int param, int *val)
 }
 static int cgl_enable(void *ctx, int feature)  { (void)ctx; (void)feature; return 0; }
 static int cgl_disable(void *ctx, int feature) { (void)ctx; (void)feature; return 0; }
-/* -[EAGLView reshape] brackets its GL calls with CGLLockContext/CGLUnlockContext (thread safety
-   for the single GL context).  We render single-threaded on the context's thread, so these are
-   no-ops returning kCGLNoError. */
 static int cgl_lock(void *ctx)   { (void)ctx; return 0; }
 static int cgl_unlock(void *ctx) { (void)ctx; return 0; }
 
-/* ---- binding the game's GL imports to opengl32 (cdecl -> stdcall) --------------------- */
+extern void gmv_gl_lazy(void);
 
-extern void gmv_gl_lazy(void);                  /* shimsobjc.S */
-
-/* One per GL import: the resolved stdcall fn (lazily filled) and the GL name (no underscore). */
+/* GL __stdcall */
 struct glcell {
     void *fn;
     const char *name;
@@ -48,11 +40,6 @@ struct glcell {
 static uint8_t *g_gl_thunks;
 static size_t g_gl_off;
 
-/* The one place the host looks up a GL function, by its GL name ("glClear"), on both systems: SDL asks
-   the driver (wglGetProcAddress, glXGetProcAddress or eglGetProcAddress) and then the GL library
-   itself.  Needs the GL context current.  Some Windows drivers answer 1, 2, 3 or -1 for a name they
-   do not hand out, the GL 1.1 functions among them, and SDL passes that on as a function: those count
-   as no answer, and Windows then takes the function from opengl32.dll, where GL 1.1 lives. */
 void *gl_real(const char *name)
 {
     void *p = (void *)(uintptr_t)SDL_GL_GetProcAddress(name);
@@ -69,7 +56,6 @@ void *gl_real(const char *name)
     return p;
 }
 
-/* Called by gmv_gl_lazy on first use: resolve the GL function now that a context exists. */
 void *gmv_gl_lookup(struct glcell *c)
 {
     if (!c->fn && !c->tried) {
@@ -81,7 +67,7 @@ void *gmv_gl_lookup(struct glcell *c)
     return c->fn;
 }
 
-/* A lazily-bound GL thunk: `mov eax, <cell> ; jmp gmv_gl_lazy`. */
+/* mov eax; jmp gmv_gl_lazy */
 void *gmv_gl_resolve(const char *name)
 {
     if (!name || strncmp(name, "_gl", 3) != 0)
@@ -93,12 +79,12 @@ void *gmv_gl_resolve(const char *name)
         const char *e = gmv_dbgenv("GMV_GL_TRACE");
         g_gl_trace = gmv_env_on(e);
 #endif
-        const char *nf = gmv_getenv("GMV_NO_FLICKER");   /* default ON; set GMV_NO_FLICKER=0 to disable */
+        const char *nf = gmv_getenv("GMV_NO_FLICKER");
         g_no_flicker = gmv_env_flag(nf, 1);
-        const char *tf = gmv_getenv("GMV_TEXFIX");       /* default ON; GMV_TEXFIX=0 to compare */
+        const char *tf = gmv_getenv("GMV_TEXFIX");
         g_texfix = gmv_env_flag(tf, 1);
-        g_tab_live = gmv_config_tab();                  /* also under ORIGINAL_MAC_EXPERIENCE, which it switches */
-        msaa_wrap = 1;                                  /* the screen FBO is made at any MSAA (msaa_init) */
+        g_tab_live = gmv_config_tab();
+        msaa_wrap = 1;
         gmv_game_gl_setup();
     }
     {
@@ -106,13 +92,15 @@ void *gmv_gl_resolve(const char *name)
         if (t)
             return t;
     }
-    if (gmv_gl_query_free()) {                          /* QUERY_FREE: the client arrays are kept (gl_arrays.c) */
+    if (gmv_gl_query_free()) {
         void *t = gmv_gl_arrays_intercept(name);
         if (t)
             return t;
         if (!strcmp(name, "_glClientActiveTexture") || !strcmp(name, "_glClientActiveTextureARB") ||
-            !strcmp(name, "_glEnableClientState") || !strcmp(name, "_glDisableClientState"))
-            return gl_trace_intercept(name);            /* the TEXFIX wrappers note them */
+            !strcmp(name, "_glEnableClientState") || !strcmp(name, "_glDisableClientState") ||
+            !strcmp(name, "_glEnable") || !strcmp(name, "_glDisable") || !strcmp(name, "_glColorMask") ||
+            !strcmp(name, "_glClearColor"))
+            return gl_trace_intercept(name);
     }
     if (msaa_wrap) {
         if (!strcmp(name, "_glGetIntegerv"))
@@ -124,12 +112,9 @@ void *gmv_gl_resolve(const char *name)
         if (!strcmp(name, "_glDrawBuffers"))
             return (void *)ms_DrawBuffers;
     }
-    /* glViewport + glBindFramebuffer are wrapped UNCONDITIONALLY: the window-follow (resolution)
-       logic in tr_Viewport must see every main-framebuffer viewport, and it relies on last_fb (set
-       by tr_BindFramebuffer) to tell the screen from an FBO -- independent of trace/anti-flicker. */
     if (!strcmp(name, "_glViewport") || !strcmp(name, "_glBindFramebuffer") ||
         !strcmp(name, "_glBindFramebufferEXT") || !strcmp(name, "_glDeleteFramebuffers") ||
-        !strcmp(name, "_glDeleteFramebuffersEXT"))      /* the deletes: QUERY_FREE's bindings */
+        !strcmp(name, "_glDeleteFramebuffersEXT"))
         return gl_trace_intercept(name);
 #if GMV_DEV
     if (gmv_prof_on()) {
@@ -138,11 +123,6 @@ void *gmv_gl_resolve(const char *name)
             return t;
     }
 #endif
-    /* The tr_* wrappers both trace AND track g_drew_since_swap (for the anti-flicker present-skip)
-       and the texture-unit state texfix needs, so install them when GMV_GL_TRACE, GMV_NO_FLICKER
-       or GMV_TEXFIX is set, for AMBIENT_OCCLUSION and BLOOM (draws, depth clears, depth test and fog) and
-       for the whole-world fog (and the hybrid fog's texture environments), and for the options menu to
-       switch those on. */
     if (g_gl_trace || g_no_flicker || g_texfix || gmv_game_gl_wants_draws()) {
         void *t = gl_trace_intercept(name);
         if (t)
@@ -158,13 +138,13 @@ void *gmv_gl_resolve(const char *name)
     struct glcell *cell = calloc(1, sizeof *cell);
     if (!cell)
         return NULL;
-    cell->name = _strdup(name + 1);             /* GL name without the leading underscore */
+    cell->name = _strdup(name + 1);
 
     uint8_t *p = g_gl_thunks + g_gl_off;
     g_gl_off += 16;
-    p[0] = 0xB8;                                 /* mov eax, imm32 (the cell) */
+    p[0] = 0xB8;                                 /* mov eax */
     memcpy(p + 1, &cell, 4);
-    p[5] = 0xE9;                                 /* jmp rel32 -> gmv_gl_lazy */
+    p[5] = 0xE9;
     uint32_t rel = (uint32_t)((uintptr_t)gmv_gl_lazy - (uintptr_t)(p + 10));
     memcpy(p + 6, &rel, 4);
     return p;

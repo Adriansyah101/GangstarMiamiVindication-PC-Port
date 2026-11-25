@@ -1,11 +1,9 @@
-# A first start with no GangstarMV.ini, on either kind of build: the file the game writes has the fixes in [Fixes] and
-# the speed-ups in [Advanced]. In the city a dev build logs [crowd] every 15 s; a release build logs none of that
-# periodic diagnostic output ([crowd], [shadow] casters with no view).
+# First start without GangstarMV.ini: [Fixes] and [Advanced] written; periodic diagnostics only in dev builds
 noini
 save Gangstar2.sav
-waitlog ^\[sunmoon\] glows hidden 150     # after the intro movie and the start-up warning, before the title
+waitlog ^\[sunmoon\] glows hidden 150
 wait 6
-click 0.5 0.5            # the title
+click 0.5 0.5
 wait 5
 shot menu
 click 0.13 0.39

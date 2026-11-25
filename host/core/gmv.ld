@@ -1,17 +1,7 @@
-/* GNU ld's default pei-i386 script (binutils 2.47) with one change: the game's address
-   range is the first section, so the kernel reserves it when it maps the exe -- before
-   any stack, heap or DLL can land there.  Link with --image-base=0x10000 and no relocs:
-   .gmvimg then sits at 0x11000 and the host's own code starts above the game image. */
-/* Copyright (C) 2014-2026 Free Software Foundation, Inc.
-   Copying and distribution of this script, with or without modification,
-   are permitted in any medium without royalty provided the copyright
-   notice and this notice are preserved.  */
 OUTPUT_FORMAT(pei-i386)
 SEARCH_DIR("=/mingw32/i686-w64-mingw32/lib"); SEARCH_DIR("=/mingw32/lib"); SEARCH_DIR("=/usr/local/lib"); SEARCH_DIR("=/lib"); SEARCH_DIR("=/usr/lib");
 SECTIONS
 {
-  /* Make the virtual address and file offset synced if the alignment is
-     lower than the target page size. */
   . = SIZEOF_HEADERS;
   . = ALIGN(__section_alignment__);
   .gmvimg  __image_base__ + __section_alignment__ :
@@ -28,17 +18,11 @@ SECTIONS
     *(.glue_7t)
     *(.glue_7)
     KEEP (*(SORT_NONE(.fini)))
-    /* ??? Why is .gcc_exc here?  */
      *(.gcc_exc)
     PROVIDE (etext = .);
     PROVIDE (_etext = .);
      KEEP (*(.gcc_except_table))
   }
-  /* The Cygwin32 library uses a section to avoid copying certain data
-     on fork.  This used to be named ".data".  The linker used
-     to include this between __data_start__ and __data_end__, but that
-     breaks building the cygwin32 dll.  Instead, we name the section
-     ".data_cygwin_nocopy" and explicitly include it after __data_end__. */
   .data BLOCK(__section_alignment__) :
   {
     __data_start__ = . ;
@@ -57,37 +41,14 @@ SECTIONS
     __rt_psrelocs_start = .;
     KEEP(*(.rdata_runtime_pseudo_reloc))
     __rt_psrelocs_end = .;
-    /* read-only parts of .didat */
-    /* This cannot currently be handled with grouped sections.
-	See pe.em:sort_sections.  */
     __DELAY_IMPORT_DIRECTORY_start__ = .;
     KEEP (SORT(*)(.didat$2))
     KEEP (SORT(*)(.didat$3))
     __DELAY_IMPORT_DIRECTORY_end__ = .;
-    /* These zeroes mark the end of the import list.  */
     . += (__DELAY_IMPORT_DIRECTORY_end__ - __DELAY_IMPORT_DIRECTORY_start__) ? 8*4 : 0;
     KEEP (SORT(*)(.didat$4))
     KEEP (SORT(*)(.didat$6))
     KEEP (SORT(*)(.didat$7))
-    /* .ctors & .dtors */
-       /* Note: we always define __CTOR_LIST__ and ___CTOR_LIST__ here,
-          we do not PROVIDE them.  This is because the ctors.o startup
-	  code in libgcc defines them as common symbols, with the
-          expectation that they will be overridden by the definitions
-	  here.  If we PROVIDE the symbols then they will not be
-	  overridden and global constructors will not be run.
-	  See PR 22762 for more details.
-
-	  This does mean that it is not possible for a user to define
-	  their own __CTOR_LIST__ and __DTOR_LIST__ symbols; if they do,
-	  the content from those variables are included but the symbols
-	  defined here silently take precedence.  If they truly need to
-	  be redefined, a custom linker script will have to be used.
-	  (The custom script can just be a copy of this script with the
-	  PROVIDE() qualifiers added).
-	  In particular this means that ld -Ur does not work, because
-	  the proper __CTOR_LIST__ set by ld -Ur is overridden by a
-	  bogus __CTOR_LIST__ set by the final link.  See PR 46.  */
        ___CTOR_LIST__ = .;
        __CTOR_LIST__ = .;
        LONG (-1);
@@ -95,8 +56,6 @@ SECTIONS
        KEEP(*(.ctor));
        KEEP(*(SORT_BY_NAME(.ctors.*)));
        LONG (0);
-       /* See comment about __CTOR_LIST__ above.  The same reasoning
-          applies here too.  */
        ___DTOR_LIST__ = .;
        __DTOR_LIST__ = .;
        LONG (-1);
@@ -104,24 +63,22 @@ SECTIONS
        KEEP(*(.dtor));
        KEEP(*(SORT_BY_NAME(.dtors.*)));
        LONG (0);
-    /* .CRT */
     ___crt_xc_start__ = . ;
-    KEEP (*(SORT(.CRT$XC*)))  /* C initialization */
+    KEEP (*(SORT(.CRT$XC*)))
     ___crt_xc_end__ = . ;
     ___crt_xi_start__ = . ;
-    KEEP (*(SORT(.CRT$XI*)))  /* C++ initialization */
+    KEEP (*(SORT(.CRT$XI*)))
     ___crt_xi_end__ = . ;
     ___crt_xl_start__ = . ;
-    KEEP (*(SORT(.CRT$XL*)))  /* TLS callbacks */
-    /* ___crt_xl_end__ is defined in the TLS Directory support code */
+    KEEP (*(SORT(.CRT$XL*)))
     ___crt_xp_start__ = . ;
-    KEEP (*(SORT(.CRT$XP*)))  /* Pre-termination */
+    KEEP (*(SORT(.CRT$XP*)))
     ___crt_xp_end__ = . ;
     ___crt_xt_start__ = . ;
-    KEEP (*(SORT(.CRT$XT*)))  /* Termination */
+    KEEP (*(SORT(.CRT$XT*)))
     ___crt_xt_end__ = . ;
     ___crt_xd_start__ = . ;
-    KEEP (*(SORT(.CRT$XD*)))  /* Dynamic TLS Initializer */
+    KEEP (*(SORT(.CRT$XD*)))
     ___crt_xd_end__ = . ;
   }
   ___RUNTIME_PSEUDO_RELOC_LIST_END__ = __rt_psrelocs_end;
@@ -159,11 +116,8 @@ SECTIONS
   }
   .idata BLOCK(__section_alignment__) :
   {
-    /* This cannot currently be handled with grouped sections.
-	See pe.em:sort_sections.  */
     KEEP (SORT(*)(.idata$2))
     KEEP (SORT(*)(.idata$3))
-    /* These zeroes mark the end of the import list.  */
     LONG (0); LONG (0); LONG (0); LONG (0); LONG (0);
     KEEP (SORT(*)(.idata$4))
     __IAT_start__ = .;
@@ -174,14 +128,8 @@ SECTIONS
   }
   .didat BLOCK(__section_alignment__) :
   {
-    /* This cannot currently be handled with grouped sections.
-	See pe.em:sort_sections.  */
     KEEP (SORT(*)(.didat$5))
   }
-  /* Windows TLS expects .tls$AAA to be at the start and .tls$ZZZ to be
-     at the end of section.  This is important because _tls_start MUST
-     be at the beginning of the section to enable SECREL32 relocations with TLS
-     data.  */
   .tls BLOCK(__section_alignment__) :
   {
     ___tls_start__ = . ;
@@ -194,7 +142,6 @@ SECTIONS
   }
   .endjunk BLOCK(__section_alignment__) :
   {
-    /* end is deprecated, don't use it */
     PROVIDE (end = .);
     PROVIDE ( _end = .);
      __end__ = .;
@@ -216,11 +163,6 @@ SECTIONS
   {
     *(.stabstr)
   }
-  /* DWARF debug sections.
-     Symbols in the DWARF debugging sections are relative to the beginning
-     of the section.  Unlike other targets that fake this by putting the
-     section VMA at 0, the PE format will not allow it.  */
-  /* DWARF 1.1 and DWARF 2.  */
   .debug_aranges BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_aranges)
@@ -237,7 +179,6 @@ SECTIONS
   {
     *(.zdebug_pubnames)
   }
-  /* DWARF 2.  */
   .debug_info BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_info .gnu.linkonce.wi.*)
@@ -294,7 +235,6 @@ SECTIONS
   {
     *(.zdebug_macinfo)
   }
-  /* SGI/MIPS DWARF 2 extensions.  */
   .debug_weaknames BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_weaknames)
@@ -327,7 +267,6 @@ SECTIONS
   {
     *(.zdebug_varnames)
   }
-  /* DWARF 3.  */
   .debug_pubtypes BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_pubtypes)
@@ -344,7 +283,6 @@ SECTIONS
   {
     *(.zdebug_ranges)
   }
-  /* DWARF 4.  */
   .debug_types BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_types .gnu.linkonce.wt.*)
@@ -353,7 +291,6 @@ SECTIONS
   {
     *(.zdebug_types .gnu.linkonce.wt.*)
   }
-  /* DWARF 5.  */
   .debug_addr BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_addr)
@@ -414,7 +351,6 @@ SECTIONS
   {
     *(.debug_sup)
   }
-  /* For Go and Rust.  */
   .debug_gdb_scripts BLOCK(__section_alignment__) (NOLOAD) :
   {
     *(.debug_gdb_scripts)
@@ -424,5 +360,3 @@ SECTIONS
     *(.zdebug_gdb_scripts)
   }
 }
-
-

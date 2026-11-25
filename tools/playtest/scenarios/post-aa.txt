@@ -1,0 +1,53 @@
+# POST_AA=1 on top of MSAA=4 (FXAA under the HUD), then POST AA OFF from the pause options in the city, no restart
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini MSAA=4
+ini POST_AA=1
+ini ALPHA_TO_COVERAGE=1
+ini BLOOM=0
+ini KEY_MOVE=1
+ini PERF_PROFILE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+wait 45
+shot fxaa full
+waitlog ^\[perf\] GPU, \d+ frames \(\d+ with the post pass\).* post AA (0\.0[1-9]|0\.[1-9]|[1-9]) 30
+key ESC
+wait 3
+click 0.19 0.33
+wait 3
+click 0.19 0.58
+wait 3
+click 0.839 0.27
+wait 2
+click 0.786 0.831
+wait 2
+click 0.786 0.831
+wait 2
+shot graphics3
+click 0.783 0.478
+wait 2
+click 0.734 0.902
+wait 2
+shot applied
+waitlog ^\[gamepatch\] options tab: POST_AA=0 in force now 10
+click 0.06 0.957
+wait 3
+key ESC
+waitlog ^\[post\] now: .*, alpha to coverage 1, post AA 0$ 20
+wait 12
+shot off full
+expectlog ^\[aa\] POST_AA=1: FXAA on the 3D picture under the HUD$
+expectlog ^\[aa\] ALPHA_TO_COVERAGE=1
+expectlog ^\[msaa\] MSAA=4.* 4x multisampled
+expectlog ^\[perf\]   ALPHA_TO_COVERAGE=1: \d+ alpha-tested draws a second, \d+ with the game's own 0x809e, \d+ given it here
+expectlog ^\[perf\] GPU, \d+ frames \(\d+ with the post pass\).* post AA 0\.00 \(a frame
+nolog POST_AA off
+nolog ^\[ao\] FXAA

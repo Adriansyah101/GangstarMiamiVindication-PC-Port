@@ -1,12 +1,14 @@
-GangstarMV PC Port V1.0.0 - what has been fixed and added
+GangstarMV PC Port V1.0.1 - what has been fixed and added
 ================================================================
 
 Every item below is a key in GangstarMV.ini. The fixes are on by default, and setting one to 0
 brings back the old behaviour. The iPhone features and PC enhancements are on by default in a new
 GangstarMV.ini (60 fps, draw distance 2, crowds at 3, every effect); 0 (or the Mac's value) turns
 one off, and ORIGINAL_MAC_EXPERIENCE=1 turns them all off. A key left blank or missing from the
-file means off, as on the Mac. In the source, docs\NOTES.md has the full write-up:
-its fix log has the items cited below, and its settings section covers the graphics enhancements.
+file takes its built-in default: off for most enhancements, as on the Mac, except TIME_OF_DAY,
+RANDOM_TIME_OF_DAY, AI_STEERING_FIX and BOAT_SEAT_FIX, which default to on, so a GangstarMV.ini
+from an earlier version gets them too. In the source, docs/NOTES.md has the full write-up: its
+fix log has the items cited below, and its settings section covers the graphics enhancements.
 
 
 THE GAMEPATCH TAB
@@ -16,6 +18,17 @@ GAMEPATCH_TAB  On by default. A GAMEPATCH tab in the game's options menu, below 
                of these settings from inside the game. A change is saved at once and most take
                effect at once. GAMEPATCH_TAB=0 removes it. With ORIGINAL_MAC_EXPERIENCE=1 the tab
                holds only that switch.
+               Some rows set several keys at once: ANTI-ALIASING (MSAA, ALPHA_TO_COVERAGE),
+               DYNAMIC SHADOWS (DYNAMIC_SHADOWS, SHADOW_QUALITY), GAMEPAD UI & ICONS (PAD_MENU,
+               PAD_HINTS, PAD_ICONS), RESTORED ADD-ON CONTENT (UC_CRUSHER, RADIO_SONGS),
+               ORIGINAL BUG FIXES (RADIO_LOGO_FIX, MENUFLASH_FIX, FADE_EDGE_FIX, SWITCH_SAVE_FIX,
+               AI_STEERING_FIX, BOAT_SEAT_FIX, MENU_FADE_CLICKS), HIDE DEAD ONLINE MENUS
+               (HIDE_MORE_GAMES, HIDE_GAMELOFT_LIVE) and CUTSCENE & POPUP KEYS (CUTSCENE_KEYS,
+               TUTORIAL_KEYS).
+               Such a row writes each of its keys to GangstarMV.ini; when the keys hold
+               values the row has no choice for, it shows CUSTOM until you change it.
+               STOPLOCK_FIX, MISSION_SAVE_FIX, LOAD_SLEEP_SKIP, LOAD_BUDGET and the port's
+               start-up fixes are not on the tab: they stay on and are set in GangstarMV.ini only.
 
 
 PORT BUGS (caused by running the Mac game on Windows)
@@ -145,7 +158,7 @@ Error box     When the game or the port cannot go on, a message box now says why
               OpenGL that cannot be started, as can happen with an old graphics driver. Problems
               the port survives do not show it.
 
-Crash dump    After a crash the port also leaves cache\GangstarMV.dmp, which shows what its threads
+Crash dump    After a crash the port also leaves cache/GangstarMV.dmp, which shows what its threads
 (with LOG=1)  were doing, so a crash the log cannot explain can still be traced. See LOG=1 below.
 
 DPI_AWARE     With Windows display scaling above 100%, Windows stretched the port's window, which
@@ -155,7 +168,7 @@ DPI_AWARE     With Windows display scaling above 100%, Windows stretched the por
 
 AZERTY        On a French or Belgian keyboard the port now tells the game so, and the game moves the
 (always on)   player with its own Z Q S D, as the Mac did. It takes effect on a first start: the keys
-              are kept in savegame\Gangstar2.preferences, so after playing on another layout, delete
+              are kept in savegame/Gangstar2.preferences, so after playing on another layout, delete
               that file to get them (the game's other settings in it start over too).
 
 Also fixed while bringing the port up (not switchable, part of the port itself): the black window
@@ -182,7 +195,8 @@ FADE_EDGE_FIX     With anti-aliasing on (the Mac's 4x), the black fades, such as
 MENU_FADE_CLICKS  Main-menu clicks were ignored for a second or so at a time, mostly while the
                   background scene loaded. The game's cutscene fader wipes all input on every tick
                   of a fade. During main-menu fades the host now keeps the input. Only the main
-                  menu is affected; cutscenes and missions keep the original lock. (notes item 10)
+                  menu is affected; cutscenes and missions keep the original lock. Also on the
+                  GAMEPATCH tab (FIXES: ORIGINAL BUG FIXES). (notes item 10)
 
 RADIO_LOGO_FIX    After getting into a car the HUD radio logo showed the station that played last
                   (104FM on the first car of a session) while the car's own station played. The
@@ -200,7 +214,7 @@ LOAD_BUDGET       The main menu's frame and buttons came in over the black in je
                   takes 200 items a tick from that queue, not 1500, so the same work is spread over
                   more frames: the longest frame after the first quarter second is about 32 ms. A
                   few heavy frames stay at the very start. Waits for streaming can last a little
-                  longer on a slow machine. Also on the GAMEPATCH tab (FIXES: SMOOTH CITY LOADING).
+                  longer on a slow machine. Set in GangstarMV.ini only.
                   (notes item 29)
 
 FAST_LOAD         The "Loading" screen after the start-up warning did one of its steps every 33 ms,
@@ -212,7 +226,7 @@ FAST_LOAD         The "Loading" screen after the start-up warning did one of its
 
 SWITCH_SAVE_FIX   A save made in free roam while you play as Betty gave her cash, armour, outfit
                   and weapons to Johnny when it was loaded. The save now keeps Johnny's; you still
-                  start where you saved. Also on the GAMEPATCH tab (FIXES: PLAYERSWITCH SAVE FIX).
+                  start where you saved. Also on the GAMEPATCH tab (FIXES: ORIGINAL BUG FIXES).
                   (notes item 23)
 
 MISSION_SAVE_FIX  Every save forgot Reginald's five missions: the game keeps its mission flags in 8
@@ -221,11 +235,10 @@ MISSION_SAVE_FIX  Every save forgot Reginald's five missions: the game keeps its
                   preset, so MISSION REPLAY still offers his missions once the preset is off.
                   (found when marking them done in a save; notes item 34)
 
-Origin collision  When a level starts, the buildings within about 225 m of the map's centre have
-(no key)          no collision until you move away and come back (the city grid's starting
-                  position is the map's centre). The Mac game has this too. Fixed only when
-                  DRAW_DISTANCE is above 1, where the same fault would cover most of the city; at
-                  DRAW_DISTANCE=1 the game is left as on the Mac. (notes item 13)
+Origin collision  Buildings within about 225 m of the map's centre had no collision when a level
+(no key)          started, on the Mac too. Fixed when DRAW_DISTANCE is above 1, where the fault
+                  would cover most of the city; V1.0.1 also fixes a case after CONTINUE where
+                  the fix itself dropped that collision. (notes items 13 and 41)
 
 (The death fade was first reported as a vanilla bug, but the cause turned out to be the port's
 graphics driver difference - see TEXFIX above.)
@@ -235,7 +248,8 @@ HIGH-FPS SUPPORT (matters most when FRAME_MS is not 16.667)
 -------------------------------------------------------------
 
 PHYSICS_SYNC  Step car/object physics once per tick, at the chosen tick rate, for smooth driving. On
-              by default, off with ORIGINAL_MAC_EXPERIENCE=1.
+              by default, off with ORIGINAL_MAC_EXPERIENCE=1. A helicopter rotor touching a wall
+              still wears at the Mac's rate, not once per tick. (notes item 49)
 CAMERA_SYNC   Keep the on-foot running camera sway as it looks at 60 ticks/s. On by default,
               but does nothing at 60.
 WALK_SYNC     Stop the walking characters in the main menu's scenes and in cutscenes from flicking
@@ -267,13 +281,25 @@ PC ENHANCEMENTS (beyond both originals; on by default)
 
 ANISOTROPIC_FILTERING  2, 4, 8 or 16: roads and walls stay sharp at a distance.
 
+ALPHA_TO_COVERAGE=1    With MSAA on, the edges of the world's cut-out textures (leaves, fences,
+                       railings and the like) are smoothed by the multisampling too. The game's
+                       own cut-out test stays, so nothing gets thinner or thicker; the HUD and
+                       other 2D drawing are left alone. No effect with MSAA=0. Also on the
+                       GAMEPATCH tab (DISPLAY: ANTI-ALIASING, 4X + A2C). (notes item 39)
+
+POST_AA=1              FXAA over the 3D picture, after the other effects and before the HUD, so
+                       text and the minimap stay sharp. 1 = always, on top of MSAA too (a little
+                       softer); auto = only while MSAA=0; 0 = off. It reads one copy of the
+                       screen, so its cost does not grow with MSAA. Also on the GAMEPATCH tab
+                       (POST AA). (notes item 39)
+
 AMBIENT_OCCLUSION=1    Soft contact shadows in corners and under cars, drawn under the HUD.
                        AO_STRENGTH (default 1.2) and AO_RADIUS (default 60) tune it.
 
-BLOOM=1                A soft glow around the bright parts of the world: neon, street lights,
-                       headlights, the sun. BLOOM_INTENSITY (default 1.0) and BLOOM_THRESHOLD
-                       (default 0.75) tune it. BLOOM=2 also makes the game's light sprites and the
-                       lit windows on the buildings glow (BLOOM_LIGHTS, BLOOM_WINDOWS).
+BLOOM=1                A soft glow around the brightest parts of the world, each in its own colour; walls,
+                       roads and the sky keep theirs, and checkpoint markers stay out of it. BLOOM=2
+                       adds the light sprites and lit windows (BLOOM_LIGHTS, BLOOM_WINDOWS). Tuned by
+                       BLOOM_INTENSITY (1.0) and BLOOM_THRESHOLD (0.5 in a new ini, 0.75 when blank).
 
 WATER_REFLECTIONS=1    The sea reflects the city and the sky. Only what is on screen can be
                        reflected, so the reflection fades to the sky's colour near the screen's
@@ -284,7 +310,9 @@ VEHICLE_REFLECTIONS=1  The shiny cars reflect the street, the buildings and the 
                        from what is on screen. Where nothing on screen lies along the reflection,
                        as on roofs and trunks seen from above, the screen itself is used as a
                        sphere map, looked up by the reflected direction, so those parts no longer
-                       look bare.
+                       look bare. The sphere map wraps round the body without a mirrored seam
+                       across the trunk, the roof or the rear glass, and it fades out on faces
+                       turned straight at the camera.
                        Matte cars stay matte. VEHICLE_REFLECTION_STRENGTH (default 2.0) tunes it.
                        Also on the GAMEPATCH tab (CAR REFLECTIONS).
 
@@ -305,8 +333,8 @@ GPU_PROFILE=auto       How the settings left on auto choose (MSAA, SHADOW_QUALIT
 SHADOW_QUALITY=auto    How fine the dynamic shadows are. 2 (HIGH) = a 2048 x 2048 shadow map looked
                        up 16 times a pixel. 1 (LOW) = 1024 x 1024 looked up 8 times, for graphics
                        built into the processor: the same shadows with slightly softer, blockier
-                       edges, and less of the GPU's time. Also on the options' VIDEO tab (SHADOW
-                       QUALITY), at once. auto (AUTO in the options) = by GPU_PROFILE: 1 on a
+                       edges, and less of the GPU's time. Also on the GAMEPATCH tab (DYNAMIC
+                       SHADOWS: LOW, HIGH), at once. auto (AUTO in the options) = by GPU_PROFILE: 1 on a
                        built-in GPU, 2 on a graphics card. Not used under ORIGINAL_MAC_EXPERIENCE,
                        which has no dynamic shadows.
 
@@ -319,11 +347,15 @@ DRAW_DISTANCE          1-4: draws the city up to 4 times as far as the Mac's 450
                        tables grow with it, so buildings keep their collision at any setting.
 
 TRAFFIC_DENSITY        0-4: how many cars drive around you, as a multiple of the Mac's (at most 18
-                       at once, fewer at night). New cars also turn up that much sooner.
+                       at once, fewer at night).
 PEDESTRIAN_DENSITY     0-4: the same for pedestrians (at most 14 at once on the Mac).
 PARKED_CAR_DENSITY     0-4: the same for parked cars (at most 10 at once on the Mac).
-                       Default 1, as on the Mac. High values cost frame rate. Also on the
+                       Default 3 (blank = 1, as on the Mac). High values cost frame rate. Also on the
                        GAMEPATCH tab (TRAFFIC, PEDESTRIANS, PARKED CARS).
+                       Extra cars and people spawn one per tick, stuck traffic backs up or is
+                       removed (with TRAFFIC_DENSITY above 1), and a car you chase in a mission
+                       keeps its speed through traffic, except in races. Traffic keeps driving
+                       below you while you fly a helicopter. Off under ORIGINAL_MAC_EXPERIENCE.
 
 FOG_MODE               0 = the game's own fog, on only some materials, as on the Mac, from 450 m
                            to 900 m at DRAW_DISTANCE=1, 50 m further for each 0.5 more (the Mac's
@@ -354,12 +386,12 @@ SHORT_WARNING=1        The "This game contains coarse language..." warning at st
 
 CUTSCENE_KEYS=1        Cutscenes as on a PC: no SKIP button, dialog arrows or mouse pointer on
                        screen. Esc or Enter skips the cutscene, Space shows the next line of
-                       dialog. Also on the GAMEPATCH tab (MENU: HIDE CUTSCENE KEYS), at once.
+                       dialog. Also on the GAMEPATCH tab (MENU: CUTSCENE & POPUP KEYS), at once.
                        (notes item 20)
 
 TUTORIAL_KEYS=1        Esc, Enter or Space presses the OK of a tutorial popup ("Combat ... OK").
                        In a question popup ("Repair? YES / NO") Enter or Space answers YES and
-                       Esc answers NO. Also on the GAMEPATCH tab (MENU: POPUP KEYS), at once.
+                       Esc answers NO. Also on the GAMEPATCH tab (MENU: CUTSCENE & POPUP KEYS), at once.
                        (notes item 21)
 
 PAD_LAYOUT=1           A gamepad layout like GTA V's (Xbox names; it assumes the standard
@@ -383,16 +415,16 @@ PAD_LAYOUT=1           A gamepad layout like GTA V's (Xbox names; it assumes the
 
 PAD_MENU=1             The gamepad works the menus: while the game shows its yellow pointer, the
                        left stick or the D-pad moves it, A (cross) clicks and B (circle) goes
-                       back like Esc. Also on the GAMEPATCH tab (PAD MENU POINTER).
+                       back like Esc. Also on the GAMEPATCH tab (FIXES: GAMEPAD UI & ICONS).
 
 PAD_HINTS=1            The tutorial boxes name the gamepad's buttons, those of the PAD_LAYOUT in
                        use, while the pad is the last thing you used. The texts are English; in
-                       another language the keyboard texts stay. Also on the GAMEPATCH tab (PAD
-                       BUTTON HINTS).
+                       another language the keyboard texts stay. Also on the GAMEPATCH tab (FIXES:
+                       GAMEPAD UI & ICONS).
 
 PAD_ICONS=1            The gamepad pictures of the options menu show the buttons of the pad you
                        last used, for an Xbox pad, a DualShock 4 or a DualSense. Other pads keep
-                       the game's own pictures. Also on the GAMEPATCH tab (FIXES: PAD BUTTON ICONS).
+                       the game's own pictures. Also on the GAMEPATCH tab (FIXES: GAMEPAD UI & ICONS).
 
 KEY_MOVE=1             Keyboard movement like a modern PC game: W/A/S/D together walk diagonally,
                        the character turns smoothly, and holding Alt walks instead of running.
@@ -406,7 +438,7 @@ MINIMAP_SHOPS=1       The minimap also shows the weapon shops, car rentals and r
 
 CUSTOM_RADIO=1         The car radio gets a sixth station after the game's five that plays your
                        own music: put mp3 files (or ogg, flac, wav, m4a, aac, wma) in the
-                       "custom radio" folder next to GangstarMV.exe. Switch to it like any
+                       "custom radio" folder next to the game executable. Switch to it like any
                        station; the songs play in a shuffled order and follow the game's MUSIC
                        volume. The HUD radio shows "PLAY LIST / MY MUSIC" for it, the logo the
                        game's files keep for the iPhone. CUSTOM_RADIO_VOLUME sets
@@ -421,15 +453,14 @@ PLAYERSWITCH_INVENTORY=1  When the story switches you to Betty, in free roam she
                        is Johnny's too. Missions keep the game's own loadout; money Betty
                        makes in a mission joins the shared wallet when free roam resumes.
                        Also on the GAMEPATCH tab (FIXES: PLAYERSWITCH INVENTORY, MAC /
-                       SHARED), at once. Tested OK. (notes item 24)
+                       SHARED), at once. (notes item 24)
 
 LC_SWITCH=1               Once every mission is done, a marker stands at L.C.'s hotel in free roam.
                        Walk into it and the screen fades, L.C. appears and you play as him, as
                        the game's own marker for Betty does; Johnny stays behind. The same
                        marker takes you back to Johnny. Never during a mission. His cash and
                        weapons follow PLAYERSWITCH_INVENTORY. Also on the GAMEPATCH tab (FIXES:
-                       PLAY AS L.C.), at once. Tested OK on foot, by car and by motorbike.
-                       (notes item 25)
+                       PLAY AS L.C.), at once. (notes item 25)
 
 MISSION_REPLAY=1       A MISSION REPLAY tab in the in-game SERVICES menu, below CORRUPTION, shows
                        the missions you have completed, with their giver, location, type and
@@ -438,17 +469,48 @@ MISSION_REPLAY=1       A MISSION REPLAY tab in the in-game SERVICES menu, below 
                        everything else goes back when it ends. Also on the GAMEPATCH tab (FIXES:
                        MISSION REPLAY), from the next opening of SERVICES.
 
+TIME_OF_DAY=1          A TIME OF DAY tab in the in-game SERVICES menu, below MISSION REPLAY,
+                       opens a page with the game's clock as HH:MM between a left and a right
+                       arrow, and the period it is in (MORNING, DAY, SUNSET or NIGHT) under it.
+                       Each arrow moves the clock one whole hour back or forward and sets the
+                       minutes to :00 (06:25 becomes 05:00 or 07:00), and the sky, fog, sun
+                       and moon, shadows, car lights and lit windows change at once, while the
+                       menu is still open. The clock then runs on at the game's pace. The tab is
+                       hidden during a mission, so the time a mission's script sets stays as it
+                       is. Also on the GAMEPATCH tab (FIXES: TIME OF DAY TAB), from the next
+                       opening of SERVICES. On when the key is blank or missing, as in a
+                       GangstarMV.ini from an earlier version; off with
+                       ORIGINAL_MAC_EXPERIENCE=1. (notes item 40)
+
+RANDOM_TIME_OF_DAY=1   CONTINUE in the main menu starts the city at a random time of day: one of
+                       the four periods at even odds, at a random minute in it. NEW GAME is left
+                       alone, so the first mission keeps its own time. The game does not keep
+                       the clock in Gangstar2.sav, so the save is not touched. Also on the
+                       GAMEPATCH tab (FIXES: RANDOM START TIME), at once. On when the key is
+                       blank or missing, as TIME_OF_DAY; off with ORIGINAL_MAC_EXPERIENCE=1.
+                       (notes item 40)
+
+AI_STEERING_FIX=1      Fix of the original game: AI drivers measured the angle to their next point in
+                       3D, so they weaved on straight roads, most of all Clive's SWAT van in ON A
+                       LION HUNT. They now steer by the heading on the ground. Also on the GAMEPATCH
+                       tab (FIXES: ORIGINAL BUG FIXES), at once. (notes item 43)
+
+BOAT_SEAT_FIX=1        Fix of the original game: when the cutscene of Clive's escape in ON A LION HUNT
+                       was watched to its end, he stood over his yacht's seat in a swimming pose.
+                       He now sits at the wheel. Also on the GAMEPATCH tab (FIXES: ORIGINAL BUG
+                       FIXES), at once. (notes item 44)
+
 UC_CRUSHER=1           After ON A LION HUNT, the Crusher monster truck of Urban Crime (the freemium
                        Gangstar Miami for iPhone) stands parked on the beach by LC's hotel, with
                        its own engine sound; nobody else drives it. It is not included: it needs
-                       add-on\crusher.pak next to the exe, made from your own copy of Urban Crime.
-                       Also on the GAMEPATCH tab (FIXES: CRUSHER MONSTER TRUCK), at once.
+                       add-on/crusher.pak next to the exe, made from your own copy of Urban Crime.
+                       Also on the GAMEPATCH tab (FIXES: RESTORED ADD-ON CONTENT), at once.
 
 RADIO_SONGS=1          The electro, hip-hop and rock stations also play the songs the Mac does not
                        have: nine of the iPhone version, and two rock songs of the Java version.
-                       They are not included: they need add-on\radio.pak next to the exe, made
+                       They are not included: they need add-on/radio.pak next to the exe, made
                        from your own copies of the iPhone version and of Gangstar: West Coast
-                       Hustle. Also on the GAMEPATCH tab (FIXES: RESTORED RADIO SONGS), at once.
+                       Hustle. Also on the GAMEPATCH tab (FIXES: RESTORED ADD-ON CONTENT), at once.
                        (notes item 26)
 
 
@@ -458,22 +520,27 @@ ORIGINAL_MAC_EXPERIENCE=1 - what stays on and what goes off
 The preset overrides the ini.
 
 Forced ON (they fix crashes, restore what the Mac showed, or load faster with the same result):
-  TEXFIX, SWAP_COPY, NO_FLICKER, VTXFIX, CRASH58_GUARD, STOPLOCK_FIX, FAST_FTELL, FAST_FSEEK,
-  FAST_MEMMOVE, STATIC_VBO, SHARED_RESOLVE, QUERY_FREE, STREAM_VBO, FILE_MISS_CACHE, FILE_POOL,
-  FOG_SKIP_FAR, PRECISE_WAIT, DPI_AWARE, LOAD_SLEEP_SKIP, LOAD_BUDGET=200, FAST_LOAD, and MSAA=4
+  TEXFIX, SWAP_COPY, NO_FLICKER, VTXFIX, CRASH58_GUARD, STOPLOCK_FIX, MISSION_SAVE_FIX, FAST_FTELL,
+  FAST_FSEEK, FAST_MEMMOVE, STATIC_VBO, SHARED_RESOLVE, QUERY_FREE, STREAM_VBO, FILE_MISS_CACHE,
+  FILE_POOL, FOG_SKIP_FAR, PRECISE_WAIT, DPI_AWARE, LOAD_SLEEP_SKIP, LOAD_BUDGET=200, FAST_LOAD,
+  and MSAA=4
 
 Forced OFF / back to Mac behaviour:
-  FRAME_MS and SWAP_INTERVAL -> defaults (60 ticks/s, vsync off)
+  FRAME_MS and SWAP_INTERVAL -> defaults (30 fps / 60 ticks/s, vsync off)
   PHYSICS_SYNC, CAMERA_SYNC, WALK_SYNC, AI_SYNC -> off
   MENUFLASH_FIX -> 0 (the raw 3D flash before the main menu shows again, as on the Mac)
   FADE_EDGE_FIX -> 0 (a line of picture along the top and left of black fades, as on the Mac)
   MENU_FADE_CLICKS -> 0 (the main menu ignores clicks during its fades again, as on the Mac)
   RADIO_LOGO_FIX -> 0 (the HUD radio logo can show the wrong station again, as on the Mac)
   SWITCH_SAVE_FIX -> 0 (a save made as Betty gives her things to Johnny again, as on the Mac)
-  SUN_MOON, SPAWN_FADE, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, CUSTOM_RADIO,
-  RADIO_SONGS, PLAYERSWITCH_INVENTORY, LC_SWITCH, UC_CRUSHER -> 0
-  ANISOTROPIC_FILTERING, AMBIENT_OCCLUSION, BLOOM, WATER_REFLECTIONS, VEHICLE_REFLECTIONS,
-  DYNAMIC_SHADOWS -> 0 (SHADOW_QUALITY -> default, unused without them)
+  AI_STEERING_FIX -> 0 (the AI drivers weave on straight roads again, as on the Mac)
+  BOAT_SEAT_FIX -> 0 (Clive treads water over his yacht's seat again, as on the Mac)
+  SUN_MOON, SPAWN_FADE, ALLOW_WEAPON_SPRINT, MINIMAP_SHOPS, MISSION_REPLAY, TIME_OF_DAY,
+  RANDOM_TIME_OF_DAY, CUSTOM_RADIO, RADIO_SONGS, PLAYERSWITCH_INVENTORY, LC_SWITCH,
+  UC_CRUSHER -> 0
+  ANISOTROPIC_FILTERING, ALPHA_TO_COVERAGE, POST_AA, AMBIENT_OCCLUSION, BLOOM,
+  WATER_REFLECTIONS, VEHICLE_REFLECTIONS, DYNAMIC_SHADOWS -> 0 (SHADOW_QUALITY -> default,
+  unused without them)
   DRAW_DISTANCE -> 1 (which also leaves the origin collision as on the Mac)
   TRAFFIC_DENSITY, PEDESTRIAN_DENSITY, PARKED_CAR_DENSITY -> 1
   FOG_MODE -> 0 (the game's own fog and distances), FOG_HEIGHT -> default
@@ -483,12 +550,10 @@ Forced OFF / back to Mac behaviour:
   NO_INTRO, SHOW_CURSOR -> 0
   BACKGROUND_THROTTLE -> 0 (full speed behind other windows and while minimized)
 
-The rule behind it: fixes for crashes and the port's rendering problems, the Mac's own
-anti-aliasing, and the speed-ups that give the same result stay on. The loading speed-ups are among
-them: without them each scene change in the main menu stalls for 116-219 ms, and how long a stall
-lasts depends on the machine, not on the game. Every fix of the original game's own bugs goes off,
-the visible ones too, and so does everything that changes timing, physics, what you hear or see
-beyond the Mac game, how the game responds to input, or what the radio HUD shows.
+The rule behind it: fixes for crashes and rendering problems, the Mac's own anti-aliasing and the
+speed-ups that give the same result (loading included) stay on. Every fix of the original game's
+own bugs goes off, and so does everything that changes timing, physics, input, or what you see and
+hear beyond the Mac game.
 
 Left as you set them: FULLSCREEN and the resolution, NO_AUDIO, the audio buffer keys, INTRO_FLIP,
 LOG and SPIKE_MS. The GAMEPATCH tab stays too, holding only this switch.
@@ -497,14 +562,14 @@ LOG and SPIKE_MS. The GAMEPATCH tab stays too, holding only this switch.
 THE LOG AND YOUR PRIVACY
 ------------------------
 
-LOG=1          On by default. cache\GangstarMV.log records the version, your settings, your graphics
+LOG=1          On by default. cache/GangstarMV.log records the version, your settings, your graphics
                card and driver, your display modes, the names of your game controllers, what a
                feature skipped or failed at, and the details of a crash. It stays on your computer
                until you choose to send it with a bug report. The port has no network code.
-               Your Windows user folder, this folder and the game's folder appear in it as
-               %USERPROFILE%, %EXE% and %APP%. A release log does not name your songs; a
-               dev build's log is much longer and does.
-               After a crash, cache\GangstarMV.dmp holds the registers and stacks of the port's
+               Your user folder, this folder and the game's folder appear in it as
+               %USERPROFILE% ($HOME on Linux), %EXE% and %APP%. A release log does not name
+               your songs; a dev build's log is much longer and does.
+               After a crash, cache/GangstarMV.dmp holds the registers and stacks of the port's
                threads and the list of loaded modules. It too stays on your computer until you
                choose to send it, and the next start deletes it. Those three folders and the values
                of your environment variables are blanked in it, but it is raw memory you cannot

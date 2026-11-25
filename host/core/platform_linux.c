@@ -1,8 +1,3 @@
-/* platform_linux.c -- platform.h on Linux.
-
-   The exe is an ordinary non-PIE i386 program, linked well above the game's range, so nothing has to be done at link
-   time as on Windows: the first thing gmv_main does is map the range.  Below 0x10000 nothing can be mapped under the
-   default vm.mmap_min_addr, as on Windows, so the same layout and the same gmv_patch.bin serve both. */
 #ifndef _WIN32
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -28,8 +23,6 @@ int main(int argc, char **argv)
 {
     return gmv_main(argc, argv);
 }
-
-/* ---- files ---- */
 
 void gmv_exe_dir(char *out, size_t n)
 {
@@ -94,15 +87,12 @@ unsigned long gmv_last_error(void)
     return (unsigned long)errno;
 }
 
-/* ---- memory ---- */
-
 int gmv_protect(uint32_t addr, uint32_t size, int prot)
 {
     static const int unix_prot[] = {PROT_NONE, PROT_READ, PROT_READ | PROT_WRITE, PROT_READ | PROT_EXEC};
     return !mprotect((void *)(uintptr_t)addr, size, unix_prot[prot]);
 }
 
-/* The kernel does the reading and answers with an error instead of a fault. */
 int gmv_readable(const void *p, size_t n)
 {
     static __thread char buf[4096];
@@ -132,8 +122,6 @@ int gmv_module_of(uint32_t addr, char *name, size_t n, uint32_t *base)
     *base = (uint32_t)(uintptr_t)info.dli_fbase;
     return 1;
 }
-
-/* ---- threads and the process ---- */
 
 uint32_t gmv_thread_id(void)
 {
@@ -169,9 +157,6 @@ void gmv_exit(int code)
     _exit(code);
 }
 
-/* ---- the user ---- */
-
-/* SDL when it is linked in: the loader on its own (host/linux/build_stage1.sh) has only the console. */
 extern bool SDL_ShowSimpleMessageBox(unsigned flags, const char *title, const char *message, void *window)
     __attribute__((weak));
 
@@ -180,15 +165,12 @@ void gmv_alert(const char *text, int on_top)
     (void)on_top;
     fprintf(stderr, "%s\n", text);
     if (SDL_ShowSimpleMessageBox)
-        SDL_ShowSimpleMessageBox(0x10u /* SDL_MESSAGEBOX_ERROR */, GMV_GAME_NAME, text, NULL);
+        SDL_ShowSimpleMessageBox(0x10u , GMV_GAME_NAME, text, NULL);
 }
 
 void gmv_release_cursor(void)
 {
-    /* The mouse is SDL's there, and SDL's hold on it ends with the process. */
 }
-
-/* ---- starting ---- */
 
 void gmv_platform_early(void)
 {
@@ -198,6 +180,7 @@ void gmv_platform_log_start(void)
 {
 }
 
+/* 0x10000 */
 void gmv_platform_address_space(gmv_check_fn check)
 {
     void *want = (void *)(uintptr_t)GMV_RESERVE_START;
@@ -212,7 +195,6 @@ void gmv_platform_address_space(gmv_check_fn check)
         if (got != MAP_FAILED)
             munmap(got, size);
     }
-    /* A program marked without a non-executable stack gets READ_IMPLIES_EXEC, and then nothing readable faults. */
     check(!(personality(0xffffffffu) & READ_IMPLIES_EXEC), "readable memory is not executable (stray jumps must fault)");
 }
 #endif

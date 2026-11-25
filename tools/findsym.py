@@ -1,14 +1,9 @@
-"""Look up defined symbols in a Mach-O by regex, or the symbol nearest an address.
-
-usage: python -I findsym.py <macho> <regex | 0xADDR>
-"""
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse, symbols  # noqa: E402
-
 
 def main():
     with open(sys.argv[1], "rb") as f:
@@ -25,7 +20,6 @@ def main():
     for v, n in syms:
         if rx.search(n):
             print("0x%06x %s" % (v, n))
-
 
 if __name__ == "__main__":
     main()

@@ -1,19 +1,3 @@
-/* shimsstr.c -- std::string (GCC 4.2 libstdc++ copy-on-write ABI), stage 3e.
-
-   A std::string (mangled `Ss`) is a single `char *_M_p` pointing at the character data; a
-   reference-counted header sits immediately before it:
-
-       struct _Rep { size_type _M_length; size_type _M_capacity; int _M_refcount; };  // 12 bytes
-       // data (_M_p) and a trailing NUL follow at _M_p = (char*)rep + 12
-
-   refcount 0 means a single owner; copy shares and increments; the destructor decrements and
-   frees when the old value was <= 0.  The empty string shares a single static _Rep
-   (`_S_empty_rep_storage`) that is never freed.  The game has INLINED basic_string code that
-   manipulates these _Rep headers directly, so the layout and refcount convention here must
-   match libstdc++ exactly -- we provide both the out-of-line methods and the empty-rep symbol.
-
-   `this` is the first argument: a std::string* i.e. a pointer to the _M_p field. */
-
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +15,6 @@ typedef struct {
 #define REP_OF(data)   ((Rep *)((char *)(data) - sizeof(Rep)))
 #define REP_DATA(rep)  ((char *)(rep) + sizeof(Rep))
 
-/* __ZNSs4_Rep20_S_empty_rep_storageE: the shared empty representation. */
 static struct { Rep rep; char nul; } g_empty = {{0, 0, 0}, 0};
 
 static char *empty_data(void) { return REP_DATA(&g_empty.rep); }
@@ -50,7 +33,6 @@ static char *rep_alloc(uint32_t len)
     return d;
 }
 
-/* Build a COW std::string (a _Rep + data) and return its _M_p; used by ostringstream::str(). */
 char *gmv_std_string_new(const char *s, uint32_t len)
 {
     char *d = rep_alloc(len);
@@ -68,9 +50,6 @@ static void rep_release(char *data)
         free(r);
 }
 
-/* _Rep::_M_destroy(const allocator&) -- deallocate this _Rep's block (called by _M_dispose once
-   the refcount has dropped).  `this` is the _Rep header itself; our whole _Rep+data+NUL is one
-   malloc block, so free it (never the shared empty rep). */
 static void str_rep_destroy(void *rep, const void *a)
 {
     (void)a;
@@ -78,7 +57,6 @@ static void str_rep_destroy(void *rep, const void *a)
         free(rep);
 }
 
-/* Replace *self's contents with [src, src+len) (src may be non-terminated). */
 static void str_set(void *self, const char *src, uint32_t len)
 {
     char *d = rep_alloc(len);
@@ -88,9 +66,6 @@ static void str_set(void *self, const char *src, uint32_t len)
     set_mp(self, d);
 }
 
-/* ---- constructors / destructor -------------------------------------------------------- */
-
-/* basic_string(const char*, const allocator&) -- __ZNSsC1EPKcRKSaIcE */
 static void *str_ctor_cstr(void *self, const char *s, void *a)
 {
     (void)a;
@@ -102,7 +77,6 @@ static void *str_ctor_cstr(void *self, const char *s, void *a)
     return self;
 }
 
-/* basic_string() -- __ZNSsC1Ev */
 static void *str_ctor_default(void *self)
 {
     __sync_add_and_fetch(&g_empty.rep.refcount, 1);
@@ -110,7 +84,6 @@ static void *str_ctor_default(void *self)
     return self;
 }
 
-/* basic_string(const basic_string&) -- __ZNSsC1ERKSs (copy-on-write share) */
 static void *str_ctor_copy(void *self, void *other)
 {
     char *d = mp(other);
@@ -119,42 +92,37 @@ static void *str_ctor_copy(void *self, void *other)
     return self;
 }
 
-/* ~basic_string() -- __ZNSsD1Ev */
 static void str_dtor(void *self)
 {
     rep_release(mp(self));
 }
 
-/* ---- accessors ------------------------------------------------------------------------ */
+static const char *str_c_str(void *self) { return mp(self); }
 
-static const char *str_c_str(void *self) { return mp(self); }   /* c_str() / data() */
-
-/* ---- mutation (returns basic_string& = this) ------------------------------------------ */
-
-static void str_clear(void *self)                               /* clear() */
+static void str_clear(void *self)
 {
     rep_release(mp(self));
     __sync_add_and_fetch(&g_empty.rep.refcount, 1);
     set_mp(self, empty_data());
 }
 
-static void *str_assign_cstr_n(void *self, const char *s, uint32_t n) /* assign(const char*, size_t) */
+static void *str_assign_cstr_n(void *self, const char *s, uint32_t n)
 {
     str_set(self, s, n);
     return self;
 }
-static void *str_assign_str(void *self, void *other)            /* assign(const string&) */
+static void *str_assign_str(void *self, void *other)
 {
     char *d = mp(other);
     str_set(self, d, REP_OF(d)->length);
     return self;
 }
-static void *str_op_assign_cstr(void *self, const char *s)      /* operator=(const char*) */
+static void *str_op_assign_cstr(void *self, const char *s)
 {
     str_set(self, s, s ? (uint32_t)strlen(s) : 0);
     return self;
 }
-static void *str_op_assign_str(void *self, void *other)         /* operator=(const string&) */
+static void *str_op_assign_str(void *self, void *other)
 {
     return str_assign_str(self, other);
 }
@@ -170,19 +138,17 @@ static void str_append_bytes(void *self, const char *add, uint32_t addlen)
     rep_release(cur);
     set_mp(self, nd);
 }
-static void *str_append_cstr(void *self, const char *s)         /* append(const char*) / operator+= */
+static void *str_append_cstr(void *self, const char *s)
 {
     str_append_bytes(self, s, s ? (uint32_t)strlen(s) : 0);
     return self;
 }
-static void *str_append_str(void *self, void *other)            /* append(const string&) */
+static void *str_append_str(void *self, void *other)
 {
     char *d = mp(other);
     str_append_bytes(self, d, REP_OF(d)->length);
     return self;
 }
-
-/* ---- compare (returns int) ------------------------------------------------------------ */
 
 static int cmp_bytes(const char *a, uint32_t alen, const char *b, uint32_t blen)
 {
@@ -192,20 +158,18 @@ static int cmp_bytes(const char *a, uint32_t alen, const char *b, uint32_t blen)
         return r;
     return (alen > blen) - (alen < blen);
 }
-static int str_compare_cstr(void *self, const char *s)          /* compare(const char*) */
+static int str_compare_cstr(void *self, const char *s)
 {
     char *d = mp(self);
     return cmp_bytes(d, REP_OF(d)->length, s, s ? (uint32_t)strlen(s) : 0);
 }
-static int str_compare_str(void *self, void *other)             /* compare(const string&) */
+static int str_compare_str(void *self, void *other)
 {
     char *a = mp(self), *b = mp(other);
     return cmp_bytes(a, REP_OF(a)->length, b, REP_OF(b)->length);
 }
 
-/* compare(pos1, n1, const string&, pos2, n2) -- __ZNKSs7compareEmmRKSsmm.  A position past the
-   end throws out_of_range in libstdc++, which the game does not catch. */
-extern void gmv_throw_out_of_range(const char *what);   /* shimscxx.c */
+extern void gmv_throw_out_of_range(const char *what);
 extern void gmv_throw_length_error(const char *what);
 extern void gmv_throw_bad_alloc(void);
 
@@ -224,14 +188,10 @@ static int str_compare_sub(void *self, uint32_t pos1, uint32_t n1, void *other, 
     return r ? r : (int)(n1 - n2);
 }
 
-/* _Rep::_S_create(capacity, old_capacity, const allocator&) -- __ZNSs4_Rep9_S_createEmmRKSaIcE.
-   The game's inlined string code calls it when a string must grow; libstdc++ 4.2's growth policy
-   (at least double the old capacity, round big blocks up to whole 4 KB pages), length left unset
-   and the rep unshared.  malloc, like the game's own operator new, so _M_destroy's free matches. */
 static Rep *str_rep_create(uint32_t capacity, uint32_t old_capacity, const void *a)
 {
     (void)a;
-    const uint32_t max_size = (0xffffffffu - sizeof(Rep) - 1) / 4;  /* _S_max_size */
+    const uint32_t max_size = (0xffffffffu - sizeof(Rep) - 1) / 4;
     if (capacity > max_size)
         gmv_throw_length_error("basic_string::_S_create");
     if (capacity > old_capacity && capacity < 2 * old_capacity)
@@ -252,10 +212,8 @@ static Rep *str_rep_create(uint32_t capacity, uint32_t old_capacity, const void 
     return r;
 }
 
-/* ---- table ---------------------------------------------------------------------------- */
-
 const host_symbol gmv_host_symbols_str[] = {
-    FN("__ZNSs4_Rep20_S_empty_rep_storageE", &g_empty.rep),   /* data */
+    FN("__ZNSs4_Rep20_S_empty_rep_storageE", &g_empty.rep),
     FN("__ZNSs4_Rep10_M_destroyERKSaIcE", str_rep_destroy),
 
     FN("__ZNSsC1EPKcRKSaIcE", str_ctor_cstr),

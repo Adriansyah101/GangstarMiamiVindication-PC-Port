@@ -1,16 +1,3 @@
-/* crashdump.c -- cache\GangstarMV.dmp, what a crash leaves for the bug report besides the log.
-
-   gmv_fatal writes it before the error box, on a thread of its own: the stopped thread may have
-   overflowed its stack, and MiniDumpWriteDump suspends every other thread while it reads them.  dbghelp
-   comes from System32 and only when a crash happens, so a normal run never loads it.
-
-   A dump is memory, which a player cannot read before sending it.  So it holds only the threads' registers
-   and stacks and the list of modules, with no module's folder.  The memory the stacks point at would help
-   more, but that is the heap, where a path can sit in pieces no scrub can find (tried: playtest's
-   dumpclean).  Before the file is kept, every copy of the folders the log hides and of the environment's
-   values is blanked (log_scrub_bytes).  LOG=0 means no dump either.  Linux writes its own, an ELF core file
-   (crashdump_linux.c). */
-
 #ifdef _WIN32
 #include <wchar.h>
 #include <windows.h>
@@ -24,18 +11,17 @@ typedef BOOL(WINAPI *minidump_fn)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUM
 
 enum { DUMP_WAIT_MS = 20000 };
 
-static wchar_t dump_path[MAX_PATH];     /* empty: no dump this run */
+static wchar_t dump_path[MAX_PATH];
 static EXCEPTION_POINTERS *volatile crash_ep;
 static volatile DWORD crash_tid, writer_tid;
 static HANDLE dump_file = INVALID_HANDLE_VALUE;
-static const char *volatile dump_err;   /* why there is no file; NULL = it is there */
+static const char *volatile dump_err;
 
 void gmv_dump_arm(const char *path)
 {
     MultiByteToWideChar(CP_UTF8, 0, path, -1, dump_path, MAX_PATH - 1);
 }
 
-/* The first fault is the one the dump is opened on. */
 void gmv_dump_note(struct _EXCEPTION_POINTERS *ep)
 {
     if (!InterlockedCompareExchangePointer((void *volatile *)&crash_ep, ep, NULL))
@@ -82,7 +68,7 @@ static DWORD WINAPI dump_thread(void *unused)
     if (!write(GetCurrentProcess(), GetCurrentProcessId(), dump_file, type, crash_ep ? &ex : NULL, NULL, NULL))
         dump_err = "MiniDumpWriteDump failed";
     else if (!scrub_file(dump_file))
-        dump_err = "cannot clean the file";     /* a file that still names the folders is not kept */
+        dump_err = "cannot clean the file";
     return 0;
 }
 

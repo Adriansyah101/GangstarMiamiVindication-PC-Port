@@ -1,4 +1,3 @@
-/* weapon_sprint.c -- ALLOW_WEAPON_SPRINT */
 #include "compat.h"
 #include <stdint.h>
 #include <string.h>
@@ -9,15 +8,7 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- ALLOW_WEAPON_SPRINT: keep the weapon in hand while sprinting (an enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE) ----
-
-   The Sprint key's handler (0x11e002) runs on press: it marks the character as sprinting
-   (+0x666 = 1) and calls Player vt[0x78](1), which selects slot 1, the fists.  On release it clears
-   the mark and selects the slot it saved before the sprint (handler +0x48).  The iPhone keeps the
-   weapon out.  With the setting, the press jumps over the fists call (0x11e269 -> 0x11e2cc) and the
-   release over the restore (0x11e2ae -> 0x11e2cc), which would only undo a weapon change made during
-   the sprint.  The sprinting mark still goes on and off as before.
-   GMV_ALLOW_WEAPON_SPRINT=1 turns it on. */
+/* 0x11e002 +0x666 vt[0x78](1) +0x48 0x11e269 0x11e2cc */
 
 void apply_weapon_sprint(void)
 {

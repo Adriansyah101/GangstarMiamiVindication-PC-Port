@@ -1,4 +1,3 @@
-/* glshim.h -- the GL shim's parts share this, and a game's render code may use it. */
 #ifndef GMV_GLSHIM_H
 #define GMV_GLSHIM_H
 
@@ -9,9 +8,8 @@
 #include "game.h"
 
 #if GMV_DEV
-/* PERF_PROFILE counts the host's own GL state queries (gl_draw.c, gmv_gl_query_report). */
 extern volatile unsigned gmv_glq_host;
-#ifndef GMV_GLQ_NO_MACROS                               /* gl_draw.c, which times them */
+#ifndef GMV_GLQ_NO_MACROS
 void gmv_q_GetIntegerv(const char *file, int line, GLenum p, GLint *v);
 void gmv_q_GetFloatv(const char *file, int line, GLenum p, GLfloat *v);
 void gmv_q_GetBooleanv(const char *file, int line, GLenum p, GLboolean *v);
@@ -25,7 +23,6 @@ GLboolean gmv_q_IsEnabled(const char *file, int line, GLenum c);
 #endif
 #endif
 
-/* gl_window.c */
 #if !defined(GL_BGR_EXT)
 #define GL_BGR_EXT 0x80E0
 #endif
@@ -45,7 +42,6 @@ double pace_frame_ms(void);
 int swap_interval(int v);
 int swap_want(void);
 
-/* gl_msaa.c */
 extern int g_msaa;
 extern int g_tab_live;
 extern GLuint g_ms_fbo, g_ms_rb[2];
@@ -64,9 +60,6 @@ typedef struct {
     void(APIENTRY *BlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 } msf_t;
 extern msf_t msf;
-/* QUERY_FREE (gl_msaa.c): the framebuffer and program bindings kept by the host.  Every bind of either goes through a
-   tracked function: msf.BindFramebuffer and the effects' UseProgram are made by gmv_gl_track_*, the game's binds call
-   gmv_gl_fb_note. */
 typedef void(APIENTRY *gl_bindfb_fn)(GLenum, GLuint);
 typedef void(APIENTRY *gl_useprog_fn)(GLuint);
 extern int g_query_free;
@@ -74,40 +67,37 @@ gl_bindfb_fn gmv_gl_track_fb(gl_bindfb_fn real);
 gl_useprog_fn gmv_gl_track_prog(gl_useprog_fn real);
 void gmv_gl_fb_note(GLenum target, GLuint fb);
 void gmv_gl_fb_forget(void);
-GLint gmv_gl_cur_fb(GLenum pname);                      /* MS_DRAW_FB_BINDING or MS_READ_FB_BINDING */
+GLint gmv_gl_cur_fb(GLenum pname);
 GLint gmv_gl_cur_prog(void);
-int gmv_gl_query_free(void);                            /* QUERY_FREE is on */
+int gmv_gl_query_free(void);
 #if GMV_DEV
-int gmv_gl_query_check(void);                           /* GMV_QUERY_CHECK */
+int gmv_gl_query_check(void);
 #endif
-/* gl_arrays.c: QUERY_FREE's client arrays.  The game's array calls are wrapped (gmv_gl_arrays_intercept); the host
-   changes array state through gmv_gl_bind_buffer / gmv_gl_arr_pointer or between glPush/PopClientAttrib. */
-enum { GA_VERTEX, GA_NORMAL, GA_COLOR, GA_TEX0, GA_N = GA_TEX0 + 4 };   /* GA_TEX0 + texture unit */
+enum { GA_VERTEX, GA_NORMAL, GA_COLOR, GA_TEX0, GA_N = GA_TEX0 + 4 };
 typedef struct {
-    GLint size, type, stride, buf;                      /* buf: the array buffer bound when the pointer was given */
+    GLint size, type, stride, buf;
     const char *ptr;
 } gmv_arr_t;
-int gmv_gl_arr(int which, gmv_arr_t *out);              /* 1 = enabled; out (may be NULL) its pointer values */
+int gmv_gl_arr(int which, gmv_arr_t *out);
 int gmv_gl_arr_on(int which);
-GLint gmv_gl_buf(GLenum pname);                         /* 0x8894 / 0x8895 / the arrays' 0x8896-0x889A */
-GLint gmv_gl_client_unit(void);                         /* GL_CLIENT_ACTIVE_TEXTURE */
+GLint gmv_gl_buf(GLenum pname);                         /* 0x8894 0x8895 0x8896-0x889A */
+GLint gmv_gl_client_unit(void);
 void gmv_gl_bind_buffer(GLenum target, GLuint b);
 void gmv_gl_arr_pointer(int which, GLint size, GLenum type, GLsizei stride, const void *p);
 void gmv_gl_arr_state(GLenum array, int on);
 void gmv_gl_buffers_deleted(GLsizei n, const GLuint *names);
 void *gmv_gl_arrays_intercept(const char *name);
-/* gl_stream.c: STREAM_VBO, before each draw of the game's (gl_draw.c) */
-unsigned gmv_sv_elements(GLsizei count, GLenum type, const void *idx);   /* the draw's client arrays (GA_ bits) */
+unsigned gmv_sv_elements(GLsizei count, GLenum type, const void *idx);
 unsigned gmv_sv_arrays(GLint first, GLsizei count);
 void gmv_sv_pointer_set(int which);
-unsigned gmv_sv_moved(void);                            /* GA_ bits pointed at the ring */
+unsigned gmv_sv_moved(void);
 #if GMV_DEV
 void gmv_sv_draw_time(unsigned m, long long t0);
 #endif
 #define MS_FRAMEBUFFER      0x8D40
 #define MS_READ_FB          0x8CA8
 #define MS_DRAW_FB          0x8CA9
-#define MS_DRAW_FB_BINDING  0x8CA6                      /* = GL_FRAMEBUFFER_BINDING */
+#define MS_DRAW_FB_BINDING  0x8CA6
 #define MS_READ_FB_BINDING  0x8CAA
 #define MS_RENDERBUFFER     0x8D41
 void *ms_proc(const char *core, const char *ext);
@@ -120,22 +110,12 @@ void msaa_sync_size(void);
 void diag_read_begin(GLenum buf);
 void diag_read_end(void);
 
-/* gl_context.c */
 void ensure_gl(void);
 void gl_swap_window(void);
 void gl_window_fit(int fs, int w, int h);
 
-/* gl_diag.c */
 #if GMV_DEV
 void dump_framebuffer(const char *path);
-/* Diagnostic for the death fade (GMV_FADE_TRACE; armed by the patches on the tick the player's
-   health reaches 0): for 12 s log every tick's draws, the order of clears / framebuffer binds /
-   fade calls / draws, and the present decision, and save the pre-swap back buffer of presented
-   ticks, subsampled to at most 640 px wide: every 4th presented frame, and every one while a fade
-   is being drawn.  File names carry the frame number, the GetTickCount stamp the [fade] / [fadecap]
-   lines use, and the ms since health reached 0.  The GL state at the first draw after each fade
-   call is logged too.  Shows whether the black reaches the back buffer, what wipes or hides it, and
-   whether it is presented. */
 #define CAP_MS 12000u
 extern int g_cap_ticks;
 extern unsigned g_cap_session, g_cap_saved, g_cap_presented;
@@ -165,9 +145,8 @@ extern unsigned g_cap_clears, g_cap_draws, g_cap_run;
 #define fade_state_log(what, mode, count) ((void)0)
 #endif
 
-/* gl_present.c */
 #if GMV_DEV
-enum { PM_START, PM_POST, PM_SSR, PM_VR, PM_AO, PM_BLOOM, PM_PRES, PM_END, PM_N };
+enum { PM_START, PM_POST, PM_SSR, PM_VR, PM_AO, PM_BLOOM, PM_PAA, PM_PRES, PM_END, PM_N };
 #define PM_RING 4
 typedef struct {
     int on;
@@ -188,6 +167,8 @@ void pm_mark(int m);
 void pm_begin(void);
 #define PM_DRAW() do { if (pm.on) { if (!pm.started) pm_begin(); pm.draws++; } } while (0)
 #define PM_CLEAR() do { if (pm.on && !pm.started) pm_begin(); } while (0)
+enum { SC_BIND, SC_ENV, SC_BLEND, SC_ALPHA, SC_DMASK, SC_N };
+void gmv_gl_state_note(int kind, int same);
 #endif
 #if !(GMV_DEV)
 #define PM_DRAW() ((void)0)
@@ -195,7 +176,6 @@ void pm_begin(void);
 #define pm_mark(m) ((void)0)
 #endif
 
-/* gl_trace.c */
 struct gltrace {
     int clears, da_calls, de_calls;
     long da_verts, de_verts;
@@ -204,16 +184,28 @@ struct gltrace {
     unsigned last_fb;
     long max_buf;
     int tex_binds;
+    int scissor, stencil, cull, poly_fill;
+    GLboolean cmask[4];
+    GLenum depth_func, st_func, st_op[3];
+    GLint st_ref, st_clear;
+    GLuint st_mask, st_wmask;
+    GLclampd clear_depth;
+    GLenum cull_face, front_face;
+    GLfloat po[2];
+    GLint sbox[4];
 };
 extern struct gltrace g_glt;
 void tr_ClearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
 void tr_Clear(GLbitfield m);
 void tr_Viewport(GLint x, GLint y, GLsizei w, GLsizei h);
 
-/* gl_draw.c */
 extern int g_texfix;
 extern unsigned g_tf_active, g_tf_client;
 extern uint8_t g_tf_tex2d, g_tf_tcarr;
+extern GLuint g_tf_bound[8];
+void gmv_gl_tex_size(GLenum target, GLint level, GLsizei w, GLsizei h);
+void gmv_gl_tex_deleted(GLsizei n, const GLuint *names);
+void gmv_gl_tex_dims(GLuint t, GLint *w, GLint *h);
 void(APIENTRY *tf_active_real(void))(GLenum);
 typedef struct {
     GLint mode, crgb, calpha, src[6], op[6];
@@ -229,14 +221,12 @@ void pf_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w,
 void *gl_prof_intercept(const char *name);
 #endif
 
-/* gl_msaa_wraps.c */
 void ms_GetIntegerv(GLenum pname, GLint *v);
 void ms_ReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type, void *px);
 void ms_CopyTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo, GLint x, GLint y,
                                  GLsizei w, GLsizei h);
 void ms_DrawBuffers(GLsizei n, const GLenum *bufs);
 
-/* gl_trace.c */
 void gl_trace_frame_end(unsigned frame);
 
 #endif

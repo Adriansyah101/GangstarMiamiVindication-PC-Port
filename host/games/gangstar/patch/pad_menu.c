@@ -1,4 +1,3 @@
-/* pad_menu.c -- PAD_MENU: the pad works the menus */
 #include "compat.h"
 #include <stdint.h>
 
@@ -8,13 +7,7 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- PAD_MENU (menu: PAD MENU POINTER): the pad works the menus (an enhancement;
-   off under ORIGINAL_MAC_EXPERIENCE) ----
-   The Mac's menus are mouse only: the menu states listen to the pad's events but act only on Esc
-   (e.g. 0x1b1d22), and the gameswf pages take hover and click events from the pointer.  The yellow
-   pointer is the HUD's CursorGame ([[0x63e038]+0xd8]), drawn at the mouse (0x181d70) while its +4
-   (set by 0x181d14: title, language page, pause 0x1a16ac, cutscenes) or +5 is set.  While it shows,
-   shimsinput.c moves it with the pad's left stick / D-pad and clicks with A, as a mouse would. */
+/* PAD_MENU [[0x63e038]+0xd8] 0x181d70 0x181d14 */
 static int g_pm_on;
 
 int pm_set(int on)
@@ -25,7 +18,6 @@ int pm_set(int on)
     return 1;
 }
 
-/* The game shows its pointer: a menu is up, or a cutscene. */
 int pointer_shown(void)
 {
     const unsigned char *g1, *cur;
@@ -34,8 +26,6 @@ int pointer_shown(void)
     return cur && (cur[4] || cur[5]);
 }
 
-/* For the host's mouse: the pointer shows, or the game has not got that far.  (A menu's or cutscene's camera
-   does not follow the mouse, so nothing is lost by the mouse being a normal one then.) */
 int gmv_pointer_up(void)
 {
     const uint32_t *cell = (const uint32_t *)(uintptr_t)*(const uint32_t *)(uintptr_t)0x63e038u;

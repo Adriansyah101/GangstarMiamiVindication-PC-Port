@@ -1,14 +1,3 @@
-/* shimsfnd.c -- Foundation/Cocoa object stubs, stage 3d+.
-
-   These are Objective-C methods on Cocoa classes the game messages (NSBundle, NSString, ...).
-   They are plain host functions used as IMPs: gmv_objc_lookup, after failing to find a game
-   method and the NSObject-level defaults, consults the two tables here by (class-name, selector)
-   and tail-jumps to the match.  Extend a table with one row per method as the --run-main probe
-   loop names the next wall (see docs/NOTES.md, "Diagnostics").
-
-   Objects we hand back are allocated by gmv_objc_new_instance(name): isa = a fake-class
-   descriptor tagged with the class name, so a later message to them routes back here. */
-
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -30,11 +19,6 @@ struct fnd_method {
     void *imp;
 };
 
-/* ---- NSString (minimal) --------------------------------------------------------------- */
-
-/* Our NSString objects are gmv_objc_new_instance("NSString") blocks (isa + 12 bytes) with an
-   owned copy of the backing C string at offset 4.  Compile-time CFConstantString literals keep
-   their C text at offset 8 instead; nsstring_cstr handles both. */
 static void *make_nsstring(const char *cstr)
 {
     void *o = gmv_objc_new_instance("NSString");
@@ -45,9 +29,6 @@ static void *make_nsstring(const char *cstr)
 
 void *gmv_make_nsstring(const char *s) { return make_nsstring(s); }
 
-/* Our NSArray instances (gmv_objc_new_instance("NSArray") = isa + 12 bytes) keep the element count
-   at +4 and a malloc'd buffer of that many id pointers at +8.  Built by gmv_make_nsarray1 (one
-   element) and +[NSArray arrayWithObjects:] (a nil-terminated list). */
 static void *make_nsarray_n(void *const *elems, uint32_t n)
 {
     void *a = gmv_objc_new_instance("NSArray");
@@ -61,8 +42,8 @@ static void *make_nsarray_n(void *const *elems, uint32_t n)
         else
             n = 0;
     }
-    ((uint32_t *)a)[1] = n;                      /* +4 count */
-    ((void **)a)[2] = buf;                       /* +8 elements */
+    ((uint32_t *)a)[1] = n;
+    ((void **)a)[2] = buf;
     return a;
 }
 
@@ -101,9 +82,7 @@ static void *fnd_NSArray_lastObject(void *self, const char *sel, ...)
     return (buf && n) ? buf[n - 1] : NULL;
 }
 
-/* +[NSArray arrayWithObjects:(id)first, ...] -- a nil-terminated variadic list (i386 cdecl, args
-   pushed right-to-left so a va_list after `first` reads them in order).  Capped so a caller that
-   forgets the nil terminator can't run off the stack. */
+/* arrayWithObjects: __cdecl */
 static void *fnd_NSArray_arrayWithObjects(void *cls, const char *sel, void *first, ...)
 {
     (void)cls;
@@ -137,13 +116,12 @@ static const char *nsstring_cstr(const void *o)
     return NULL;
 }
 
-/* Public accessor: the backing C string of an NSString/CFString object, or NULL. */
 const char *gmv_nsstring_cstr(const void *o) { return nsstring_cstr(o); }
 
 static void *fnd_NSString_UTF8String(void *self, const char *sel, ...)
 {
     (void)sel;
-    return (void *)nsstring_cstr(self);     /* returns a const char * */
+    return (void *)nsstring_cstr(self);
 }
 
 static void *fnd_NSString_appendPathComponent(void *self, const char *sel, void *comp)
@@ -154,8 +132,6 @@ static void *fnd_NSString_appendPathComponent(void *self, const char *sel, void 
     snprintf(buf, sizeof buf, "%s/%s", a ? a : "", b ? b : "");
     return make_nsstring(buf);
 }
-/* +[NSThread detachNewThreadSelector:toTarget:withObject:] -- spawn a real thread that performs
-   [target selector:object].  The trampoline calls game code, so it is force-aligned. */
 struct ns_thread { void *target; const char *sel; void *obj; };
 __attribute__((force_align_arg_pointer))
 static DWORD WINAPI ns_thread_tramp(void *p)
@@ -184,15 +160,13 @@ static void *fnd_NSThread_detach(void *cls, const char *sel, const char *selecto
     return NULL;
 }
 
-/* Networking (GameLoft Live / IGP, on a worker thread): make URLs/requests into inert fake
-   objects and connections into nil, so the feature silently does nothing instead of crashing. */
 static void *fnd_NSURL_urlWithString(void *cls, const char *sel, void *str)
 {
     (void)cls;
     (void)sel;
     void *u = gmv_objc_new_instance("NSURL");
     if (u)
-        ((void **)u)[1] = str;                  /* keep the string for -absoluteString */
+        ((void **)u)[1] = str;
     return u;
 }
 static void *fnd_NSURL_absoluteString(void *self, const char *sel, ...)
@@ -207,7 +181,6 @@ static void *fnd_NSURLRequest_with(void *cls, const char *sel, ...)
     return gmv_objc_new_instance("NSURLRequest");
 }
 
-/* URL percent-escaping: return the text unchanged (good enough for the web/IGP code path). */
 static void *fnd_NSString_percentEscapes(void *self, const char *sel, uint32_t enc)
 {
     (void)sel;
@@ -253,7 +226,7 @@ static void *fnd_NSString_writeToFile(void *self, const char *sel, void *path, i
         if (f) {
             fwrite(s, 1, strlen(s), f);
             fclose(f);
-            return (void *)1;                   /* YES */
+            return (void *)1;
         }
     }
     return (void *)0;
@@ -298,7 +271,6 @@ static void *fnd_NSString_stringWithUTF8String(void *cls, const char *sel, const
     (void)sel;
     return make_nsstring(s);
 }
-/* +[NSString stringWithCString:encoding:] -- take the C string, ignore the encoding. */
 static void *fnd_NSString_stringWithCString(void *cls, const char *sel, const char *s, uint32_t enc)
 {
     (void)cls;
@@ -306,7 +278,6 @@ static void *fnd_NSString_stringWithCString(void *cls, const char *sel, const ch
     (void)enc;
     return make_nsstring(s);
 }
-/* NSDate / NSDateFormatter: minimal -- a date is a fake object, formatting gives a fixed string. */
 static void *g_date;
 static void *fnd_NSDate_date(void *cls, const char *sel, ...)
 {
@@ -324,7 +295,6 @@ static void *fnd_NSDateFormatter_stringFromDate(void *self, const char *sel, voi
     return make_nsstring("2026-01-01 00:00:00");
 }
 
-/* -init... on a freshly +alloc'd NSString: store the backing copy at offset 4, return self. */
 static void *fnd_NSString_initWithString(void *self, const char *sel, void *other)
 {
     (void)sel;
@@ -346,7 +316,7 @@ static uint32_t fnd_NSString_length(void *self, const char *sel, ...)
     return s ? (uint32_t)strlen(s) : 0;
 }
 
-/* isEqual: / isEqualToString: -- compare the backing text (BOOL in eax). */
+/* isEqual isEqualToString BOOL eax */
 static void *fnd_NSString_isEqual(void *self, const char *sel, void *other)
 {
     (void)sel;
@@ -362,9 +332,6 @@ static void fmt_put(char *buf, size_t cap, size_t *n, const char *s)
         buf[(*n)++] = *s++;
 }
 
-/* printf-style NSString formatting shared by +stringWithFormat: and -initWithFormat:.  Standard
-   conversions go to snprintf one spec at a time; %@ becomes the argument's NSString text (or its
-   class name).  Length modifiers are dropped (on i386 long == int). */
 static void nsformat(char *out, size_t cap, const char *f, va_list ap)
 {
     size_t n = 0;
@@ -388,7 +355,7 @@ static void nsformat(char *out, size_t cap, const char *f, va_list ap)
         spec[si++] = '%';
         while (*p && strchr("-+ #0123456789.", *p) && si < 28)
             spec[si++] = *p++;
-        while (*p && strchr("lhqLzjt", *p))         /* drop length modifiers */
+        while (*p && strchr("lhqLzjt", *p))
             p++;
         char conv = *p ? *p++ : 0;
         char tmp[512];
@@ -420,7 +387,7 @@ static void nsformat(char *out, size_t cap, const char *f, va_list ap)
             spec[si] = 0;
             snprintf(tmp, sizeof tmp, spec, va_arg(ap, void *));
             fmt_put(out, cap, &n, tmp);
-        } else {                                    /* unknown: emit the raw spec */
+        } else {
             while (start < p && n + 1 < cap)
                 out[n++] = *start++;
         }
@@ -428,7 +395,6 @@ static void nsformat(char *out, size_t cap, const char *f, va_list ap)
     out[n] = 0;
 }
 
-/* Public formatter (NSLog in shimsappkit.c uses it to print the game's %d/%@ args). */
 void gmv_nsformat(char *out, size_t cap, const char *f, va_list ap)
 {
     nsformat(out, cap, f, ap);
@@ -446,7 +412,6 @@ static void *fnd_NSString_stringWithFormat(void *cls, const char *sel, void *for
     return make_nsstring(out);
 }
 
-/* -[NSString initWithFormat:] on a freshly +alloc'd NSString: format, store, return self. */
 static void *fnd_NSString_initWithFormat(void *self, const char *sel, void *format, ...)
 {
     (void)sel;
@@ -459,10 +424,8 @@ static void *fnd_NSString_initWithFormat(void *self, const char *sel, void *form
     return self;
 }
 
-/* ---- NSBundle ------------------------------------------------------------------------- */
-
 static void *g_main_bundle;
-static char g_bundle_path[520];             /* the real .app directory (set from main.c) */
+static char g_bundle_path[520];
 
 void gmv_fnd_set_bundle_path(const char *path)
 {
@@ -513,8 +476,6 @@ static void *fnd_NSBundle_resourcePath(void *self, const char *sel, ...)
     return make_nsstring(path);
 }
 
-/* -[NSBundle pathForResource:ofType:] -> <.app>/Contents/Resources/<name>.<ext>, or nil if the
-   file isn't there (so the game can fall back / skip, e.g. a missing intro video). */
 static void *fnd_NSBundle_pathForResource(void *self, const char *sel, void *name, void *ext)
 {
     (void)self;
@@ -531,10 +492,6 @@ static void *fnd_NSBundle_pathForResource(void *self, const char *sel, void *nam
     return make_nsstring(path);
 }
 
-/* ---- NSWindow (no real window yet: the designated initializer just returns self) ------ */
-
-/* -[NSWindow initWithContentRect:(NSRect)styleMask:backing:defer:]; NSRect is 4 floats passed
-   by value on i386.  A later stage turns this into a real Win32 window + WGL context. */
 static void *fnd_NSWindow_initWithContentRect(void *self, const char *sel,
                                               float x, float y, float w, float h,
                                               uint32_t style, int backing, int defer)
@@ -553,7 +510,6 @@ static void *fnd_NSWindow_contentView(void *self, const char *sel, ...)
     return g_content_view;
 }
 
-/* -[NSView initWithFrame:(NSRect)] -- 4 floats by value; returns self (the game's EAGLView). */
 static void *fnd_NSView_initWithFrame(void *self, const char *sel,
                                       float x, float y, float w, float h)
 {
@@ -561,10 +517,7 @@ static void *fnd_NSView_initWithFrame(void *self, const char *sel,
     return self;
 }
 
-/* -[NSView window] : the NSWindow hosting the view.  Our single GameWindow (captured at creation)
-   stands in; the game asks the view for its window to warp/centre the cursor and check key state
-   (EAGLView -centerMouse / -setMouseAlwaysCenter).  Returning it lets those proceed. */
-extern void *gmv_objc_last_gamewindow;          /* shimsobjc.c */
+extern void *gmv_objc_last_gamewindow;
 static void *fnd_NSView_window(void *self, const char *sel, ...)
 {
     (void)self;
@@ -572,18 +525,17 @@ static void *fnd_NSView_window(void *self, const char *sel, ...)
     return gmv_objc_last_gamewindow;
 }
 
-/* ---- NSNumber (minimal: a fake object storing one long at +4) ------------------------- */
 static void *make_nsnumber(long v)
 {
     void *n = gmv_objc_new_instance("NSNumber");
     if (n)
-        ((long *)n)[1] = v;                     /* value at +4 */
+        ((long *)n)[1] = v;
     return n;
 }
 static void *fnd_NSNumber_value(void *self, const char *sel, ...)
 {
     (void)sel;
-    return self ? (void *)(uintptr_t)((long *)self)[1] : NULL;   /* int/integer/boolValue in eax */
+    return self ? (void *)(uintptr_t)((long *)self)[1] : NULL;   /* eax */
 }
 static void *fnd_NSNumber_with(void *cls, const char *sel, long v, ...)
 {
@@ -592,11 +544,7 @@ static void *fnd_NSNumber_with(void *cls, const char *sel, long v, ...)
     return make_nsnumber(v);
 }
 
-/* ---- NSUserDefaults (no persistent store yet; seed the resolution the game reads on launch) --
-   -[GameDelegate loadUserSettings] does screenWidth/Height = [[defaults objectForKey:@"ScreenWidth"/
-   @"ScreenHeight"] integerValue].  With a nil result those come out 0, and a 0x0 game resolution
-   makes the engine cull everything (black screen).  Return the GL drawable size for those keys so
-   the game runs at 1024x768; other keys stay nil so the game uses its own defaults. */
+/* NSUserDefaults 0x0 */
 static void *g_user_defaults;
 
 static int ud_trace(void)
@@ -608,14 +556,6 @@ static int ud_trace(void)
     return t;
 }
 
-/* ---- prefs backing NSUserDefaults (integers/bools; enough for the resolution options)
-   The game stores ScreenWidth/ScreenHeight/FullScreen via setInteger:/setBool:forKey: and reads
-   them at launch (loadUserSettings); the GL shim sizes the window from them (gmv_effective_screen)
-   and applies a change at once (gmv_gl_apply_mode).  Those three live in GangstarMV.ini's
-   [Display] section (SCREEN_WIDTH, SCREEN_HEIGHT, FULLSCREEN), written back the moment the game
-   changes them; an environment variable GMV_<key> wins, as for every ini key.  Any other key is
-   kept for the run only.  Older builds kept the three in gmv_prefs.txt (savegame\ or next to the
-   exe); prefs_migrate moves them into the ini once and deletes the file. */
 static const struct { const char *ud, *ini; } ini_prefs[] = {
     {"ScreenWidth", "SCREEN_WIDTH"}, {"ScreenHeight", "SCREEN_HEIGHT"}, {"FullScreen", "FULLSCREEN"},
 };
@@ -646,13 +586,12 @@ static void ini_pref_set(const char *name, long v)
     const char *f = gmv_config_file_value(name);
     char *end;
     if (f && strtol(f, &end, 10) == v && end != f && !*end)
-        return;                                     /* the file already says so */
+        return;
     char buf[24];
     snprintf(buf, sizeof buf, "%ld", v);
     gmv_config_save(name, buf);
 }
 
-/* gmv_prefs.txt from an older build -> GangstarMV.ini, once. */
 static void prefs_migrate(void)
 {
     char exe[MAX_PATH];
@@ -713,10 +652,8 @@ static void prefs_set(const char *key, long v)
         }
 }
 
-/* Exposed to the GL shim. */
 long gmv_prefs_get_long(const char *key, long def) { long v; return prefs_get(key, &v) ? v : def; }
 
-/* The native primary-monitor size (the default resolution, and the full-screen window size). */
 static void native_desktop(long *w, long *h)
 {
     int dw = 0, dh = 0;
@@ -728,13 +665,6 @@ static void native_desktop(long *w, long *h)
     if (h) *h = sh;
 }
 
-/* The game's chosen Screen Resolution option (the Video dropdown value).  This is the RENDER
-   resolution the game targets in BOTH windowed and full-screen -- the game's own design, and the
-   faithful behaviour: full-screen renders this and the borderless window fills the monitor.  For a
-   crisp native full-screen, the user picks the native mode (e.g. 1920x1080) in the dropdown; it is
-   the default on first run.  Deliberately NOT remapped to native in full-screen: the earlier remap
-   made the dropdown show one value while the game targeted another, so it got "stuck" at the
-   windowed resolution.  Clamped to sane bounds. */
 static void gmv_stored_res(long *w, long *h)
 {
     long dw, dh; native_desktop(&dw, &dh);
@@ -747,16 +677,11 @@ static void gmv_stored_res(long *w, long *h)
     if (h) *h = hh;
 }
 
-/* The chosen Screen Resolution, which the game draws at in both modes (the GL shim scales it to the
-   monitor in full screen). */
 void gmv_chosen_resolution(long *w, long *h)
 {
     gmv_stored_res(w, h);
 }
 
-/* The size the host WINDOW should use this run.  Full-screen: the native monitor size (borderless
-   covers the screen; the game's drawing is scaled to fill via gmv_gl_follow_viewport).  Windowed:
-   the chosen resolution.  the GL shim sizes/positions the window from this. */
 void gmv_effective_screen(long *w, long *h, int *fullscreen)
 {
     long fs = gmv_prefs_get_long("FullScreen", 1);
@@ -783,7 +708,7 @@ static void *fnd_NSUserDefaults_objectForKey(void *self, const char *sel, void *
     if (k && !strcmp(k, "FullScreen"))
         return make_nsnumber(gmv_prefs_get_long("FullScreen", 1) ? 1 : 0);
     long v;
-    if (k && prefs_get(k, &v))                      /* any other persisted int setting */
+    if (k && prefs_get(k, &v))
         return make_nsnumber(v);
     return NULL;
 }
@@ -811,8 +736,6 @@ static void *fnd_NSUserDefaults_boolForKey(void *self, const char *sel, void *ke
     return (void *)0;
 }
 
-/* The game writes the in-game resolution/fullscreen option here; we persist it (applied on the next
-   launch, matching how the game reads these only at startup).  GMV_RES_TRACE=1 logs each write. */
 static void *fnd_NSUserDefaults_setObject(void *self, const char *sel, void *val, void *key)
 {
     (void)self; (void)sel;
@@ -820,7 +743,7 @@ static void *fnd_NSUserDefaults_setObject(void *self, const char *sel, void *val
         const char *k = nsstring_cstr(key), *vs = nsstring_cstr(val);
         gmv_log("[res] setObject:forKey: key='%s' val='%s'\n", k ? k : "?", vs ? vs : "(non-string)");
     }
-    return (void *)0;                               /* strings not persisted yet (not needed for res) */
+    return (void *)0;
 }
 static void *fnd_NSUserDefaults_setInteger(void *self, const char *sel, long v, void *key)
 {
@@ -829,7 +752,7 @@ static void *fnd_NSUserDefaults_setInteger(void *self, const char *sel, long v, 
     if (ud_trace()) gmv_log("[res] setInteger:%ld forKey:'%s'\n", v, k ? k : "?");
     if (k) prefs_set(k, v);
     if (k && (!strcmp(k, "ScreenWidth") || !strcmp(k, "ScreenHeight") || !strcmp(k, "FullScreen")))
-        gmv_gl_apply_mode();                        /* apply the new Video option to the window now */
+        gmv_gl_apply_mode();
     return (void *)0;
 }
 static void *fnd_NSUserDefaults_setBool(void *self, const char *sel, long v, void *key)
@@ -839,7 +762,7 @@ static void *fnd_NSUserDefaults_setBool(void *self, const char *sel, long v, voi
     if (ud_trace()) gmv_log("[res] setBool:%ld forKey:'%s'\n", v, k ? k : "?");
     if (k) prefs_set(k, v ? 1 : 0);
     if (k && (!strcmp(k, "FullScreen") || !strcmp(k, "ScreenWidth") || !strcmp(k, "ScreenHeight")))
-        gmv_gl_apply_mode();                        /* fullscreen toggle takes effect immediately */
+        gmv_gl_apply_mode();
     return (void *)0;
 }
 
@@ -851,8 +774,6 @@ static void *fnd_NSUserDefaults_standard(void *cls, const char *sel, ...)
         g_user_defaults = gmv_objc_new_instance("NSUserDefaults");
     return g_user_defaults;
 }
-
-/* ---- NSNotificationCenter (we don't deliver notifications; observers are no-ops) ------ */
 
 static void *g_notif_center;
 static void *fnd_NSNotificationCenter_default(void *cls, const char *sel, ...)
@@ -880,16 +801,12 @@ static void *fnd_NSWorkspace_notifCenter(void *self, const char *sel, ...)
     return fnd_NSNotificationCenter_default(NULL, NULL);
 }
 
-/* The fake QTMovie from -[QTMovie initWithFile:error:] (set below); the logo-end simulation
-   carries it in the notification. */
 static void *g_qtmovie;
 
-/* Observer registry so we can actually deliver notifications (e.g. to advance past the logo). */
 #define MAX_OBS 64
 static struct { void *observer; const char *sel; const char *name; } g_obs[MAX_OBS];
 static int g_nobs;
 
-/* -[NSNotificationCenter addObserver:selector:name:object:] */
 static void *fnd_nc_addObserver(void *self, const char *cmd, void *observer,
                                 const char *selector, void *name, void *object)
 {
@@ -899,7 +816,7 @@ static void *fnd_nc_addObserver(void *self, const char *cmd, void *observer,
     const char *nm = name ? nsstring_cstr(name) : NULL;
     if (g_nobs < MAX_OBS) {
         g_obs[g_nobs].observer = observer;
-        g_obs[g_nobs].sel = selector;       /* a SEL = selector-name string */
+        g_obs[g_nobs].sel = selector;
         g_obs[g_nobs].name = nm;
         g_nobs++;
     }
@@ -907,7 +824,6 @@ static void *fnd_nc_addObserver(void *self, const char *cmd, void *observer,
     return NULL;
 }
 
-/* Deliver a notification to every matching observer.  Calls game code -> must realign. */
 __attribute__((force_align_arg_pointer))
 static void gmv_notif_post(const char *name, void *notification)
 {
@@ -917,7 +833,6 @@ static void gmv_notif_post(const char *name, void *notification)
             msg(g_obs[i].observer, g_obs[i].sel, notification);
 }
 
-/* -[NSNotificationCenter postNotificationName:object:] */
 static void *fnd_nc_post(void *self, const char *cmd, void *name, void *object)
 {
     (void)self;
@@ -928,24 +843,19 @@ static void *fnd_nc_post(void *self, const char *cmd, void *name, void *object)
     return NULL;
 }
 
-/* Build a fake NSNotification carrying the movie and post the QuickTime "did end" notification,
-   so the game runs its real logo-finished handler and advances. */
 void gmv_fire_movie_end(void)
 {
     if (!g_qtmovie)
         return;
     void *note = gmv_objc_new_instance("NSNotification");
     if (note)
-        ((void **)note)[1] = g_qtmovie;     /* -[NSNotification object] reads offset 4 */
+        ((void **)note)[1] = g_qtmovie;
     gmv_trace("[notif] firing QTMovieDidEndNotification (simulated logo end)\n");
     gmv_notif_post("QTMovieDidEndNotification", note);
-    g_qtmovie = NULL;                        /* once */
+    g_qtmovie = NULL;
 }
 
-/* -[QTMovie initWithFile:error:] -> a fake (non-nil) movie.  We don't decode video, but letting
-   the game take its normal logo path (play the movie, observe its end) and then firing the
-   movie-did-end notification ourselves advances the game's state machine past the logo. */
-static char g_qtmovie_path[1024];           /* the file the game asked QTMovie to play (intro.mov) */
+static char g_qtmovie_path[1024];
 
 const char *gmv_intro_movie_path(void) { return g_qtmovie_path; }
 
@@ -964,14 +874,12 @@ static void *fnd_QTMovie_initWithFile(void *self, const char *sel, void *file, v
     return self;
 }
 
-/* -[NSNotification object] / -name : the backing object/name we stashed at offsets 4 / 8. */
 static void *fnd_notification_object(void *self, const char *sel, ...)
 {
     (void)sel;
     return self ? ((void **)self)[1] : NULL;
 }
 
-/* ---- NSColor (opaque; only ever passed to no-op setters like setBackgroundColor:) ----- */
 static void *g_color;
 static void *fnd_NSColor_color(void *cls, const char *sel, ...)
 {
@@ -1008,7 +916,6 @@ static void *fnd_NSScreen_mainScreen(void *cls, const char *sel, ...)
     return g_main_screen;
 }
 
-/* ---- NSTimer (the game's frame driver; the run loop in shimsappkit fires it) ---------- */
 static void *g_timer_target, *g_timer_obj;
 static const char *g_timer_sel;
 
@@ -1028,7 +935,6 @@ void *gmv_timer_target(void)       { return g_timer_target; }
 const char *gmv_timer_selector(void) { return g_timer_sel; }
 void *gmv_timer_object(void)       { return g_timer_obj; }
 
-/* ---- -[NSObject performSelector:withObject:afterDelay:] : deferred, run from the run loop -- */
 #define MAX_DEFER 32
 static struct { void *target; const char *sel; void *arg; } g_defer[MAX_DEFER];
 static int g_defer_head, g_defer_tail;
@@ -1048,7 +954,6 @@ static void *fnd_performAfterDelay(void *self, const char *_cmd, const char *aSe
     return NULL;
 }
 
-/* FIFO drain for the run loop; returns 0 when empty. */
 int gmv_defer_take(void **target, const char **sel, void **arg)
 {
     if (g_defer_head == g_defer_tail)
@@ -1060,7 +965,6 @@ int gmv_defer_take(void **target, const char **sel, void **arg)
     return 1;
 }
 
-/* ---- NSFileManager (real: backed by the Win32 filesystem) ----------------------------- */
 static void *g_filemgr;
 static void *fnd_fm_default(void *cls, const char *sel, ...)
 {
@@ -1098,32 +1002,18 @@ static void *fnd_fm_createDir(void *self, const char *sel, void *path, int inter
         *err = NULL;
     if (p)
         CreateDirectoryA(p, NULL);
-    return (void *)1;                            /* YES */
+    return (void *)1;
 }
 
-/* Shared trivial IMPs (integer/pointer result in eax). */
+/* eax */
 static void *fnd_zero(void *self, const char *sel, ...) { (void)self; (void)sel; return (void *)0; }
 static void *fnd_yes(void *self, const char *sel, ...)  { (void)self; (void)sel; return (void *)1; }
 static void *fnd_ret_self(void *self, const char *sel, ...) { (void)sel; return self; }
 
-/* +[NSCursor hide]/+[NSCursor unhide] -- the game's own cursor-visibility toggle (reached through
-   -[EAGLView hideCursore:]).  It hides the cursor exactly when it enters relative mouse-look, so we
-   record the intent; shimsinput.c follows it for hands-free auto mouse-look (GMV_AUTO_LOOK). */
 static void *fnd_NSCursor_hide(void *self, const char *sel, ...)   { (void)self; (void)sel; gmv_input_set_cursor_hidden(1); return NULL; }
 static void *fnd_NSCursor_unhide(void *self, const char *sel, ...) { (void)self; (void)sel; gmv_input_set_cursor_hidden(0); return NULL; }
 
-/* -[NSApplication terminate:] -- the Cocoa "quit the app" message.  On macOS terminate: ends the
-   process and NEVER returns.  The game reaches it only from its exit state: the per-frame dispatcher
-   at 0x596680 calls the state object's vtbl slot 0x1c, which (in the quit state, via quit-helper
-   0x19bae0) sends terminate:, and then IMMEDIATELY calls vtbl slot 0x20 for the next update step.
-   We used to no-op terminate: "so play continues", but that return is exactly the bug: slot 0x20
-   then runs on a half-torn-down quitting state and faults (write to a wrong sub-object at 0x11c6c5,
-   seen as the teardown crash).  So we now do what the game expects -- quit cleanly and do not return.
-   We exit the process directly (ExitProcess kills every thread at once, so no further audio render
-   callback or frame update touches the dying state; the OS closes the audio device).  Set
-   GMV_TERM_NOOP=1 to restore the old no-op (debug escape hatch, should a spurious terminate: appear).
-   objc_msgSend tail-jumps here, so our return address is the game instruction right after its
-   `call objc_msgSend`. */
+/* 0x596680 0x1c 0x19bae0 0x20 0x11c6c5 */
 static void *fnd_NSApp_terminate(void *self, const char *sel, ...)
 {
     (void)self; (void)sel;
@@ -1141,16 +1031,12 @@ static void *fnd_NSApp_terminate(void *self, const char *sel, ...)
         fp = (uint32_t *)(uintptr_t)prev;
     }
     if (do_noop)
-        return (void *)0;           /* old behaviour: returns -> game continues into teardown crash */
-    log_close();                    /* flush GangstarMV.log before we leave */
+        return (void *)0;
+    log_close();
     ExitProcess(0);
-    return (void *)0;               /* unreachable */
+    return (void *)0;
 }
 
-/* ---- struct-returning methods (objc_msgSend_stret) ------------------------------------ */
-
-/* QTMovieView delegate: stored in a global (one logo MovieView) -- can't stash it in a game
-   object's ivars.  movieDidEnd: forwards through this to the game's GameDelegate. */
 static void *g_view_delegate;
 static void *fnd_setViewDelegate(void *self, const char *sel, void *d)
 {
@@ -1166,9 +1052,6 @@ static void *fnd_viewDelegate(void *self, const char *sel, ...)
     return g_view_delegate;
 }
 
-/* NSRect is 4 floats; macOS i386 returns it via a hidden sret pointer the callee pops (ret $4),
-   so these use callee_pop_aggregate_return(1).  objc_msgSend_stret tail-jumps here with the
-   stack {sret, self, sel}, which is exactly gcc's (hidden sret, self, sel) layout. */
 typedef struct { float x, y, w, h; } NSRectF;
 
 __attribute__((callee_pop_aggregate_return(1)))
@@ -1197,8 +1080,6 @@ void *gmv_fnd_stret_method(const char *cls, const char *sel)
             return m->imp;
     return NULL;
 }
-
-/* ---- method tables -------------------------------------------------------------------- */
 
 static const struct fnd_method g_class_methods[] = {
     {"NSBundle", "mainBundle", (void *)fnd_NSBundle_mainBundle},
@@ -1230,41 +1111,30 @@ static const struct fnd_method g_class_methods[] = {
     {NULL, NULL, NULL},
 };
 
-/* ---- NSEvent (synthetic, for injected mouse input; see shimsinput.c) ------------------
-   Our fake NSEvent stores the window-space location (two floats) at offsets 4 and 8.  macOS i386
-   returns an 8-byte struct (NSPoint) in eax:edx, so -locationInWindow returns a 2-word struct
-   holding the float bit patterns. */
 typedef struct { uint32_t x, y; } ns_point2;
 static ns_point2 fnd_NSEvent_location(void *self, const char *sel, ...)
 {
     (void)sel;
     ns_point2 p = {0, 0};
     if (self) {
-        p.x = ((const uint32_t *)self)[1];      /* float bits at +4 */
-        p.y = ((const uint32_t *)self)[2];      /* float bits at +8 */
+        p.x = ((const uint32_t *)self)[1];
+        p.y = ((const uint32_t *)self)[2];
     }
     return p;
 }
 static void *fnd_NSEvent_zero(void *self, const char *sel, ...) { (void)self; (void)sel; return NULL; }
 
-/* -[NSEvent deltaY] -- the scroll-wheel amount for -scrollWheel:.  Stored at +12 by
-   gmv_make_nsscroll.  Returns CGFloat (= float on i386), i.e. in ST(0); objc_msgSend tail-jumps
-   here so the game reads our ST(0) directly. */
 static float fnd_NSEvent_deltaY(void *self, const char *sel, ...)
 {
     (void)sel;
-    return self ? ((const float *)self)[3] : 0.0f;   /* float bits at +12 */
+    return self ? ((const float *)self)[3] : 0.0f;
 }
 
-/* -[NSWindow convertBaseToScreen:(NSPoint)] / convertScreenToBase: -- window<->screen point
-   conversion.  NSPoint is two floats by value (after self,_cmd) and is returned in eax:edx.  Our
-   single window fills the screen origin we report (0,0), so the transform is identity; the game
-   uses it to position the warp target for -[EAGLView centerMouse], which we do not warp anyway. */
 static ns_point2 fnd_convert_point(void *self, const char *sel, uint32_t x, uint32_t y)
 {
     (void)self;
     (void)sel;
-    ns_point2 p = {x, y};                       /* pass the point through (float bits preserved) */
+    ns_point2 p = {x, y};
     return p;
 }
 
@@ -1272,26 +1142,20 @@ void *gmv_make_nsevent(float x, float y)
 {
     void *e = gmv_objc_new_instance("NSEvent");
     if (e) {
-        ((float *)e)[1] = x;                    /* +4 */
-        ((float *)e)[2] = y;                    /* +8 */
+        ((float *)e)[1] = x;
+        ((float *)e)[2] = y;
     }
     return e;
 }
 
-/* As gmv_make_nsevent, plus a scroll amount at +12 read back by -[NSEvent deltaY]. */
 void *gmv_make_nsscroll(float x, float y, float deltaY)
 {
     void *e = gmv_make_nsevent(x, y);
     if (e)
-        ((float *)e)[3] = deltaY;               /* +12 (instances are >= 16 bytes) */
+        ((float *)e)[3] = deltaY;
     return e;
 }
 
-/* ---- NSAlert (modal dialog; the social/Twitter features raise one) --------------------------
-   The game uses the synchronous path: [[NSAlert alloc] init], setMessageText:/setInformativeText:/
-   setAlertStyle:, addButtonWithTitle: (1-3 times), then runModal.  We render it as a native Win32
-   MessageBox owned by the game window and map the clicked button back to NSAlertFirstButtonReturn +
-   index.  The per-alert state lives in a small struct hung off the instance's +4 slot. */
 struct nsalert {
     char *msg, *info;
     char *buttons[4];
@@ -1344,15 +1208,9 @@ static void *fnd_NSAlert_addButton(void *self, const char *sel, void *title)
     }
     if (!g_nsbutton_dummy)
         g_nsbutton_dummy = gmv_objc_new_instance("NSButton");
-    return g_nsbutton_dummy;                    /* NSButton*; the game ignores the return */
+    return g_nsbutton_dummy;
 }
 
-/* Force the modal MessageBox to the foreground over the borderless full-screen game window.
-   MessageBox draws on top but cannot grab the keyboard/foreground away from a WS_POPUP window
-   that covers the whole screen, so the dialog ignores the mouse and keys until the user taps the
-   Windows key (which breaks the game's foreground hold).  We do the same thing programmatically:
-   clear the system foreground-lock timeout for a moment, then activate the dialog.  Driven by a
-   NULL-window timer -- MessageBox's own modal message loop dispatches it. */
 #ifdef _WIN32
 static UINT_PTR g_alert_fg_timer;
 static int      g_alert_fg_tries;
@@ -1380,12 +1238,12 @@ static void CALLBACK alert_fg_tick(HWND hwnd, UINT msg, UINT_PTR id, DWORD t)
 {
     (void)hwnd; (void)msg; (void)t;
     HWND owner = (HWND)gmv_gl_window_hwnd();
-    HWND dlg   = owner ? GetWindow(owner, GW_ENABLEDPOPUP) : NULL;  /* the MessageBox popup */
+    HWND dlg   = owner ? GetWindow(owner, GW_ENABLEDPOPUP) : NULL;
     if (dlg && dlg != owner) {
         alert_force_fg(dlg);
         KillTimer(NULL, id);
         g_alert_fg_timer = 0;
-    } else if (++g_alert_fg_tries >= 20) {      /* ~0.6s and no dialog yet: give up quietly */
+    } else if (++g_alert_fg_tries >= 20) {
         KillTimer(NULL, id);
         g_alert_fg_timer = 0;
     }
@@ -1405,9 +1263,8 @@ static void *fnd_NSAlert_runModal(void *self, const char *sel, ...)
         strncat(text, a->info, sizeof text - strlen(text) - 1);
     }
     int nb = a ? a->nbuttons : 0;
-    long ret;                                   /* NSAlertFirstButtonReturn = 1000, then +1 each */
+    long ret;
 #ifndef _WIN32
-    /* The alert's own buttons, by their titles: the first is Return's, the last Escape's. */
     SDL_MessageBoxButtonData b[3];
     int shown = nb < 1 ? 1 : nb > 3 ? 3 : nb;
     for (int i = 0; i < shown; i++) {
@@ -1420,10 +1277,10 @@ static void *fnd_NSAlert_runModal(void *self, const char *sel, ...)
                               GMV_GAME_TITLE, text[0] ? text : " ", shown, b, NULL};
     gmv_trace("[NSAlert] runModal: \"%s\" buttons=%d\n", (a && a->msg) ? a->msg : "", nb);
     if (gmv_gl_window())
-        SDL_SetWindowRelativeMouseMode(gmv_gl_window(), false);     /* the input shim sets it again */
+        SDL_SetWindowRelativeMouseMode(gmv_gl_window(), false);
     int hit = -1;
     if (!SDL_ShowMessageBox(&box, &hit) || hit < 0)
-        hit = 1000 + shown - 1;                 /* closed: the last button, as Escape */
+        hit = 1000 + shown - 1;
     ret = hit;
 #else
     UINT type = MB_SETFOREGROUND | MB_TOPMOST;
@@ -1433,8 +1290,6 @@ static void *fnd_NSAlert_runModal(void *self, const char *sel, ...)
     else              type |= MB_OK;
 
     gmv_trace("[NSAlert] runModal: \"%s\" buttons=%d\n", (a && a->msg) ? a->msg : "", nb);
-    /* Release the game's cursor confinement and arrange for the dialog to be pulled to the
-       foreground while it is up, so it is clickable/typable without tapping the Windows key. */
     ClipCursor(NULL);
     ReleaseCapture();
     g_alert_fg_tries = 0;
@@ -1451,7 +1306,7 @@ static void *fnd_NSAlert_runModal(void *self, const char *sel, ...)
         ret = 1000;
 #endif
 
-    if (a) {                                    /* the game discards the alert after runModal */
+    if (a) {
         free(a->msg);
         free(a->info);
         for (int i = 0; i < a->nbuttons; i++)
@@ -1516,9 +1371,6 @@ static const struct fnd_method g_instance_methods[] = {
     {"NSData", "length", (void *)fnd_zero},
     {"NSData", "bytes", (void *)fnd_zero},
     {"NSWindow", "initWithContentRect:styleMask:backing:defer:", (void *)fnd_NSWindow_initWithContentRect},
-    /* NSWindow configuration -- all no-ops for now (no real window); the superclass walk routes
-       these from GameWindow.  setFrame:/setFrame:display: take an NSRect by value, harmlessly
-       ignored by fnd_zero. */
     {"NSWindow", "setAcceptsMouseMovedEvents:", (void *)fnd_zero},
     {"NSWindow", "setAcceptsTouchEvents:", (void *)fnd_zero},
     {"NSWindow", "setBackgroundColor:", (void *)fnd_zero},

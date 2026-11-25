@@ -1,13 +1,3 @@
-/* crashdump_linux.c -- cache/GangstarMV.dmp on Linux: crashdump.c's counterpart, written as an ELF core file, which
-   gdb opens with the program (gdb GangstarMV GangstarMV.dmp).
-
-   It holds what the Windows dump holds: every thread's registers and stack, and the files mapped into the process by
-   name only, with no folder.  The other threads are stopped by a signal while the file is written and let go after
-   it, as MiniDumpWriteDump suspends and resumes them; a thread that blocks the signal (Mesa's) is left out.  All of it
-   runs in the faulting thread's signal handler, so it keeps to system calls and static buffers: no malloc, no stdio.
-   Memory goes to the file through write(), which answers EFAULT for a page it cannot read instead of faulting.
-   Before the file is kept, every copy of the folders the log hides, of the environment's values and of the machine's
-   name is blanked (log_scrub_bytes).  LOG=0 means no dump either. */
 #ifndef _WIN32
 #define _GNU_SOURCE
 #include <elf.h>
@@ -31,14 +21,13 @@
 enum {
     MAX_THREADS = 64,
     MAX_MAPS = 4096,
-    STACK_CAP = 1 << 20,        /* of each thread's stack, from its esp up */
-    WAIT_MS = 500,              /* for the other threads to stop */
+    STACK_CAP = 1 << 20,
+    WAIT_MS = 500,
     PAGE = 4096,
 };
 
-static char dump_path[GMV_PATH_MAX];    /* empty: no dump this run */
+static char dump_path[GMV_PATH_MAX];
 
-/* The fault the dump is about (gmv_dump_note_signal); without one the writing thread's own registers stand in. */
 static volatile int noted;
 static int note_sig;
 static pid_t note_tid;
@@ -55,7 +44,7 @@ static volatile int nthr, let_go;
 static struct map {
     uint32_t start, end, off;
     int readable;
-    const char *name;           /* the file's name without its folder, or NULL */
+    const char *name;
     size_t name_len;
 } maps[MAX_MAPS];
 static int nmaps;
@@ -87,10 +76,8 @@ void gmv_dump_note_signal(int sig, const void *si, const void *uc)
 
 int gmv_dump_is_writer(void)
 {
-    return 0;                   /* the faulting thread writes it, and write() does not fault */
+    return 0;
 }
-
-/* ---- stopping the other threads ---- */
 
 static void on_stop(int sig, siginfo_t *si, void *context)
 {
@@ -138,7 +125,6 @@ static void list_threads(pid_t me)
     close(fd);
 }
 
-/* Each other thread records its registers in its on_stop and waits there until let_go. */
 static void stop_threads(void)
 {
     int sig = SIGRTMAX - 2;
@@ -152,7 +138,7 @@ static void stop_threads(void)
     pid_t pid = getpid();
     for (int i = 1; i < nthr; i++)
         if (syscall(SYS_tgkill, pid, thr[i].tid, sig))
-            thr[i].tid = 0;     /* gone meanwhile */
+            thr[i].tid = 0;
     struct timespec ms = {0, 1000000};
     for (int t = 0; t < WAIT_MS; t++) {
         int waiting = 0;
@@ -163,8 +149,6 @@ static void stop_threads(void)
         nanosleep(&ms, NULL);
     }
 }
-
-/* ---- the process's memory map ---- */
 
 static uint32_t hex(const char **p)
 {
@@ -193,18 +177,18 @@ static void read_maps(void)
     for (char *line = maps_text; *line && nmaps < MAX_MAPS;) {
         char *eol = strchr(line, '\n');
         if (!eol)
-            break;                          /* a line cut off by the buffer's end */
+            break;
         *eol = 0;
         const char *p = line;
         struct map *m = &maps[nmaps];
         m->start = hex(&p);
-        p++;                                /* '-' */
+        p++;
         m->end = hex(&p);
         p++;
         m->readable = *p == 'r';
-        p += 5;                             /* "rwxp " */
+        p += 5;
         m->off = hex(&p);
-        for (int field = 0; field < 2 && *p; field++) {     /* the device and the inode */
+        for (int field = 0; field < 2 && *p; field++) {
             while (*p == ' ')
                 p++;
             while (*p && *p != ' ')
@@ -214,7 +198,7 @@ static void read_maps(void)
             p++;
         m->name = NULL;
         m->name_len = 0;
-        if (*p == '/') {                    /* a file: its name only */
+        if (*p == '/') {
             const char *b = strrchr(p, '/') + 1;
             m->name = b;
             m->name_len = strlen(b);
@@ -223,8 +207,6 @@ static void read_maps(void)
         line = eol + 1;
     }
 }
-
-/* ---- the file ---- */
 
 static void note(uint32_t type, const void *desc, size_t len)
 {
@@ -247,7 +229,7 @@ static void prstatus(pid_t tid, int sig, const greg_t *g)
     ps.pr_cursig = (short)sig;
     ps.pr_pid = tid;
     ps.pr_ppid = getppid();
-    elf_greg_t *r = ps.pr_reg;     /* user_regs_struct's order */
+    elf_greg_t *r = ps.pr_reg;
     r[0] = g[REG_EBX];
     r[1] = g[REG_ECX];
     r[2] = g[REG_EDX];
@@ -259,7 +241,7 @@ static void prstatus(pid_t tid, int sig, const greg_t *g)
     r[8] = g[REG_ES];
     r[9] = g[REG_FS];
     r[10] = g[REG_GS];
-    r[11] = -1;                     /* orig_eax: not in a system call */
+    r[11] = -1;
     r[12] = g[REG_EIP];
     r[13] = g[REG_CS];
     r[14] = g[REG_EFL];
@@ -280,7 +262,6 @@ static void prpsinfo(void)
     note(NT_PRPSINFO, &pi, sizeof pi);
 }
 
-/* NT_FILE: the mapped files, each by its name without the folder. */
 static void file_note(void)
 {
     static unsigned char d[128 * 1024];
@@ -307,7 +288,7 @@ static void file_note(void)
     note(NT_FILE, d, at);
 }
 
-/* The readable stretch of a thread's stack from esp up, or 0 if esp is in no readable mapping. */
+/* esp */
 static int stack_of(uint32_t esp, uint32_t *lo, uint32_t *hi)
 {
     for (int i = 0; i < nmaps; i++)
@@ -331,7 +312,6 @@ static int write_all(int fd, const void *p, size_t n)
     return 1;
 }
 
-/* Memory into the file a page at a time; a page that cannot be read becomes zeros. */
 static int write_memory(int fd, uint32_t lo, uint32_t hi)
 {
     static const unsigned char zero[PAGE];
@@ -355,7 +335,6 @@ static const char *write_file(int *threads)
         sig[i] = noted && thr[i].tid == note_tid ? note_sig : 0;
     }
 
-    /* The notes: the first thread's with the process's, then the others' registers. */
     notes_len = 0;
     int nph = 1;
     for (int pass = 0; pass < 2; pass++)
@@ -373,7 +352,6 @@ static const char *write_file(int *threads)
             }
         }
 
-    /* The stacks, each its own segment, page-aligned in the file. */
     uint32_t off = (uint32_t)(sizeof(Elf32_Ehdr) + sizeof ph[0] * (1 + (size_t)nthr) + notes_len);
     off = (off + PAGE - 1) & ~(uint32_t)(PAGE - 1);
     for (int i = 0; i < nthr; i++) {
@@ -420,7 +398,7 @@ static const char *write_file(int *threads)
         if (lseek(fd, (off_t)ph[k].p_offset, SEEK_SET) < 0
             || !write_memory(fd, ph[k].p_vaddr, ph[k].p_vaddr + ph[k].p_filesz))
             err = "cannot write the file";
-    if (!err) {     /* a file that still names the folders is not kept */
+    if (!err) {
         off_t size = lseek(fd, 0, SEEK_END);
         unsigned char *d = size > 0 ? mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : MAP_FAILED;
         if (d == MAP_FAILED)
@@ -442,7 +420,7 @@ int gmv_dump_write(void)
         return 0;
     pid_t me = my_tid();
     list_threads(me);
-    if (!noted || note_tid != me) {     /* the writing thread's own registers */
+    if (!noted || note_tid != me) {
         ucontext_t uc;
         if (getcontext(&uc) == 0)
             memcpy(thr[0].regs, uc.uc_mcontext.gregs, sizeof thr[0].regs);

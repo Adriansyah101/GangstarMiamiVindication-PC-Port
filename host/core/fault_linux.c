@@ -1,7 +1,3 @@
-/* fault_linux.c -- faults on Linux, by signal handlers: veh.c's counterpart.  What they mean is fault.c's.
-
-   A jump into the low range is an ordinary SIGSEGV whose address is the instruction's own: the handler moves eip into
-   the copy and returns, as the Windows handler does.  Anything else stops the process with the same report. */
 #ifndef _WIN32
 #define _GNU_SOURCE
 #include <signal.h>
@@ -16,11 +12,9 @@
 #include "platform.h"
 #include "veh.h"
 
-/* The page-fault error code's bits (x86). */
 #define PF_WRITE 0x02
 #define PF_INSTR 0x10
 
-/* Room for the handler when the fault is a stack overflow: on the main thread, which runs the game. */
 static char alt_stack[64 * 1024];
 
 static void regs_of(const ucontext_t *uc, gmv_regs *r)
@@ -54,7 +48,6 @@ static void on_signal(int sig, siginfo_t *si, void *context)
         uc->uc_mcontext.gregs[REG_EIP] = (greg_t)to;
         return;
     }
-    /* A fault while reporting one: let the system end the process. */
     me = gmv_thread_id();
     if (in_handler == me) {
         signal(sig, SIG_DFL);
@@ -66,7 +59,6 @@ static void on_signal(int sig, siginfo_t *si, void *context)
         gmv_dump_note_signal(sig, si, uc);
         gmv_fatal(4, "The game used data this port does not have yet: %s.", missing);
     }
-    /* Another thread that faults meanwhile waits: the first fault ends the process. */
     if (!__sync_bool_compare_and_swap(&in_handler, 0, me))
         gmv_sleep_forever();
     unsigned long err = (unsigned long)uc->uc_mcontext.gregs[REG_ERR];
@@ -78,7 +70,6 @@ static void on_signal(int sig, siginfo_t *si, void *context)
               access == GMV_ACCESS_EXEC ? "jump" : fault_access_name(access), r.eip, fault_where(r.eip));
 }
 
-/* Hardware watchpoints are a Windows dev build's diagnostic. */
 void gmv_watch_arm(uint32_t addr)
 {
     gmv_log("[watch] 0x%08x: not available on this system\n", addr);
@@ -96,7 +87,6 @@ int veh_install(uint32_t code_lo, uint32_t code_hi)
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = on_signal;
-    /* NODEFER: a fault inside the handler reaches the guard above instead of killing the process unreported. */
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++)

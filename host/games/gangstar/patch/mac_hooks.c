@@ -1,4 +1,3 @@
-/* mac_hooks.c -- ORIGINAL_MAC_EXPERIENCE: the hooks that exist only for what it turns off */
 #include "compat.h"
 #include <stdint.h>
 
@@ -8,24 +7,14 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- ORIGINAL_MAC_EXPERIENCE: the hooks that exist only for what it turns off ----
-   They go in at the start without it and with its in-game switch going off; they come out with the
-   switch going on, leaving the bytes the game shipped with, so nothing is needed from a new start:
-   - every other enhancement's and the timing's at once (mac_features_in/out, at the end of this file);
-   - the Crusher's once it is out of the city (gmv_uc_tick);
-   - the densities and SPAWN_FADE at once, the spawn pool moved back and our copies in it freed (those out
-     in the city as they come back, gmv_pool_tick);
-   - the draw distance after the next cell update, which must see the radius go back;
-   - the collision sizes and the proxy guard as soon as what is in use fits and no pairs are buffered: the
-     tables shrink in the world in use (gmv_bp_shrink, from gmv_uc_tick, between steps). */
 patch_undo pd_undo;
-int dd_tables_back;                 /* to the Mac's: at the next tick, or the next world if none yet */
+int dd_tables_back;
 
 void dd_hooks_in(void)
 {
     patch_undo_now = &dd_undo;
     apply_draw_distance();
-    apply_origin_collision_fix();           /* after the draw distance, which needs it */
+    apply_origin_collision_fix();
     patch_undo_now = NULL;
 }
 
@@ -33,7 +22,7 @@ void crowd_hooks_in(void)
 {
     patch_undo_now = &pd_undo;
     apply_spawn_hook();
-    apply_spawn_fade();                     /* after the spawn hook, whose spawner hook it shares */
+    apply_spawn_fade();
     patch_undo_now = NULL;
 }
 
@@ -42,7 +31,7 @@ void mac_hooks_in(void)
     dd_unhook = dd_tables_back = 0;
     if (!dd_on) {
         const int *prof = (const int *)(uintptr_t)DD_PROFILE;
-        if (prof[3])                        /* read before the hook went in: the Mac's */
+        if (prof[3])
             dd_mac_profile[3] = prof[3], dd_mac_profile[4] = prof[4];
         oc_seed_r1 = *(const uint8_t *)(uintptr_t)DD_RADIUS_SET ? *(const float *)(uintptr_t)DD_RADIUS : 0;
         oc_seed_r2 = *(const uint8_t *)(uintptr_t)DD_KEEP_SET ? *(const float *)(uintptr_t)DD_KEEP : 0;
@@ -87,7 +76,6 @@ static void dd_tables_mac(void)
     gmv_log("[gamepatch] collision tables the Mac's again: 16384 proxies, 131072 pairs\n");
 }
 
-/* A new b2World is about to be made (b2solve.c): the sizes it reads can be the Mac's now. */
 void gmv_b2_world_new(void)
 {
     pd_world_gen++;
@@ -99,9 +87,6 @@ void gmv_b2_world_new(void)
         dd_tables_mac();
 }
 
-/* After a present, between steps: the world in use down to the Mac's sizes, once it fits.  Not before the
-   city's radius is back, which is what fills them (a measured run: 15837 of the 16384 in use until
-   then), and with room to spare, since the proxy guard goes with the tables. */
 void dd_tables_tick(void)
 {
     static int told_wait, told_no;
@@ -110,7 +95,7 @@ void dd_tables_tick(void)
     uint32_t world = *(const uint32_t *)(uintptr_t)DD_WORLD;
     void *bp = world ? *(void **)(uintptr_t)(world + DD_WORLD_BP) : NULL;
     if (!bp || !((const int *)(uintptr_t)DD_PROFILE)[3])
-        return;                                 /* no world yet: gmv_b2_world_new sees to it */
+        return;
     int r = *(int *)((char *)bp + 0x50) > 0x4000 - 0x400 ? 0 : gmv_bp_shrink(bp, 0x4000, 0x20000);
     if (r > 0) {
         told_wait = told_no = 0;

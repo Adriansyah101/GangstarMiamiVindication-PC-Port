@@ -1,5 +1,3 @@
-/* addon_io.h -- helpers shared by the add-on readers (radiosongs.c, ucveh.c): 32-bit words in either byte order,
-   the files' masked first bytes and whole files read or written in one go. */
 #ifndef GMV_ADDON_IO_H
 #define GMV_ADDON_IO_H
 
@@ -12,12 +10,18 @@ static inline uint32_t rd32(const unsigned char *p) { uint32_t v; memcpy(&v, p, 
 static inline void wr32(unsigned char *p, uint32_t v) { memcpy(p, &v, 4); }
 static inline uint32_t rdbe(const unsigned char *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static inline void wrbe(unsigned char *p, uint32_t v) { p[0] = v >> 24, p[1] = v >> 16, p[2] = v >> 8, p[3] = v; }
-/* An add-on file's first 4 bytes, masked so that the file does not read as what it is, and back. */
 static inline void unhide(unsigned char *d) { for (int i = 0; i < 4; i++) d[i] = (unsigned char)(d[i] - i - 1); }
 static inline void hide(unsigned char *d) { for (int i = 0; i < 4; i++) d[i] = (unsigned char)(d[i] + i + 1); }
 
-/* The whole file in a new buffer with `spare` more bytes allocated past its end (not cleared); NULL for a missing,
-   empty or unreadable file.  *n = its size. */
+static inline const char *base_name(const char *p)
+{
+    const char *b = p;
+    for (; *p; p++)
+        if (*p == '/' || *p == '\\')
+            b = p + 1;
+    return b;
+}
+
 static inline unsigned char *read_all(const char *path, size_t *n, size_t spare)
 {
     FILE *f = fopen(path, "rb");

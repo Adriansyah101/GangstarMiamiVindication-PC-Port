@@ -1,25 +1,3 @@
-/* config.c -- GangstarMV.ini, the host's settings file, in savegame\ next to the exe (older builds kept it
-   beside the exe; gmv_config_load moves it into savegame\ the first time).
-
-   Every setting is one of the GMV_* switches the host used to read only from the environment.
-   gmv_getenv("GMV_X") answers, in order:
-     1. in a dev build, the environment variable GMV_X, if it is set (exactly as getenv would, so
-        one-off command-line tests keep working and win over the file);
-     2. key X from GangstarMV.ini, if it has a non-empty value;
-     3. NULL -- the call site's built-in default.
-   Keys are case-insensitive and may be written with or without the GMV_ prefix.  A key is read in
-   any [section], so an older file whose keys sit in their former sections keeps its values; a line
-   in the key's own section wins over one elsewhere.  A missing file is created from the game's table
-   with its defaults (for Gangstar the enhancements on); a key the file leaves blank or lacks gets the
-   call site's built-in value, which for the enhancements is the Mac's.  A line for a key the game
-   has taken out (its table's retired list) is skipped without the unknown-setting line.
-
-   ORIGINAL_MAC_EXPERIENCE=1 puts a fixed answer for the keys in mac_preset ahead of all three.
-
-   Loaded once from gmv_main before anything else runs and read-only afterwards, so the game's
-   threads can call gmv_getenv freely.  gmv_config_save (the GAMEPATCH options tab) rewrites one
-   key's line in the file without changing what gmv_getenv answers; gmv_config_file_value reads
-   what the file holds now. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,12 +9,12 @@
 #include "shims.h"
 
 #define MAX_SETTINGS 256
-static char *g_vals[MAX_SETTINGS];     /* non-empty values from the file, or NULL */
-static char *g_saved[MAX_SETTINGS];    /* values gmv_config_save wrote since then (NULL = blank) */
+static char *g_vals[MAX_SETTINGS];
+static char *g_saved[MAX_SETTINGS];
 static unsigned char g_is_saved[MAX_SETTINGS];
-static char g_path[GMV_PATH_MAX];   /* the file, for gmv_config_save */
+static char g_path[GMV_PATH_MAX];
 
-static int g_mac;                   /* ORIGINAL_MAC_EXPERIENCE in effect */
+static int g_mac;
 
 static const gmv_setting *find_setting(const char *key)
 {
@@ -58,7 +36,6 @@ static char *trim(char *s)
     return s;
 }
 
-/* The help texts write paths the Windows way; elsewhere a backslash in them is the system's slash. */
 static void help_seps(char *s)
 {
 #ifdef _WIN32
@@ -80,6 +57,17 @@ static void put_help(FILE *f, const char *text)
         fputc(*text == '\\' ? '/' : *text, f);
 #endif
     fputs("\r\n", f);
+}
+
+static void fill_absent(void)
+{
+    for (size_t a = 0; a < gmv_game_settings.nabsent; a++) {
+        const gmv_setting *s = find_setting(gmv_game_settings.absent[a].name);
+        if (!s || g_vals[s - gmv_game_settings.list])
+            continue;
+        g_vals[s - gmv_game_settings.list] = _strdup(gmv_game_settings.absent[a].val);
+        gmv_log("[config] %s blank or not in " GMV_GAME_NAME ".ini: %s\n", s->name, gmv_game_settings.absent[a].val);
+    }
 }
 
 static void write_template(const char *path)
@@ -111,26 +99,25 @@ void gmv_config_load(const char *exe_dir)
     gmv_mkdir(path);
     snprintf(path, sizeof path, "%s" GMV_SEP "savegame" GMV_SEP GMV_GAME_NAME ".ini", exe_dir);
     snprintf(old, sizeof old, "%s" GMV_SEP GMV_GAME_NAME ".ini", exe_dir);
-    if (gmv_rename(old, path))              /* fails harmlessly when there is no old file or the new one exists */
+    if (gmv_rename(old, path))
         gmv_log("[config] moved %s to %s\n", old, path);
     snprintf(g_path, sizeof g_path, "%s", path);
     FILE *f = gmv_fopen(path, "rb");
     if (!f) {
         write_template(path);
         f = gmv_fopen(path, "rb");
-        if (!f)
+        if (!f) {
+            fill_absent();
             return;
+        }
     }
-    /* A key is looked up in every section, so a file written before a key moved to another section keeps
-       its value.  Where the key appears in its own section as well, that line wins. */
-    static unsigned char home[MAX_SETTINGS];    /* where the value came from: 1 = the key's own section,
-                                                   2 = another named section, 0 = above the first header */
+    static unsigned char home[MAX_SETTINGS];
     char line[1024], sec[64] = "";
     int lineno = 0, nset = 0;
     while (fgets(line, sizeof line, f)) {
         char *p = line;
         if (++lineno == 1 && !memcmp(p, "\xEF\xBB\xBF", 3))
-            p += 3;                                 /* UTF-8 BOM from Notepad */
+            p += 3;
         p[strcspn(p, "\n")] = 0;
         p = trim(p);
         if (*p == '[') {
@@ -148,14 +135,14 @@ void gmv_config_load(const char *exe_dir)
         *eq = 0;
         char *key = trim(p), *val = trim(eq + 1);
         size_t n = strlen(val);
-        if (n >= 2 && val[0] == '"' && val[n - 1] == '"') {     /* "C:\path with spaces\x.wav" */
+        if (n >= 2 && val[0] == '"' && val[n - 1] == '"') {
             val[n - 1] = 0;
             val++;
         }
         const gmv_setting *s = find_setting(key);
         if (!s) {
             const char *bare = _strnicmp(key, "GMV_", 4) ? key : key + 4;
-            int retired = 0;        /* a key taken out of the game: an older file still has its line */
+            int retired = 0;
             for (size_t r = 0; r < gmv_game_settings.nretired && !retired; r++)
                 retired = !_stricmp(bare, gmv_game_settings.retired[r]);
             if (!retired)
@@ -171,7 +158,7 @@ void gmv_config_load(const char *exe_dir)
         g_vals[i] = *val ? _strdup(val) : NULL;
     }
     fclose(f);
-    char away[512] = "";        /* keys whose value came from another named section */
+    char away[512] = "";
     size_t al = 0;
     for (size_t i = 0; i < gmv_game_settings.n; i++)
         if (g_vals[i] && home[i] == 2 && al < sizeof away)
@@ -193,6 +180,7 @@ void gmv_config_load(const char *exe_dir)
         nset += g_vals[i] != NULL;
     }
     gmv_log("[config] read %s (%d settings given; non-default ones listed above)\n", path, nset);
+    fill_absent();
 
     const char *m = gmv_getenv("GMV_ORIGINAL_MAC_EXPERIENCE");
     if (!(gmv_env_on(m)))
@@ -215,15 +203,14 @@ void gmv_config_set_mac(int on)
     g_mac = on != 0;
 }
 
-int gmv_config_mac(void)            /* ORIGINAL_MAC_EXPERIENCE in effect now (it can change in game) */
+int gmv_config_mac(void)
 {
     return g_mac;
 }
 
-int gmv_config_tab(void)            /* GAMEPATCH_TAB: on unless it says 0, so an older ini without the key gets it too */
+int gmv_config_tab(void)
 {
-    const char *t = gmv_getenv("GMV_GAMEPATCH_TAB");
-    return !(t && *t == '0');
+    return !gmv_env_off(gmv_getenv("GMV_GAMEPATCH_TAB"));
 }
 
 const char *gmv_config_file_value(const char *name)
@@ -235,10 +222,6 @@ const char *gmv_config_file_value(const char *name)
     return g_is_saved[i] ? g_saved[i] : g_vals[i];
 }
 
-/* Set key name to val in the file: every line that sets it is rewritten as KEY=val (the key as
-   written, the comments and the rest kept).  A key the file lacks is added with its comment at the
-   end of its [section], or the section is added at the end of the file.  Through a temporary
-   file, so a failed write leaves the old one.  1 on success. */
 int gmv_config_save(const char *name, const char *val)
 {
     const gmv_setting *s = find_setting(name);
@@ -269,7 +252,7 @@ int gmv_config_save(const char *name, const char *val)
         return 0;
     }
     int found = 0, in_sec = 0, have_sec = 0;
-    size_t ins = (size_t)-1, sl = strlen(s->section);   /* ins: the header after the key's section */
+    size_t ins = (size_t)-1, sl = strlen(s->section);
     for (size_t p = 0; p < n;) {
         size_t e = p;
         while (e < n && old[e] != '\n')
@@ -293,7 +276,7 @@ int gmv_config_save(const char *name, const char *val)
         }
         if (find_setting(trim(key)) == s) {
             int cr = ln && old[e - 1] == '\r';
-            size_t head = (size_t)(eq - old) + 1 - p;          /* up to and with '=' */
+            size_t head = (size_t)(eq - old) + 1 - p;
             memcpy(o, old + p, head), o += head;
             memcpy(o, val, vl), o += vl;
             if (cr)
@@ -313,7 +296,7 @@ int gmv_config_save(const char *name, const char *val)
             an = snprintf(add, al, "\r\n[%s]\r\n; %s\r\n\r\n; %s\r\n", s->section, sh, s->help);
         else if (at_end)
             an = snprintf(add, al, "\r\n; %s\r\n", s->help);
-        else        /* before the next header, after the blank line that already precedes it */
+        else
             an = snprintf(add, al, "; %s\r\n", s->help);
         help_seps(add);
         an += snprintf(add + an, al - (size_t)an, "%s=%s\r\n%s", s->name, val, have_sec && !at_end ? "\r\n" : "");
@@ -339,7 +322,7 @@ int gmv_config_save(const char *name, const char *val)
         gmv_log("[config] could not save %s=%s to " GMV_GAME_NAME ".ini (%lu)\n", s->name, val, why);
         return 0;
     }
-    g_saved[i] = *val ? _strdup(val) : NULL;    /* the old one is left: a reader may still hold it */
+    g_saved[i] = *val ? _strdup(val) : NULL;
     g_is_saved[i] = 1;
     gmv_log("[config] saved %s=%s to " GMV_GAME_NAME ".ini\n", s->name, val);
     return 1;
@@ -360,7 +343,6 @@ const char *gmv_getenv(const char *name)
     return s ? g_vals[s - gmv_game_settings.list] : NULL;
 }
 
-/* A key as it answers now: gmv_getenv, but what the options menu saved counts at once. */
 const char *gmv_config_live(const char *name)
 {
     if (g_mac)

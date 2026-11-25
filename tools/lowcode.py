@@ -1,7 +1,3 @@
-"""Inspect the code that sits below 0x10000 (Windows cannot map it) and everything that touches it.
-
-usage: python -I lowcode.py <macho> [--dump]
-"""
 import collections
 import os
 import sys
@@ -12,7 +8,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse, symbols  # noqa: E402
 
 LOW_END = 0x10000
-
 
 def main():
     with open(sys.argv[1], "rb") as f:
@@ -59,7 +54,6 @@ def main():
             stats["undecodable"] += 1
     print("instructions below 0x10000: %d -> %s" % (len(ins_low), dict(stats)))
 
-    # Who, in the rest of __text, branches into the low region?
     into = collections.Counter()
     for ins in md.disasm(code[LOW_END - base:], LOW_END):
         if ins.op_str.startswith("0x") and (ins.mnemonic == "call" or ins.mnemonic.startswith("j")):
@@ -68,7 +62,6 @@ def main():
                 into[ins.mnemonic if ins.mnemonic in ("call", "jmp") else "jcc"] += 1
     print("direct branches from high code into low code:", dict(into))
 
-    # Data words anywhere that look like pointers into low code.
     lo_ptr = 0
     for seg in info["segments"]:
         if seg["name"] in ("__DATA", "__OBJC"):
@@ -78,7 +71,6 @@ def main():
                 if base <= v < LOW_END:
                     lo_ptr += 1
     print("aligned data words in [0x%x,0x10000): %d (some are plain integers)" % (base, lo_ptr))
-
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,3 @@
-/* switch_inventory.c -- PLAYERSWITCH_INVENTORY: Betty shares Johnny's cash and weapons */
 #include "compat.h"
 #include <stdint.h>
 
@@ -8,23 +7,7 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- PLAYERSWITCH_INVENTORY (menu: PLAYERSWITCH INVENTORY): in free roam, the player the story
-   switched you to (Betty) shares Johnny's cash and weapons (an enhancement;
-   off under ORIGINAL_MAC_EXPERIENCE) ----
-   Each Player is built (0xf9e94) with 10000 cash and a fresh WeaponInfos (0x8ae3c, 0x74 bytes at
-   +0x7f4): +0 the 16 weapon slots' objects (slot i is always the same kind, 0x8a998(i)), +0x40 the 11
-   ammo counts, +0x6c the slot in hand (0x8a4ea), +0x70 "armed" (on foot the weapon keys switch only
-   while it is set: 0xf4b44 → 0x8a44a), +0x71 "never runs dry" (set on the player not in control by
-   0x8a456).  A weapon object's +0xa1 is 1 while it is locked (0x8616a locks, 0x8612e gives;
-   both also flip one bit of a mask shared by everyone) and +0x3c/+0x44 are what the save keeps of it
-   (WEPN, read back by 0x85e00/0x85e0e).
-   Once a present (the main thread, between updates): while the player in control is not the main one
-   and no mission is on (the manager idle: record -1, state 0), the first look copies Johnny's cash,
-   ammo and weapons onto them, and each later one copies theirs back onto Johnny, so what they spend
-   or pick up is his too (one wallet).  Missions keep the game's own loadout: sharing
-   stops while one is on, and money the same player made during it is added to
-   Johnny's when sharing resumes (a reward for a mission passed as Betty).  The slot in hand is never
-   locked under its holder.  The destructors (0xf6f1c, 0xf92dc) clear *0x689ea8 and +0x7f4. */
+/* 0xf9e94 0x8ae3c 0x74 +0x7f4 0x8a998 +0x40 +0x6c */
 #define SI_CASH     0x754u
 #define SI_WEAPONS  0x7f4u
 #define SI_SLOTS    16
@@ -36,8 +19,8 @@
 #define SI_W_KEEP1  0x3cu
 #define SI_W_KEEP2  0x44u
 static volatile int g_si_on;
-static uint32_t si_who;              /* the player sharing Johnny's things now, or 0               */
-static uint32_t si_paused;           /* the one sharing until a mission began, and its cash then    */
+static uint32_t si_who;
+static uint32_t si_paused;
 static int32_t si_paused_cash;
 
 int si_set(int on)
@@ -50,7 +33,6 @@ int si_set(int on)
     return 1;
 }
 
-/* n bytes from a are committed, writable memory (the copy writes; ms_rd's 0 can't tell a bad read). */
 static int si_mem(uint32_t a, uint32_t n)
 {
     MEMORY_BASIC_INFORMATION mbi;
@@ -66,15 +48,13 @@ static uint32_t si_infos(uint32_t p)
     return w && si_mem(w, 0x74) && ms_rd(w + SI_IN_HAND) < SI_SLOTS ? w : 0;
 }
 
-/* may_lock 0 (the copy back onto Johnny): weapons are only ever added to him, never taken away. */
 static void si_copy(uint32_t from, uint32_t to, int may_lock)
 {
     uint32_t fi = si_infos(from), ti = si_infos(to), hand = ms_rd(ti + SI_IN_HAND);
     *(int32_t *)(uintptr_t)(to + SI_CASH) = (int32_t)ms_rd(from + SI_CASH);
     for (int i = 0; i < SI_AMMO_N; i++)
         *(uint32_t *)(uintptr_t)(ti + SI_AMMO + 4 * i) = ms_rd(fi + SI_AMMO + 4 * i);
-    /* The "armed" byte: on foot, 0xf4b44 (asked by the weapon keys 0x11e5ba / 0x11d222) lets the
-       weapons be switched only while it is set; 0x8b00c sets it when a weapon is given. */
+    /* 0xf4b44 0x11e5ba 0x11d222 0x8b00c */
     unsigned char armed = *(unsigned char *)(uintptr_t)(fi + SI_ARMED);
     if (armed || may_lock)
         *(unsigned char *)(uintptr_t)(ti + SI_ARMED) = armed;
@@ -105,7 +85,7 @@ static int si_weapons_owned(uint32_t p)
 __attribute__((force_align_arg_pointer))
 void gmv_playerswitch_inventory_tick(void)
 {
-    lc_tick();                                            /* LC_SWITCH */
+    lc_tick();
     if (!g_si_on)
         return;
     uint32_t mainp = ms_rd(SSF_MAIN_PP), ctrl = ms_rd(SSF_CTRL_PP), mgr = mr_mgr();
@@ -113,7 +93,7 @@ void gmv_playerswitch_inventory_tick(void)
                   si_infos(mainp) && si_infos(ctrl);
     int mission = !mgr || (int)ms_rd(mgr + 4) != -1 || ms_rd(mgr + 0x1c);
     if (si_who && (!players || ctrl != si_who || mission)) {
-        if (players && ctrl == si_who) {                  /* a mission began: hold on to who it was */
+        if (players && ctrl == si_who) {
             si_paused = ctrl;
             si_paused_cash = (int32_t)ms_rd(ctrl + SI_CASH);
         }

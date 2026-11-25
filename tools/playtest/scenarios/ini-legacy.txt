@@ -1,6 +1,4 @@
-# A GangstarMV.ini laid out as before the speed-ups moved to [Advanced] and MENU_FADE_CLICKS, RADIO_LOGO_FIX and
-# SWITCH_SAVE_FIX to [Fixes]: each key is still read where the older file has it, and a key's line in its own section
-# wins over a line elsewhere (FAST_MEMMOVE=1 in [Advanced] over FAST_MEMMOVE=0 in [Fixes], although that comes later).
+# Legacy ini layout: keys read from their old sections; a key in its own section wins (FAST_MEMMOVE)
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

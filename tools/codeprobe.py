@@ -1,7 +1,3 @@
-"""Quick probes of the game's code model: PIC or absolute addressing, stub format.
-
-usage: python -I codeprobe.py <macho>
-"""
 import collections
 import os
 import sys
@@ -10,7 +6,6 @@ import capstone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse  # noqa: E402
-
 
 def main():
     with open(sys.argv[1], "rb") as f:
@@ -29,7 +24,6 @@ def main():
     pic_pops = code.count(b"\xe8\x00\x00\x00\x00")
     print("call $+5 sequences:", pic_pops)
 
-    # Count 32-bit little-endian words in code that land inside the image (absolute refs).
     abs_refs = 0
     for i in range(0, len(code) - 3):
         v = int.from_bytes(code[i:i + 4], "little")
@@ -37,7 +31,6 @@ def main():
             abs_refs += 1
     print("raw in-image dwords in __text (upper bound on absolute refs): %d" % abs_refs)
 
-    # Disassemble the first chunk linearly and tally operand styles.
     md.detail = True
     tally = collections.Counter()
     n = 0
@@ -53,7 +46,6 @@ def main():
     print("first 256KB: %d insns, %s" % (n, dict(tally)))
 
     print("code below 0x10000: 0x%x bytes" % (0x10000 - text["addr"]))
-
 
 if __name__ == "__main__":
     main()

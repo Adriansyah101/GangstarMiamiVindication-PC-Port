@@ -1,4 +1,3 @@
-/* vehicle_reflections.c -- VEHICLE_REFLECTIONS */
 #include <math.h>
 #include <string.h>
 #include "compat.h"
@@ -10,45 +9,31 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- VEHICLE_REFLECTIONS: an enhancement, on by default, off under ORIGINAL_MAC_EXPERIENCE ---------------
-   Screen-space reflections on the shiny cars, in the same place as the sea's and just after them.  The
-   game's own shine on a car is a fixed 256² picture of a sky added onto the paint, looked up by which way
-   the surface faces (unit 1 COMBINE ADD, its coordinates the normals themselves), so a car never mirrors
-   the street; the cars without that pass (vans and the like) are matte, and stay so.
-   - A body is a draw to the screen with that pass (and the env picture wider than 64: the characters'
-     is 64²), opaque, writing depth, with normals.  Right after it, it is drawn again by car_mark into
-     a screen-sized target of its own (normal in eye space, 10 bits a channel, and a depth of its own),
-     with the game's matrices, viewport, depth range and culling, so it lands on the same pixels.
-   - The pass reads that target where a body was drawn and something drawn later is not in front (the
-     frame's depth is compared), marches the reflected ray across the screen as the sea's pass does
-     (from just off the surface, so the car does not find itself where it starts), and where the ray
-     hits something mixes it in by Fresnel's law (Schlick, 8% head-on: a real clear coat's 4% left the
-     middle of a bonnet or trunk looking bare to the eye; more than this reads as plastic), times
-     VEHICLE_REFLECTION_STRENGTH, fading towards the screen's edges and with the fog.  A body within 6 m
-     of where the ray started is the same car and is marched through: seen from behind, a trunk's rays
-     meet the rear window, whose dark glass (it cannot show what the glass itself reflects) left the trunk
-     looking bare.
-   - Where the ray hits nothing, the screen itself serves as a sphere map, looked up by
-     the reflected direction: uv = 0.5 + 0.5 * its x and y in eye space, softened by a 5-tap blur, and mixed
-     in by the same Fresnel.  Before, the game's sky picture stayed alone there, and the roofs and trunks,
-     whose rays rise off the top of the screen, looked bare (an SSR
-     limit, not a bug).  A trick some car games of the time used with the frame before; here the frame
-     itself is at hand, as the pass runs after the scene.  Not a mirror: a trunk can show what is in front
-     of the camera, but the colours are the scene's and move with it.  Compared on a Laufer
-     with the sphere map alone and the march alone; this mix looked best.
-   - Paint and glass are one draw with no mask (the paint texture's alpha is 255 throughout), so they
-     reflect alike. */
-float g_vr_strength = 2.0f;                      /* VEHICLE_REFLECTION_STRENGTH (blank = 2) */
+float g_vr_strength = 2.0f;
 #if GMV_DEV
-int g_vr_debug;                                  /* VEHICLE_REFLECTION_DEBUG (diagnostic) */
+int g_vr_debug;
 #endif
+#define VR_QUEUE 256
+
+typedef struct {
+    GLint vp[4], sbox[4];
+    GLfloat dr[2], po[2];
+    GLenum cull_face, front_face;
+    int cull, poly, scissor;
+} vr_state_t;
 
 static struct {
-    unsigned frame;                                     /* g_frame_no + 1 of the last frame a body was marked in */
-    unsigned bodies;                                    /* marked in that frame */
-    int ready;                                          /* 1 = the programs are built, -1 = they failed */
-    GLuint p_mark, p_pass, fbo, t_n, t_d;               /* the marking draw's target: normals and their depth */
+    unsigned frame;
+    unsigned bodies;
+    int ready;
+    GLuint p_mark, p_pass, fbo, t_n, t_d;
+    GLint u_mv, u_mvp, u_nm;
     int w, h;
+    struct {
+        mark_t d;
+        vr_state_t st;
+        GLfloat mv[16], mvp[16], nm[9];
+    } q[VR_QUEUE];
 } vr;
 
 int vr_frame(void)
@@ -56,21 +41,17 @@ int vr_frame(void)
     return vr.frame == g_frame_no + 1;
 }
 
-/* The body again, with its normal in eye space (the game's vertices are already in world space, so the
-   modelview is the view). */
 static const char vr_vs_mark[] =
     "#version 120\n"
+    "uniform mat4 mv, mvp;\n"
+    "uniform mat3 nm;\n"
     "varying vec3 n, e;\n"
     "void main() {\n"
-    "    n = gl_NormalMatrix * gl_Normal;\n"
-    "    e = (gl_ModelViewMatrix * gl_Vertex).xyz;\n"
-    "    gl_Position = ftransform();\n"
+    "    n = nm * gl_Normal;\n"
+    "    e = (mv * gl_Vertex).xyz;\n"
+    "    gl_Position = mvp * gl_Vertex;\n"
     "}\n";
 
-/* A guard against a model whose normals point into the car (it would fall to the rim fade; none has been
-   seen: the debug view showed no such pixel).  Back faces are culled, so the triangle drawn faces the eye:
-   a normal against the triangle's own facing (from the screen's derivatives of its position) is turned
-   round, and the alpha says so (2/3). */
 static const char vr_fs_mark[] =
     "#version 120\n"
     "varying vec3 n, e;\n"
@@ -86,13 +67,13 @@ static const char vr_fs[] =
     "#version 120\n"
     "uniform sampler2D scn, dep, nrm, cdep;\n"
     "uniform vec2 full, dr;\n"
-    "uniform vec4 vp, fogp;\n"                          /* fogp: start, 1 / (end - start), mode, a */
+    "uniform vec4 vp, fogp;\n"
     "uniform mat4 proj, invp;\n"
     "uniform float str, wmin, reach, dbg;\n"
     "float dat(vec2 px) { return texture2D(dep, px / full).r; }\n"
-    /* where the ray finds nothing: the screen as a sphere map, by the reflected direction; b = blur in screens */
     "vec3 sphere_scr(vec3 r, float b) {\n"
-    "    vec2 u = 0.5 + 0.5 * normalize(r).xy;\n"
+    "    vec3 d = normalize(r);\n"
+    "    vec2 u = 0.5 + d.xy / (2.0 * sqrt(max(2.0 + 2.0 * d.z * sign(proj[2][3]), 1e-4)));\n"
     "    vec2 o = vec2(b * vp.w / vp.z, b);\n"
     "    vec3 c = texture2D(scn, (vp.xy + u * vp.zw) / full).rgb * 0.4;\n"
     "    c += texture2D(scn, (vp.xy + clamp(u + vec2(o.x, 0.0), 0.0, 1.0) * vp.zw) / full).rgb * 0.15;\n"
@@ -112,12 +93,10 @@ static const char vr_fs[] =
     "    if (d < dr.x || d >= dr.y - 1e-5) return 1e30;\n"
     "    return wof(unproj(px, (d - dr.x) / (dr.y - dr.x) * 2.0 - 1.0));\n"
     "}\n"
-    /* VEHICLE_REFLECTION_DEBUG: a body's pixel tinted by what became of it, in place of being left out */
     "void drop(vec3 c) {\n"
     "    if (dbg < 0.5) discard;\n"
     "    gl_FragColor = vec4(c, 0.6);\n"
     "}\n"
-    /* the frame shows, at px, a body within 6 m of pc: the car the ray started from */
     "bool self_at(vec2 px, float sw, vec3 pc) {\n"
     "    if (texture2D(nrm, px / full).a < 0.5) return false;\n"
     "    vec3 q = unproj(px, (texture2D(cdep, px / full).r - dr.x) / (dr.y - dr.x) * 2.0 - 1.0);\n"
@@ -131,7 +110,7 @@ static const char vr_fs[] =
     "    if (cd < dr.x || cd >= dr.y - 1e-5) discard;\n"
     "    vec3 pc = unproj(px, (cd - dr.x) / (dr.y - dr.x) * 2.0 - 1.0);\n"
     "    float wc = wof(pc);\n"
-    "    if (scene_w(px) < wc * 0.995 - 5.0) {\n"          /* something drawn after the body is in front */
+    "    if (scene_w(px) < wc * 0.995 - 5.0) {\n"
     "        drop(vec3(1.0, 0.0, 0.0));\n"
     "        return;\n"
     "    }\n"
@@ -149,15 +128,14 @@ static const char vr_fs[] =
     "    vec3 v = normalize(pc);\n"
     "    vec3 n = normalize(nd.xyz * 2.0 - 1.0);\n"
     "    float vn = dot(v, n);\n"
-    "    float rim = smoothstep(0.03, 0.25, -vn);\n"      /* fades out at the outline, where the normals graze */
+    "    float rim = smoothstep(0.03, 0.25, -vn);\n"
     "    if (rim <= 0.0) {\n"
     "        drop(vec3(0.0, 0.0, 1.0));\n"
     "        return;\n"
     "    }\n"
-    "    if (vn > -0.05) n = normalize(n - v * (vn + 0.05));\n"   /* smoothed normals turned away at the outline */
+    "    if (vn > -0.05) n = normalize(n - v * (vn + 0.05));\n"
     "    vec3 r = reflect(v, n);\n"
     "    float F = (0.08 + 0.92 * pow(1.0 - clamp(dot(-v, n), 0.0, 1.0), 5.0)) * rim;\n"
-    /* the march, as the sea's, from just off the surface */
     "    vec3 p0 = pc + n * (0.004 * wc + 2.0);\n"
     "    float w0 = wof(p0);\n"
     "    vec3 p1 = p0 + r * reach;\n"
@@ -174,12 +152,11 @@ static const char vr_fs[] =
     "    amax = max(amax, 0.0);\n"
     "    float noise = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));\n"
     "    float ap = 0.0, rwp = w0, hit = -1.0;\n"
-    "    bool past = false, through = false;\n"           /* the last step, any step, was behind the car itself */
+    "    bool past = false, through = false;\n"
     "    for (int i = 1; i <= 48; i++) {\n"
     "        float a = amax * pow((float(i) - noise) / 48.0, 1.6);\n"
     "        float rw = 1.0 / mix(k0, k1, a), sw = scene_w(s0 + ds * a);\n"
     "        if (rw > sw && rw - sw < max(0.03 * sw + 50.0, 2.0 * abs(rw - rwp))) {\n"
-    /* a car does not mirror itself (the trunk would show the dark rear window): the ray goes on past it */
     "            if (self_at(s0 + ds * a, sw, pc)) {\n"
     "                ap = a;\n"
     "                rwp = rw;\n"
@@ -198,12 +175,13 @@ static const char vr_fs[] =
     "        rwp = rw;\n"
     "        past = false;\n"
     "    }\n"
-    "    if (dbg > 0.5) {\n"                              /* magenta: the normal was turned round */
+    "    if (dbg > 0.5) {\n"
     "        drop(nd.a < 0.84 ? vec3(1.0, 0.0, 1.0) : hit < 0.0 ? vec3(1.0, 1.0, 0.0) : through ? vec3(0.0, 1.0, 1.0) : vec3(0.0, 1.0, 0.0));\n"
     "        return;\n"
     "    }\n"
-    "    if (hit < 0.0) {\n"                              /* nothing hit: the screen as a sphere map */
-    "        gl_FragColor = vec4(sphere_scr(r, 0.015), min(F * str, 0.85) * clear);\n"
+    "    if (hit < 0.0) {\n"
+    "        float back = smoothstep(-0.95, -0.4, normalize(r).z * sign(proj[2][3]));\n"
+    "        gl_FragColor = vec4(sphere_scr(r, 0.015), min(F * str, 0.85) * clear * back);\n"
     "        return;\n"
     "    }\n"
     "    vec2 s = s0 + ds * hit;\n"
@@ -221,23 +199,25 @@ static int vr_init(void)
         gmv_log("[vr] vehicle reflections off\n");
         return 0;
     }
+    vr.u_mv = aof.GetUniformLocation(vr.p_mark, "mv");
+    vr.u_mvp = aof.GetUniformLocation(vr.p_mark, "mvp");
+    vr.u_nm = aof.GetUniformLocation(vr.p_mark, "nm");
     glGenTextures(1, &vr.t_n);
     glGenTextures(1, &vr.t_d);
     msf.GenFramebuffers(1, &vr.fbo);
     return 1;
 }
 
-/* Size the marking target to the screen and check it; leaves it bound. */
 static int vr_alloc(int w, int h)
 {
     vr.w = w;
     vr.h = h;
-    ao_tex(vr.t_n, 0x8059, w, h, GL_RGBA, GL_UNSIGNED_BYTE);   /* RGB10_A2 */
-    ao_tex(vr.t_d, 0x81A6, w, h, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT);   /* DEPTH_COMPONENT24 */
-    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);            /* GL_TEXTURE_COMPARE_MODE */
+    ao_tex(vr.t_n, 0x8059, w, h, GL_RGBA, GL_UNSIGNED_BYTE);
+    ao_tex(vr.t_d, 0x81A6, w, h, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT);
+    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);
     msf.BindFramebuffer(MS_FRAMEBUFFER, vr.fbo);
     aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8CE0, GL_TEXTURE_2D, vr.t_n, 0);
-    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8D00, GL_TEXTURE_2D, vr.t_d, 0);   /* GL_DEPTH_ATTACHMENT */
+    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8D00, GL_TEXTURE_2D, vr.t_d, 0);
     GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
     if (st != 0x8CD5) {
         gmv_log("[vr] framebuffer incomplete (0x%x) at %dx%d; vehicle reflections off\n", st, w, h);
@@ -246,8 +226,6 @@ static int vr_alloc(int w, int h)
     return 1;
 }
 
-/* Before each glDrawElements to the screen (the bodies come that way), in the game's state: this draw has
-   the sky shine pass, so it is a shiny car's body (1) or, with the small env picture, a character (2). */
 int shine_body(GLenum mode, GLsizei count)
 {
     if (g_glt.last_fb || g_sky_draw || mode < GL_TRIANGLES || count < 3 || g_blend_on || !g_ao_dmask || !g_ao_depth_on)
@@ -255,21 +233,27 @@ int shine_body(GLenum mode, GLsizei count)
     unsigned on = g_tf_tex2d & (g_texfix ? g_tf_tcarr : 0xF) & 0xF;
     if ((on & 3) != 3 || g_te[1].mode != 0x8570 || g_te[1].crgb != GL_ADD || !gmv_gl_arr_on(GA_NORMAL))
         return 0;
-    void(APIENTRY * act)(GLenum) = tf_active_real();
-    if (!act)
-        return 0;
-    GLint tw1 = 0;
-    act(0x84C1);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw1);
-    act(0x84C0 + g_tf_active);
+    GLint tw1 = 0, th1 = 0;
+    gmv_gl_tex_dims(g_tf_bound[1], &tw1, &th1);
     ao_proj_refresh();
     return !g_ao_persp ? 0 : tw1 <= 64 ? 2 : 1;
 }
 
-/* A body is drawn again into the marking target. */
+static void vr_normal(GLfloat *o, const GLfloat *m)
+{
+    for (int j = 0; j < 3; j++) {
+        const GLfloat *a = m + (j + 1) % 3 * 4, *b = m + (j + 2) % 3 * 4;
+        o[j * 3] = a[1] * b[2] - a[2] * b[1];
+        o[j * 3 + 1] = a[2] * b[0] - a[0] * b[2];
+        o[j * 3 + 2] = a[0] * b[1] - a[1] * b[0];
+    }
+    GLfloat d = m[0] * o[0] + m[1] * o[1] + m[2] * o[2];
+    for (int k = 0; k < 9; k++)
+        o[k] /= d;
+}
+
 void car_mark(GLenum mode, GLsizei count, GLenum type, const void *idx)
 {
-    static void(APIENTRY * de)(GLenum, GLsizei, GLenum, const void *);
     int w = g_ms_w, h = g_ms_h;
     if (!g_ms_fbo)
         gmv_gl_client_size(&w, &h);
@@ -277,57 +261,88 @@ void car_mark(GLenum mode, GLsizei count, GLenum type, const void *idx)
         return;
     if (!vr.ready)
         vr.ready = vr_init() ? 1 : -1;
-    if (!de)
-        de = gl_real("glDrawElements");
-    if (vr.ready < 0 || !de) {
+    if (vr.ready < 0) {
         g_vr = 0;
         return;
     }
-    GLint dfb = 0, rfb = 0, prog = 0;
-    dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING);
-    rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
-    prog = gmv_gl_cur_prog();                       /* GL_CURRENT_PROGRAM, QUERY_FREE */
     if (w != vr.w || h != vr.h) {
+        GLint dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING), rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
         glPushAttrib(GL_TEXTURE_BIT);
         int ok = vr_alloc(w, h);
         glPopAttrib();
+        msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);
+        msf.BindFramebuffer(MS_DRAW_FB, (GLuint)dfb);
         if (!ok) {
             g_vr = 0;
-            msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);
-            msf.BindFramebuffer(MS_DRAW_FB, (GLuint)dfb);
             return;
         }
     }
-    glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_ENABLE_BIT);
-    msf.BindFramebuffer(MS_FRAMEBUFFER, vr.fbo);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_TRUE);
     if (!vr_frame()) {
         vr.frame = g_frame_no + 1;
         vr.bodies = 0;
-        GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);    /* the game's scissor stays for the draw */
-        glDisable(GL_SCISSOR_TEST);
-        glClearColor(0, 0, 0, 0);
-        glClearDepth(1);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        if (sc)
-            glEnable(GL_SCISSOR_TEST);
     }
-    vr.bodies++;
-    glDisable(GL_BLEND);
-    glDisable(GL_ALPHA_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glDepthFunc(GL_LEQUAL);
-    aof.UseProgram(vr.p_mark);
-    de(mode, count, type, idx);
-    aof.UseProgram((GLuint)prog);
-    glPopAttrib();
-    msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);
-    msf.BindFramebuffer(MS_DRAW_FB, (GLuint)dfb);
+    if (vr.bodies == VR_QUEUE || !mark_take(&vr.q[vr.bodies].d, mode, count, type, idx, 1))
+        return;
+    const GLfloat *mv = ao_matrix(GL_MODELVIEW);
+    memcpy(vr.q[vr.bodies].mv, mv, sizeof vr.q[vr.bodies].mv);
+    ds_mul(vr.q[vr.bodies].mvp, ao_matrix(GL_PROJECTION), mv);
+    vr_normal(vr.q[vr.bodies].nm, mv);
+    vr.q[vr.bodies++].st = (vr_state_t){{g_glt.vp[0], g_glt.vp[1], g_glt.vp[2], g_glt.vp[3]},
+                                        {g_glt.sbox[0], g_glt.sbox[1], g_glt.sbox[2], g_glt.sbox[3]},
+                                        {g_ao_dr[0], g_ao_dr[1]}, {g_glt.po[0], g_glt.po[1]},
+                                        g_glt.cull_face, g_glt.front_face, g_glt.cull, g_glt.poly_fill, g_glt.scissor};
 }
 
-/* Inside ao_run's state save, after the sea's pass, on the frame's marked bodies; li is the layer most
-   draws had. */
+static void vr_apply(const vr_state_t *s)
+{
+    glViewport(s->vp[0], s->vp[1], s->vp[2], s->vp[3]);
+    glDepthRange(s->dr[0], s->dr[1]);
+    if (s->cull)
+        glEnable(GL_CULL_FACE);
+    else
+        glDisable(GL_CULL_FACE);
+    glCullFace(s->cull_face);
+    glFrontFace(s->front_face);
+    if (s->poly)
+        glEnable(GL_POLYGON_OFFSET_FILL);
+    else
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(s->po[0], s->po[1]);
+    if (s->scissor)
+        glEnable(GL_SCISSOR_TEST);
+    else
+        glDisable(GL_SCISSOR_TEST);
+    glScissor(s->sbox[0], s->sbox[1], s->sbox[2], s->sbox[3]);
+}
+
+static void vr_flush(void)
+{
+    msf.BindFramebuffer(MS_FRAMEBUFFER, vr.fbo);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0, 0, 0, 0);
+    glClearDepth(1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    aof.UseProgram(vr.p_mark);
+    mark_begin(1);
+    for (unsigned i = 0; i < vr.bodies; i++) {
+        if (!i || memcmp(&vr.q[i].st, &vr.q[i - 1].st, sizeof vr.q[i].st))
+            vr_apply(&vr.q[i].st);
+        aof.UniformMatrix4fv(vr.u_mv, 1, GL_FALSE, vr.q[i].mv);
+        aof.UniformMatrix4fv(vr.u_mvp, 1, GL_FALSE, vr.q[i].mvp);
+        aof.UniformMatrix3fv(vr.u_nm, 1, GL_FALSE, vr.q[i].nm);
+        mark_draw(&vr.q[i].d, 1);
+    }
+    mark_end();
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDisable(GL_SCISSOR_TEST);
+}
+
 void vr_pass(int w, int h, int li)
 {
     const GLfloat *P = g_ao_layer[li].m, *dr = g_ao_layer[li].dr, *fogs = g_ao_layer[li].fog;
@@ -339,8 +354,9 @@ void vr_pass(int w, int h, int li)
         g_vr = 0;
         return;
     }
-    float nearp = fabsf(P[14] / (P[10] - 1)), farp = fabsf(P[14] / (P[10] + 1));
+    float a = P[11] > 0 ? -P[10] : P[10], nearp = fabsf(P[14] / (a - 1)), farp = fabsf(P[14] / (a + 1));
     ssr_fog(fogs, fogp);
+    vr_flush();
 
     GLuint p = vr.p_pass;
     aof.UseProgram(p);
@@ -358,7 +374,7 @@ void vr_pass(int w, int h, int li)
     aof.Uniform1f(aof.GetUniformLocation(p, "dbg"), (GLfloat)g_vr_debug);
     aof.Uniform1f(aof.GetUniformLocation(p, "wmin"), nearp * 1.5f);
     aof.Uniform1f(aof.GetUniformLocation(p, "reach"), farp * 2);
-    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);             /* the screen */
+    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);
     glViewport(0, 0, w, h);
     aof.ActiveTexture(0x84C3);
     glBindTexture(GL_TEXTURE_2D, vr.t_d);
@@ -370,7 +386,7 @@ void vr_pass(int w, int h, int li)
     glBindTexture(GL_TEXTURE_2D, ssr.t_scene);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    aof.BlendEquation(0x8006);                                  /* GL_FUNC_ADD */
+    aof.BlendEquation(0x8006);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     ao_tri();
     glDisable(GL_BLEND);

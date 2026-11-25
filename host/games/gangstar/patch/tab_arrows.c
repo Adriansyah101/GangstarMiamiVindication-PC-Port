@@ -1,4 +1,3 @@
-/* tab_arrows.c -- GAMEPATCH_TAB: the lines' value arrows, added to the menu file as it loads */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -12,20 +11,11 @@
 #include "gangstar.h"
 #include "patch.h"
 
-#define OM_SEL_DEPTH   20            /* the lines' own placements go up to 14                       */
-#define OM_BOX_W       4320          /* a line's key boxes (wCostKey, sprite 763) before its scale  */
+#define OM_SEL_DEPTH   20
+#define OM_BOX_W       4320
 #define OM_BOX_H       780
 
-/* ---- the lines' ◀ value ▶, added to the menu file as it loads ----
-   gameswf opens a movie through the file opener the game registers (at 0x2f9854) and reads the
-   swf from the stream (tu_file) it answers.  Our opener reads newmenu.fua's whole stream,
-   inflates it with the game's zlib and answers a stream over the result, in which each of
-   widgetControlHelps' six line sprites (wCusLine1-6) has four more placements, over its key
-   boxes: the category header's bar, btnLeft, btnRight and txtValue (widgetActionKeyTitle's own
-   characters and layout, scaled to the boxes' height), named wValueBar, btnValueLeft,
-   btnValueRight and textValue.  A sprite with a child named hitzone is a button wherever it is
-   (0x2cb730), so their clicks come to the list widget like the header's.  Everything else in the
-   file stays as it was; the CONTROLS page hides the four again. */
+/* 0x2f9854 0x2cb730 */
 uint32_t om_bits(const unsigned char *p, size_t *bit, int n)
 {
     uint32_t v = 0;
@@ -47,7 +37,7 @@ void om_put_bits(unsigned char *p, size_t *bit, uint32_t v, int n)
             p[*bit >> 3] |= 0x80 >> (*bit & 7);
 }
 
-int om_sbits_n(int32_t v)                /* the bits a signed field needs */
+int om_sbits_n(int32_t v)
 {
     int n = 1;
     while (n < 31 && (v < -(1 << (n - 1)) || v >= (1 << (n - 1))))
@@ -55,7 +45,6 @@ int om_sbits_n(int32_t v)                /* the bits a signed field needs */
     return n;
 }
 
-/* A PlaceObject2's fields (tag data d of n bytes); 0 if they run past it. */
 static int om_place_read(const unsigned char *d, size_t n, om_place *o)
 {
     unsigned fl = n ? d[0] : 0;
@@ -93,14 +82,14 @@ static int om_place_read(const unsigned char *d, size_t n, om_place *o)
         o->ty = om_sbits(d, &bit, k);
         p = (bit + 7) / 8;
     }
-    if (fl & 8) {                               /* colour transform with alpha */
+    if (fl & 8) {
         size_t bit = p * 8;
         int add = (int)om_bits(d, &bit, 1), mult = (int)om_bits(d, &bit, 1), k = (int)om_bits(d, &bit, 4);
         bit += (size_t)k * 4 * (add + mult);
         p = (bit + 7) / 8;
     }
     if (fl & 0x10)
-        p += 2;                                 /* ratio */
+        p += 2;
     if (p > n)
         return 0;
     if (fl & 0x20) {
@@ -111,8 +100,6 @@ static int om_place_read(const unsigned char *d, size_t n, om_place *o)
     return 1;
 }
 
-/* The tag at p of the tags ending at end: its code, data offset and length; the next tag's
-   offset, or 0 if it runs past the end. */
 size_t om_tag(const unsigned char *s, size_t p, size_t end, int *code, size_t *data, size_t *len)
 {
     uint32_t l;
@@ -134,7 +121,6 @@ size_t om_tag(const unsigned char *s, size_t p, size_t end, int *code, size_t *d
     return p + l;
 }
 
-/* The DefineSprite of character cid among the file's tags from start: its data and length. */
 int om_sprite(const unsigned char *s, size_t start, size_t n, int cid, size_t *data, size_t *len)
 {
     int code;
@@ -144,7 +130,6 @@ int om_sprite(const unsigned char *s, size_t start, size_t n, int cid, size_t *d
     return 0;
 }
 
-/* The placement named name in a sprite's first frame, or in the root's if data is the tags' start. */
 int om_find_place(const unsigned char *s, size_t from, size_t end, const char *name, om_place *o)
 {
     int code;
@@ -162,7 +147,7 @@ size_t om_place_write(unsigned char *o, int depth, const om_place *m, const char
     size_t bit = 5 * 8, p, k = strlen(name) + 1;
     int ns = om_sbits_n(m->sx) > om_sbits_n(m->sy) ? om_sbits_n(m->sx) : om_sbits_n(m->sy);
     int nt = om_sbits_n(m->tx) > om_sbits_n(m->ty) ? om_sbits_n(m->tx) : om_sbits_n(m->ty);
-    d[0] = 0x26;                                /* a character, a matrix and a name */
+    d[0] = 0x26;
     d[1] = (unsigned char)depth;
     d[2] = (unsigned char)(depth >> 8);
     d[3] = (unsigned char)m->cid;
@@ -177,15 +162,13 @@ size_t om_place_write(unsigned char *o, int depth, const om_place *m, const char
     om_put_bits(d, &bit, (uint32_t)m->ty, nt);
     p = (bit + 7) / 8;
     memcpy(d + p, name, k);
-    p += k;                                     /* under 63: the short tag header */
+    p += k;
     o[0] = (unsigned char)(26 << 6 | p);
     o[1] = (unsigned char)((26 << 6 | p) >> 8);
     memcpy(o + 2, d, p);
     return p + 2;
 }
 
-/* The uncompressed menu file s (n bytes, header included) with the lines' ◀ value ▶, or NULL if
-   it is not the one expected. */
 unsigned char *om_swf_patch(const unsigned char *s, size_t n, size_t *out_n)
 {
     static const char *const head_names[4] = {NULL, "btnLeft", "btnRight", "txtValue"};
@@ -211,13 +194,13 @@ unsigned char *om_swf_patch(const unsigned char *s, size_t n, size_t *out_n)
             !om_find_place(s, ld[i] + 4, ld[i] + ll[i], "wCostKey", &key[i]))
             return NULL;
         lines[i] = o.cid;
-        show[i] = 0;                            /* the first ShowFrame; no depth of ours taken */
+        show[i] = 0;
         for (size_t p = ld[i] + 4, next, td, tl; (next = om_tag(s, p, ld[i] + ll[i], &code, &td, &tl)) != 0 && code; p = next) {
             if (code == 1) {
                 show[i] = p;
                 break;
             }
-            if (code == 26 || code == 70) {     /* (PlaceObject3 has two flag bytes) */
+            if (code == 26 || code == 70) {
                 size_t at = td + (code == 70) + 1;
                 int depth = tl >= at - td + 2 ? s[at] | s[at + 1] << 8 : 0;
                 if (depth >= OM_SEL_DEPTH && depth < OM_SEL_DEPTH + 4)
@@ -243,7 +226,7 @@ unsigned char *om_swf_patch(const unsigned char *s, size_t n, size_t *out_n)
         if (code != 39 || i == OM_LINES) {
             memcpy(out + q, s + p, next - p);
             q += next - p;
-        } else {                                /* the line sprite with ours before its ShowFrame */
+        } else {
             double w = OM_BOX_W * key[i].sx / 65536.0, h = OM_BOX_H * key[i].sy / 65536.0;
             double g = (w - 120) / (OM_SEL_X1 - OM_SEL_X0), gy = h / (OM_SEL_Y1 - OM_SEL_Y0);
             double ox, oy;

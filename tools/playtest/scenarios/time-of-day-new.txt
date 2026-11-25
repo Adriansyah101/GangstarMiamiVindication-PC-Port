@@ -1,0 +1,24 @@
+# RANDOM_TIME_OF_DAY=1 and NEW GAME over a save: no random time, the first mission keeps its own
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini TIME_OF_DAY=1
+ini RANDOM_TIME_OF_DAY=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+shot menu
+click 0.17 0.50
+wait 3
+shot confirm
+click 0.415 0.556
+wait 45
+shot newgame
+leftmenu menu newgame
+expectlog ^\[time\] CONTINUE starts at a random time of day$
+nolog ^\[time\] CONTINUE, random start
+nolog ^\[config\] (RANDOM_)?TIME_OF_DAY blank or not in

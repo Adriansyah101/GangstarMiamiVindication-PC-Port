@@ -1,23 +1,3 @@
-/* shims.c -- host stand-ins for the macOS dylib symbols the game imports.
-
-   Stage 2a: the mechanical libSystem (C library) entry points whose i386 ABI is identical on
-   macOS and on Win32 -- plain cdecl, with int/long/size_t/pointer/float/double all the same
-   width -- so each one is just the matching C-runtime function that mingw already links.  A
-   Mach-O symbol is the C name with one leading underscore (so `_memcpy` is memcpy); the triple-
-   underscore names are C identifiers that themselves begin with `__`.
-
-   Deliberately NOT here yet, because their ABI differs and each needs a real wrapper:
-     - wchar_t functions (_wcslen, _swprintf, ...): macOS wchar_t is 4 bytes, Windows' is 2.
-     - time functions (_time, _gettimeofday, _gmtime, ...): macOS i386 time_t is 4 bytes,
-       mingw's is 8; struct tm has extra trailing fields.
-     - anything taking/returning a FILE* (_fopen, _fprintf, ___stdoutp, ...): opaque, but the
-       game and the host must agree on which FILE objects exist.
-     - pthreads, mmap/munmap, and other Win32-backed calls (stage 2b).
-   These stay bound to the name-reporting thunks until their stage.
-
-   Nothing here runs during stage 1; it only populates the bind slots.  The shims are first
-   exercised when stage 2 runs the game's static initializers. */
-
 #include <ctype.h>
 #include <emmintrin.h>
 #include <math.h>
@@ -32,8 +12,6 @@
 #include "log.h"
 #include "shims.h"
 
-/* ---- process control ------------------------------------------------------------------ */
-
 static void shim_fatal(const char *why)
 {
     gmv_log("\n[shim] %s -- stopping\n", why);
@@ -43,8 +21,6 @@ static void shim_fatal(const char *why)
 static void shim_abort(void)            { shim_fatal("abort() called by game"); }
 static void shim_stack_chk_fail(void)   { shim_fatal("stack smashing detected (__stack_chk_fail)"); }
 
-/* A failed assert() in the game.  On the Mac this prints the message and aborts, so the game stops
-   either way; the log says which check failed. */
 static void shim_assert_rtn(const char *func, const char *file, int line, const char *expr)
 {
     gmv_log("\n[shim] Assertion failed: (%s), function %s, file %s, line %d.\n",
@@ -52,12 +28,7 @@ static void shim_assert_rtn(const char *func, const char *file, int line, const 
     shim_fatal("assert failed");
 }
 
-/* ---- rand: the Mac's, not msvcrt's ---------------------------------------------------------
-   macOS rand() (FreeBSD's) has RAND_MAX 0x7fffffff; msvcrt's stops at 32767.  The game makes its
-   random fractions as rand() * 2^-31 (the float at 0x60f7f0), so msvcrt's numbers made every one
-   of them below 0.00002: no spread where it scatters particles in a box or a cone, and its chance
-   checks (0x369134: chance > rand fraction) always passed.  This is libc's Park-Miller generator
-   with its seed of 1 (the game never calls srand), so the game gets the Mac's sequence. */
+/* macOS rand() RAND_MAX 0x7fffffff 0x60f7f0 */
 static unsigned long g_rand_next = 1;
 
 static int shim_rand(void)
@@ -73,12 +44,7 @@ static int shim_rand(void)
     return (int)((unsigned long)x % 0x80000000ul);
 }
 
-/* The stack canary the game compares against.  The game only reads it (through its
-   ___stack_chk_guard non-lazy pointer); a low NUL byte keeps a string overflow from running
-   past it cleanly, matching what the real libSystem guard looks like. */
 static const uintptr_t shim_stack_chk_guard = (uintptr_t)0x1234AB00u;
-
-/* ---- fortified (_chk) variants: drop the compiler's size argument and forward ---------- */
 
 static void *shim_memcpy_chk(void *d, const void *s, size_t n, size_t dstlen)
 {
@@ -103,15 +69,6 @@ static int shim_sprintf_chk(char *s, int flag, size_t dstlen, const char *fmt, .
     return r;
 }
 
-/* ---- memmove ------------------------------------------------------------------------------
-   Box2D's broadphase keeps its proxy bounds in sorted arrays of 12-byte entries and inserts by
-   shifting the tail up -- an overlapping memmove with dst > src, which must copy backwards.
-   msvcrt does that with `std; rep movsd`, which current CPUs run without their fast-string path
-   (~14 GB/s at best and ~35 ns for a 48-byte move); the Mac's libSystem memmove copies backwards
-   with SSE.  So the backward case gets an SSE2 copy (3.5-8x faster, measured on msvcrt.dll) and
-   everything else still goes to msvcrt, whose forward copy is fast.  Same bytes moved either way.
-   GMV_FAST_MEMMOVE=0 binds msvcrt's memmove for every case. */
-
 static int g_fast_memmove = -1;
 
 __attribute__((target("sse2"), optimize("no-tree-loop-distribute-patterns")))
@@ -119,7 +76,7 @@ static void *shim_memmove(void *dst, const void *src, size_t n)
 {
     unsigned char *d = dst;
     const unsigned char *s = src;
-    if ((uintptr_t)d - (uintptr_t)s >= n)           /* no overlap, or dst below src: forward */
+    if ((uintptr_t)d - (uintptr_t)s >= n)
         return memmove(dst, src, n);
     if (g_fast_memmove < 0) {
         const char *e = gmv_getenv("GMV_FAST_MEMMOVE");
@@ -132,9 +89,6 @@ static void *shim_memmove(void *dst, const void *src, size_t n)
             d[n] = s[n];
         return dst;
     }
-    /* Highest chunk first; each load sits below every store made so far, so no source byte is
-       read after being overwritten.  The first 16 source bytes are read up front and stored last
-       to cover the ragged bottom. */
     __m128i head = _mm_loadu_si128((const __m128i *)s);
     size_t p = n;
     while (p > 64) {
@@ -156,22 +110,15 @@ static void *shim_memmove(void *dst, const void *src, size_t n)
     return dst;
 }
 
-/* ---- odds and ends without a one-to-one CRT name -------------------------------------- */
-
 static void shim_bzero(void *p, size_t n) { memset(p, 0, n); }
-/* 64-bit integer division helpers (libSystem borrows these from the compiler runtime; mingw's
-   libgcc provides the same symbols). */
 extern long long __divdi3(long long, long long);
 extern unsigned long long __udivdi3(unsigned long long, unsigned long long);
 extern long long __moddi3(long long, long long);
 extern unsigned long long __umoddi3(unsigned long long, unsigned long long);
 
-/* ---- the table ------------------------------------------------------------------------ */
-
 #define FN(mach_name, host_fn) {mach_name, (void *)(host_fn)}
 
 const host_symbol gmv_host_symbols[] = {
-    /* memory */
     FN("_malloc", malloc),
     FN("_free", free),
     FN("_calloc", calloc),
@@ -179,7 +126,6 @@ const host_symbol gmv_host_symbols[] = {
     FN("_malloc_size", _msize),
     FN("___bzero", shim_bzero),
 
-    /* raw memory ops */
     FN("_memchr", memchr),
     FN("_memcmp", memcmp),
     FN("_memcpy", memcpy),
@@ -187,7 +133,6 @@ const host_symbol gmv_host_symbols[] = {
     FN("_memset", memset),
     FN("___memcpy_chk", shim_memcpy_chk),
 
-    /* byte strings */
     FN("_strcasecmp", _stricmp),
     FN("_strncasecmp", _strnicmp),
     FN("_strcat", strcat),
@@ -205,7 +150,6 @@ const host_symbol gmv_host_symbols[] = {
     FN("_strtod$UNIX2003", strtod),
     FN("___strcpy_chk", shim_strcpy_chk),
 
-    /* string formatting into a buffer (no FILE, no wchar_t) */
     FN("_sprintf", sprintf),
     FN("_snprintf", snprintf),
     FN("_vsprintf", vsprintf),
@@ -213,7 +157,6 @@ const host_symbol gmv_host_symbols[] = {
     FN("_sscanf", sscanf),
     FN("___sprintf_chk", shim_sprintf_chk),
 
-    /* conversions / sorting / rng / environment */
     FN("_atoi", atoi),
     FN("_atol", atol),
     FN("_atof", atof),
@@ -223,13 +166,11 @@ const host_symbol gmv_host_symbols[] = {
     FN("___tolower", tolower),
     FN("___toupper", toupper),
 
-    /* 64-bit integer division (compiler runtime) */
     FN("___divdi3", __divdi3),
     FN("___udivdi3", __udivdi3),
     FN("___moddi3", __moddi3),
     FN("___umoddi3", __umoddi3),
 
-    /* math (double and float; same calling convention via x87 returns) */
     FN("_acos", acos),   FN("_acosf", acosf),
     FN("_asin", asin),
     FN("_atan", atan),   FN("_atan2", atan2),
@@ -248,20 +189,16 @@ const host_symbol gmv_host_symbols[] = {
     FN("_tan", tan),
     FN("_lrint", lrint),
 
-    /* process control */
     FN("_abort", shim_abort),
     FN("_exit", exit),
     FN("___stack_chk_fail", shim_stack_chk_fail),
     FN("___assert_rtn", shim_assert_rtn),
     FN("___error", _errno),
 
-    /* data symbol: slot points at the canary value, which the game only reads */
     FN("___stack_chk_guard", &shim_stack_chk_guard),
 
     {NULL, NULL},
 };
-
-/* ---- lookup across all shim tables ---------------------------------------------------- */
 
 void *gmv_shim_lookup(const char *name)
 {
@@ -273,5 +210,5 @@ void *gmv_shim_lookup(const char *name)
         for (const host_symbol *h = tables[t]; h->name; h++)
             if (!strcmp(h->name, name))
                 return h->addr;
-    return gmv_gl_resolve(name);        /* GL funcs bind to opengl32 on demand */
+    return gmv_gl_resolve(name);
 }

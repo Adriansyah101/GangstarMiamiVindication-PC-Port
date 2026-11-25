@@ -1,12 +1,5 @@
-/* ffpipe_linux.c -- Linux: sound and pictures from the system's ffmpeg program.
-
-   Windows decodes the intro movie and the custom radio's songs with Media Foundation.  Linux has no decoder that
-   every system carries, so the host runs ffmpeg (or ffprobe) as a program of its own and reads raw samples or frames
-   from a pipe.  A program, not its libraries: the host is 32-bit, ffmpeg usually is not, and a pipe does not care;
-   nor does it care which FFmpeg version is installed.  With no ffmpeg on the PATH the callers go on without it. */
-
 #ifndef _WIN32
-#define _GNU_SOURCE             /* pipe2 */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -60,7 +53,7 @@ size_t gmv_ff_read(int fd, void *buf, size_t n)
 int gmv_ff_stop(int pid, int fd)
 {
     if (fd >= 0)
-        close(fd);              /* a program still writing ends on the broken pipe */
+        close(fd);
     if (pid <= 0)
         return -1;
     int st = 0;
@@ -95,7 +88,7 @@ char *gmv_ff_output(const char *const *argv)
     }
     if (gmv_ff_stop(pid, fd) != 0) {
         free(s);
-        errno = EIO;            /* it ran, and failed: not "not installed" */
+        errno = EIO;
         return NULL;
     }
     if (s)

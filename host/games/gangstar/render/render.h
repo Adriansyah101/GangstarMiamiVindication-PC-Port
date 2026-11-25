@@ -1,4 +1,3 @@
-/* render.h -- what Gangstar's render effects share with each other. */
 #ifndef GANGSTAR_RENDER_H
 #define GANGSTAR_RENDER_H
 
@@ -7,8 +6,8 @@
 #if !GMV_DEV
 #define g_vr_debug 0
 #endif
-typedef struct {                                        /* SUN_MOON glow occlusion */
-    int mode;                                           /* 1 = shader, 2 = depth test */
+typedef struct {
+    int mode;
     GLboolean test;
     GLint func, prog, act, tex, tex2;
     GLfloat range[2];
@@ -16,15 +15,13 @@ typedef struct {                                        /* SUN_MOON glow occlusi
 extern int g_ssr_want, g_ssr;
 extern int g_vr_want, g_vr;
 extern int g_ds_want, g_ds;
-extern int g_shadow_quality;                    /* SHADOW_QUALITY: 1 = 1024 map, 8 taps; 2 = 2048, 16 (dynamic_shadows.c) */
-#define FOG_CLIP_PLANE 0x3005                           /* GL_CLIP_PLANE5 */
+extern int g_shadow_quality;
+#define FOG_CLIP_PLANE 0x3005
 
-/* present_hold.c */
 #if GMV_DEV
 void flicker_cap(unsigned frame, int presented, uint32_t vt);
 #endif
 
-/* aniso.c */
 extern float g_aniso;
 void aniso_sync(void);
 void af_TexParameterf(GLenum target, GLenum pname, GLfloat v);
@@ -34,7 +31,6 @@ void pi_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w,
                                     GLint border, GLsizei size, const void *data);
 void pi_DeleteTextures(GLsizei n, const GLuint *names);
 
-/* ao.c */
 extern int g_ao_want;
 extern int g_ao;
 extern float g_ao_strength, g_ao_radius;
@@ -44,6 +40,11 @@ extern GLfloat g_ao_proj[16];
 extern GLfloat g_ao_dr[2];
 extern int g_ao_depth_on, g_ao_fog_on;
 extern int g_blend_on;
+extern int g_alpha_on, g_game_a2c, g_a2c_want;
+#if GMV_DEV
+extern GLenum g_alpha_func;
+extern GLfloat g_alpha_ref;
+#endif
 extern GLenum g_blend_src, g_blend_dst;
 extern int g_ao_dmask;
 extern GLfloat g_ao_fogp[4];
@@ -107,7 +108,6 @@ double ao_eye_depth(const GLfloat *inv, double z);
 #endif
 void ao_tri(void);
 
-/* bloom.c */
 extern int g_bloom_want;
 extern float g_bloom_intensity, g_bloom_threshold;
 extern float g_bloom_lights, g_bloom_windows;
@@ -123,19 +123,25 @@ typedef struct {
     int w, h, n;
 } bl_t;
 extern bl_t bl;
-extern int g_shared_resolve;                            /* SHARED_RESOLVE */
+extern int g_shared_resolve;
 GLuint post_depth(int w, int h);
+GLuint post_color(int w, int h);
 void bl_linear(void);
 void ao_proj_refresh(void);
+const GLfloat *ao_matrix(GLenum mode);
 void ao_draw(void);
 void ao_clear(GLbitfield m);
 extern unsigned g_frame_no;
 void ao_frame_end(void);
 void ao_cap(GLenum cap, int on);
 
-/* fog.c */
+extern int g_paa_want;
+int paa_frame(void);
+int paa_init(void);
+void paa_pass(int w, int h);
+
 extern int g_fog_all;
-extern int g_sky_draw;
+extern int g_sky_draw, g_cp_draw;
 #define SKY_KEYS         12
 extern GLfloat g_fog_col[4];
 extern GLfloat g_fog_game[4];
@@ -159,8 +165,8 @@ int sky_read(GLsizei count, GLenum type, const void *idx);
 int fog_force_begin(void);
 void fog_force_end(int kind);
 int fog_clip_begin(void);
-extern int g_fog_skip_far;                              /* FOG_SKIP_FAR */
-int fog_skip_far(void);                                 /* 1 = leave the draw out; 2 = draw it in a check (dev) */
+extern int g_fog_skip_far;
+int fog_skip_far(void);
 #if GMV_DEV
 void fog_skip_check(int begin);
 #else
@@ -168,7 +174,6 @@ void fog_skip_check(int begin);
 #endif
 void sea_beyond(GLsizei count, GLenum type, const void *idx);
 
-/* fog_hybrid.c */
 #define FOG_HYBRID_K 3.0f
 extern const char fh_fs_head[];
 extern const unsigned fh_fs_head_size;
@@ -188,7 +193,6 @@ int fh_params(GLfloat u[30]);
 int fog_hybrid_begin(GLenum mode, int ff, unsigned tf);
 void fog_hybrid_end(int on);
 
-/* bloom_glow.c */
 typedef struct {
     int ready;
     unsigned frame;
@@ -205,13 +209,16 @@ typedef struct {
 } bg_t;
 extern bg_t bg;
 float bg_gain(void);
+float bg_night(void);
 int bg_draw_begin(GLenum mode);
 void bg_draw_end(int kind, int elems, GLenum mode, GLint first, GLsizei count, GLenum type, const void *idx);
 void bg_clear(GLbitfield m);
 void bg_single(void);
+#define BG_CP_BIT 0x20
+extern unsigned g_cp_mark;
+int bg_cp_mark(void);
 void live_sync(void);
 
-/* water_reflections.c */
 extern float g_ssr_strength;
 int ssr_frame(void);
 int sea_mark_begin(GLsizei count, GLenum type, const void *idx);
@@ -219,7 +226,7 @@ void sea_mark_end(int on);
 typedef struct {
     GLuint p;
     GLuint fbo_scene, t_scene, fbo_depth, t_depth;
-    GLuint t_dep;                                       /* the depth ssr_grab gave: t_depth or the shared one */
+    GLuint t_dep;
     int w, h, bad;
 } ssr_t;
 extern ssr_t ssr;
@@ -228,18 +235,30 @@ int ssr_grab(int w, int h);
 void ssr_fog(const GLfloat *fogs, GLfloat *fogp);
 void ssr_pass(int w, int h, int li);
 
-/* vehicle_reflections.c */
 extern float g_vr_strength;
 #if GMV_DEV
 extern int g_vr_debug;
 #endif
+typedef struct {
+    GLenum mode, type;
+    GLsizei count;
+    int stipple;
+    GLuint ibuf;
+    uintptr_t ix;
+    gmv_arr_t a[2];
+} mark_t;
+int mark_take(mark_t *m, GLenum mode, GLsizei count, GLenum type, const void *idx, int normals);
+void mark_begin(int normals);
+void mark_draw(const mark_t *m, int normals);
+void mark_end(void);
+
 int vr_frame(void);
 int shine_body(GLenum mode, GLsizei count);
 void car_mark(GLenum mode, GLsizei count, GLenum type, const void *idx);
 void vr_pass(int w, int h, int li);
 
-/* dynamic_shadows.c */
 int ds_frame(void);
+void ds_mul(GLfloat *o, const GLfloat *a, const GLfloat *b);
 int ds_kind(GLenum mode, GLsizei count, int body);
 #if GMV_DEV
 void ds_eye_frame_end(void);
@@ -249,7 +268,6 @@ int ds_mask_begin(int body);
 void ds_mask_end(int on);
 void ds_pass(int w, int h, int li);
 
-/* sun_moon_glow.c */
 extern int g_sky_glow_draw;
 void glow_begin(glow_state_t *s);
 void glow_end(const glow_state_t *s);

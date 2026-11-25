@@ -1,4 +1,3 @@
-/* gl_diag.c -- diagnostics: frame dumps and fade captures */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,9 +11,6 @@
 #include "glshim.h"
 
 #if GMV_DEV
-/* Diagnostic: dump the just-rendered back buffer to a BMP so we can see what's on screen.
-   glReadPixels' default 4-byte row alignment + GL_BGR + GL's bottom-up origin match the BMP
-   pixel layout exactly, so the pixels go straight into the file. */
 void dump_framebuffer(const char *path)
 {
     if (!g_window)
@@ -28,8 +24,6 @@ void dump_framebuffer(const char *path)
     unsigned char *px = malloc(imgsz);
     if (!px)
         return;
-    /* Diagnose why cleared/drawn pixels don't appear: scissor test, scissor box, viewport and the
-       colour write mask all gate what reaches the framebuffer. */
     {
 #ifndef GL_SCISSOR_TEST
 #define GL_SCISSOR_TEST 0x0C11
@@ -80,19 +74,17 @@ void dump_framebuffer(const char *path)
     free(px);
 }
 
-int g_cap_ticks = -1;                            /* ticks since arming; -1 = off */
+int g_cap_ticks = -1;
 unsigned g_cap_session, g_cap_saved, g_cap_presented;
-DWORD g_cap_t0, g_cap_last_fade;                 /* GetTickCount at arming / at the last fade call */
-unsigned g_cap_clears, g_cap_draws;              /* glClear / glDraw* calls this tick */
-char g_cap_seq[200];                             /* this tick's events: C clear, B<fb>, F fade, D<n> draws */
+DWORD g_cap_t0, g_cap_last_fade;
+unsigned g_cap_clears, g_cap_draws;
+char g_cap_seq[200];
 size_t g_cap_seqlen;
-unsigned g_cap_run;                              /* draws in the current D run */
-uint32_t g_fade_pending;                         /* fade caller whose first draw is still to come */
-int g_post_fade;                                 /* the game's main fade was called this tick: probe each call */
-uint32_t g_quad_probe;                           /* fade caller whose 6-index quad is still to be dumped */
+unsigned g_cap_run;
+uint32_t g_fade_pending;
+int g_post_fade;
+uint32_t g_quad_probe;
 
-/* After a generic-fade-state fade call, read back two pixels after every clear and draw up to the
-   swap, so the log shows which call darkens the frame and which one brings the picture back. */
 void post_fade_probe(const char *what, unsigned a, unsigned b)
 {
     static unsigned lines;
@@ -103,7 +95,7 @@ void post_fade_probe(const char *what, unsigned a, unsigned b)
     glGetIntegerv(GL_VIEWPORT, vp);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
     glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &env);
-    glGetIntegerv(0x8894, &abuf);                       /* GL_ARRAY_BUFFER_BINDING */
+    glGetIntegerv(0x8894, &abuf);
     glGetIntegerv(GL_BLEND_SRC, &bs);
     glGetIntegerv(GL_BLEND_DST, &bd);
     unsigned char c[4] = {0}, q[4] = {0};
@@ -147,7 +139,7 @@ void gmv_gl_death_capture_arm(int health, int max_health)
     g_cap_session++;
 }
 
-static int g_fade_main;                                 /* the fade being drawn is the game's main one */
+static int g_fade_main;
 
 void gmv_gl_fade_mark(uint32_t caller, int main_fade)
 {
@@ -162,10 +154,7 @@ void gmv_gl_fade_mark(uint32_t caller, int main_fade)
     }
 }
 
-/* The frame's corner pixels after a dumped fade quad is drawn, and again before that frame is
-   presented: whether the black reaches the frame's top row and left column, and whether a later draw
-   paints over them. */
-int g_corner_watch;                                     /* 1 = after the next draw, 2 = at the present */
+int g_corner_watch;
 static int g_corner_w, g_corner_h;
 
 void fade_corners(const char *when)
@@ -192,7 +181,6 @@ void fade_corners(const char *when)
             c[3][0], c[3][1], c[3][2], c[4][0], c[4][1], c[4][2], c[5][0], c[5][1], c[5][2]);
 }
 
-/* GL state the fade rectangle is drawn with (first glDraw* after a fade call). */
 void fade_state_log(const char *what, GLenum mode, GLsizei count)
 {
     static unsigned n_g, n_o;
@@ -202,7 +190,7 @@ void fade_state_log(const char *what, GLenum mode, GLsizei count)
         return;
     GLint fb = -1, vp[4] = {0}, sc[4] = {0}, df = 0, bs = 0, bd = 0;
     GLboolean dm = 0, cm[4] = {0};
-    glGetIntegerv(0x8CA6, &fb);                         /* GL_FRAMEBUFFER_BINDING */
+    glGetIntegerv(0x8CA6, &fb);
     glGetIntegerv(GL_VIEWPORT, vp);
     glGetIntegerv(GL_SCISSOR_BOX, sc);
     glGetIntegerv(GL_DEPTH_FUNC, &df);
@@ -218,7 +206,6 @@ void fade_state_log(const char *what, GLenum mode, GLsizei count)
             glIsEnabled(GL_TEXTURE_2D), cm[0], cm[1], cm[2], cm[3]);
 }
 
-/* 24-bit bottom-up BMP from rows of `row` bytes (BGR, the layout glReadPixels gives with GL_BGR). */
 void write_bmp24(const char *path, int w, int h, int row, const unsigned char *px)
 {
     uint32_t imgsz = (uint32_t)row * h, fsz = 54 + imgsz, off = 54, v = 40;
@@ -264,7 +251,7 @@ void fade_capture_dump(unsigned frame, DWORD t)
             sum / ((long)ow * oh * 3));
     free(px); free(out);
 }
-#else                                                   /* release: no frame dump, no fade capture */
+#else
 unsigned g_cap_clears, g_cap_draws, g_cap_run;
 void gmv_gl_death_capture_arm(int health, int max_health) { (void)health; (void)max_health; }
 void gmv_gl_fade_mark(uint32_t caller, int main_fade) { (void)caller; (void)main_fade; }

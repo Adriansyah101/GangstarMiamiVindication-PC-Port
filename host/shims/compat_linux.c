@@ -1,5 +1,3 @@
-/* compat_linux.c -- the parts of compat.h too long to sit in the header: VirtualQuery and VirtualProtect over
-   /proc/self/maps and mprotect.  Windows has the real ones, so this file is empty there. */
 #ifndef _WIN32
 #include <fcntl.h>
 #include "compat.h"
@@ -25,7 +23,6 @@ static int prot_of(DWORD p)
     }
 }
 
-/* One line of maps: "lo-hi perm ...".  0 if it is not one. */
 static int maps_line(const char *s, uintptr_t *lo, uintptr_t *hi, DWORD *prot)
 {
     char *e;
@@ -39,7 +36,6 @@ static int maps_line(const char *s, uintptr_t *lo, uintptr_t *hi, DWORD *prot)
     return 1;
 }
 
-/* Read with no allocation: hooks may ask this while the game's heap is in any state. */
 size_t VirtualQuery(const void *p, MEMORY_BASIC_INFORMATION *m, size_t n)
 {
     if (n < sizeof *m)
@@ -48,7 +44,7 @@ size_t VirtualQuery(const void *p, MEMORY_BASIC_INFORMATION *m, size_t n)
     int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return 0;
-    char buf[8192];                     /* a line is at most a path (4096) and its prefix */
+    char buf[8192];
     size_t have = 0;
     uintptr_t lo = 0, hi = 0, flo = 0, fhi = 0;
     DWORD prot = 0, fprot = 0;
@@ -65,11 +61,11 @@ size_t VirtualQuery(const void *p, MEMORY_BASIC_INFORMATION *m, size_t n)
             if (maps_line(s, &lo, &hi, &prot)) {
                 if (found) {
                     if (lo == fhi && prot == fprot)
-                        fhi = hi;               /* the run goes on */
+                        fhi = hi;
                     else
                         done = 1;
                 } else if (a < lo) {
-                    fhi = lo;                   /* in the gap before this mapping */
+                    fhi = lo;
                     done = 2;
                 } else if (a < hi) {
                     flo = lo, fhi = hi, fprot = prot;
@@ -84,14 +80,14 @@ size_t VirtualQuery(const void *p, MEMORY_BASIC_INFORMATION *m, size_t n)
     close(fd);
     memset(m, 0, sizeof *m);
     if (!found && done != 2)
-        fhi = 0;                                /* past the last mapping: free to the top */
+        fhi = 0;
     if (found) {
         m->BaseAddress = m->AllocationBase = (void *)flo;
         m->RegionSize = (size_t)(fhi - flo);
         m->State = MEM_COMMIT;
         m->Protect = m->AllocationProtect = fprot;
     } else {
-        m->BaseAddress = (void *)a;             /* as Windows: from p's page to the next mapping */
+        m->BaseAddress = (void *)a;
         m->RegionSize = (size_t)(fhi - a);
         m->State = MEM_FREE;
         m->Protect = PAGE_NOACCESS;

@@ -1,5 +1,3 @@
-/* game.c -- Gangstar: Miami Vindication's side of game.h, apart from the settings (settings.c) and the GL hooks
-   (render\draw_hooks.c). */
 #include <stdint.h>
 #include "compat.h"
 
@@ -8,12 +6,12 @@
 #include "shims.h"
 #include "gangstar.h"
 
-void gmv_vbostatic_fault(void);                 /* vbostatic.c: its buffers and the GL bindings */
-void gmv_toggle_full_screen(void);              /* patch\tab.c */
-void gmv_full_screen_tick(void);                /* patch\tab.c: makes sure a pending Alt+Enter switch happens */
-static void esc_release_tick(void);             /* BACKGROUND_THROTTLE's pause, below */
+void gmv_vbostatic_fault(void);
+void gmv_toggle_full_screen(void);
+void gmv_full_screen_tick(void);
+static void esc_release_tick(void);
 #if GMV_DEV
-void gmv_state_trace(void);                     /* patch\diag_state.c */
+void gmv_state_trace(void);
 void gmv_state_trace_present(void);
 #endif
 
@@ -23,10 +21,7 @@ void gmv_game_crash_note(const gmv_regs *r)
     gmv_vbostatic_fault();
     uint32_t eip = r->eip;
     if (eip == 0x00564e5au) {
-        /* Targeted dump for the vertex-buffer-fill fault: identify the "VBO" object whose data
-           pointer resolved into __cstring (0x6222ad).  Locals of the builder frame (from disasm):
-           src attribute descriptor = [ebp-0x2fc]; its [0] = the buffer object passed to 0x517b10;
-           dest = 0x517b10(vbo,4) + descriptor[4].  All reads guarded. */
+        /* __cstring 0x6222ad [ebp-0x2fc] 0x517b10 */
         const unsigned char *L = (const unsigned char *)(uintptr_t)r->ebp;
         #define RDL(off) (!IsBadReadPtr((const void *)(L + (off)), 4) ? *(const uint32_t *)(L + (off)) : 0xBADBAD00u)
         uint32_t srcdesc = RDL(0 - 0x2fc), desc300 = RDL(0 - 0x300);
@@ -47,10 +42,7 @@ void gmv_game_crash_note(const gmv_regs *r)
                 gmv_log("        [vbfill] VBO=%08x UNREADABLE (garbage descriptor[0])\n", vbo);
             }
         }
-        /* The drawable whose vertex declaration this is: arg [ebp+0x1c].  Its [0] is the attribute
-           descriptor-array base (srcDesc = [obj]+0x14+idx*16).  Dump its vtable + fields + array so
-           we can identify the object class (via vtable) and see if the whole object is garbage or
-           just the descriptor array is uninitialised. */
+        /* [ebp+0x1c] srcDesc [obj]+0x14+idx*16 */
         uint32_t obj = RDL(0x1c);
         if (obj > 0x1000 && !IsBadReadPtr((const void *)(uintptr_t)obj, 0x20)) {
             const uint32_t *o = (const uint32_t *)(uintptr_t)obj;
@@ -72,15 +64,15 @@ void gmv_game_crash_note(const gmv_regs *r)
 
 const char *gmv_game_redirect(const char *path, char *buf, size_t n)
 {
-    const char *uc = gmv_rs_redirect(path, buf, n);     /* RADIO_SONGS: the add-on's files */
+    const char *uc = gmv_rs_redirect(path, buf, n);
     if (!uc)
-        uc = gmv_uc_redirect(path, buf, n);             /* UC_CRUSHER: the add-on's files */
+        uc = gmv_uc_redirect(path, buf, n);
     return uc;
 }
 
 void gmv_game_audio_mix(int16_t *buf, uint32_t frames, uint32_t chans, uint32_t rate)
 {
-    gmv_cr_mix(buf, frames, chans, rate);               /* CUSTOM_RADIO (customradio.c) */
+    gmv_cr_mix(buf, frames, chans, rate);
 }
 
 int gmv_game_key(unsigned sym)
@@ -90,7 +82,7 @@ int gmv_game_key(unsigned sym)
 
 void gmv_game_input_pump(void)
 {
-    gmv_cutscene_pump();                                /* CUTSCENE_KEYS: what its keys asked for */
+    gmv_cutscene_pump();
 }
 
 void gmv_game_input_tick(void)
@@ -122,21 +114,20 @@ int gmv_game_pointer_shown(void)
 
 void gmv_game_tick(void)
 {
-    gmv_death_poll();                                   /* arms the capture on the tick health reaches 0 */
-    gmv_mission_replay_tick();                          /* MISSION_REPLAY */
-    gmv_playerswitch_inventory_tick();                  /* PLAYERSWITCH_INVENTORY */
-    gmv_uc_tick();                                      /* UC_CRUSHER */
-    gmv_pool_tick();                                    /* the spawn pool after ORIGINAL_MAC_EXPERIENCE; [crowd] */
-    gmv_menu_loop_tick();                               /* GMV_MENU_LOOP_SCENE test aid */
-    gmv_test_spawn_car_tick();                          /* GMV_TEST_SPAWN_CAR test aid */
-    esc_release_tick();                                 /* BACKGROUND_THROTTLE's pause */
+    gmv_death_poll();
+    gmv_mission_replay_tick();
+    gmv_playerswitch_inventory_tick();
+    gmv_uc_tick();
+    gmv_pool_tick();
+    gmv_menu_loop_tick();
+    gmv_test_spawn_car_tick();
+    gmv_test_chase_tick();
+    esc_release_tick();
 #if GMV_DEV
     gmv_state_trace_present();
 #endif
 }
 
-/* BACKGROUND_THROTTLE: the syncs that follow the tick rate take the throttled one (as om_set_frame_ms does for a new
-   FRAME_MS), so the physics step stays one tick long behind other windows. */
 void physics_sync_set(double ms);
 void cam_sync_set(double ms);
 void walk_sync_set(double ms);
@@ -150,11 +141,8 @@ void gmv_game_tick_period(double ms)
     ai_sync_set(ms);
 }
 
-/* BACKGROUND_THROTTLE, minimized: a game in progress gets an Esc, the key the player pauses it with, held for two
-   ticks; the pause menu then waits for the player when the window comes back, as after any Esc.  In progress: there
-   is a player and the game shows no pointer (the main menu, the pause menu, a cutscene and the title all show it).
-   The state stack does not tell: its one state (vtable 0x659f28) is the same in the main menu and in the city. */
-#define GS_PLAYER_PP 0x0063e010u                /* -> the global holding the player (pad_layout.c) */
+/* BACKGROUND_THROTTLE 0x659f28 */
+#define GS_PLAYER_PP 0x0063e010u
 static int g_esc_ticks;
 
 void gmv_game_minimized(int on)
@@ -172,7 +160,6 @@ void gmv_game_minimized(int on)
     gmv_log("[bg] minimized in play: Esc pauses the game\n");
 }
 
-/* Esc up after two ticks; then the pause menu's pointer is waited for, for the log (it shows a few ticks later). */
 static void esc_release_tick(void)
 {
     if (!g_esc_ticks)
@@ -190,7 +177,7 @@ static void esc_release_tick(void)
 
 void gmv_game_between_frames(void)
 {
-    gmv_vbostatic_frame();                              /* STATIC_VBO's checks, between frames */
+    gmv_vbostatic_frame();
 }
 
 const host_symbol gmv_game_host_symbols[] = {

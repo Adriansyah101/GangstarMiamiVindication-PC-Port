@@ -1,7 +1,3 @@
-"""Dump the structure of an i386 Mach-O: segments, sections, entry, dyld info, imports.
-
-usage: python -I machoinfo.py <macho> [--imports] [--json out.json]
-"""
 import json
 import struct
 import sys
@@ -25,13 +21,10 @@ S_NON_LAZY_SYMBOL_POINTERS = 0x6
 S_LAZY_SYMBOL_POINTERS = 0x7
 S_SYMBOL_STUBS = 0x8
 
-
 def cstr(b):
     return b.split(b"\0", 1)[0].decode("latin-1")
 
-
 def thin_i386(data):
-    """Return the i386 slice of a (possibly fat) Mach-O."""
     magic = struct.unpack_from(">I", data, 0)[0]
     if magic == 0xCAFEBABE:
         n = struct.unpack_from(">I", data, 4)[0]
@@ -41,7 +34,6 @@ def thin_i386(data):
                 return data[off:off + size]
         raise SystemExit("fat binary has no i386 slice")
     return data
-
 
 def parse(data):
     data = thin_i386(data)
@@ -69,7 +61,7 @@ def parse(data):
                 so += 68
             info["segments"].append(seg)
         elif cmd == LC_UNIXTHREAD:
-            # flavor, count, then i386_thread_state_t: eax..gs; eip is the 11th field
+            # i386_thread_state_t eax..gs eip
             regs = struct.unpack_from("<16I", data, off + 16)
             info["entry"] = regs[10]
         elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY):
@@ -93,7 +85,6 @@ def parse(data):
         off += size
     return data, info
 
-
 def symbols(data, info):
     st = info["symtab"]
     strtab = data[st["stroff"]:st["stroff"] + st["strsize"]]
@@ -104,9 +95,7 @@ def symbols(data, info):
         out.append({"name": name, "type": ntype, "sect": sect, "desc": desc, "value": value})
     return out
 
-
 def imports(data, info):
-    """Map every symbol-pointer / stub slot to the imported symbol it resolves to."""
     syms = symbols(data, info)
     dy = info["dysymtab"]
     ind = struct.unpack_from("<%dI" % dy["nindirectsyms"], data, dy["indirectsymoff"])
@@ -129,7 +118,6 @@ def imports(data, info):
                               "symbol": syms[idx]["name"],
                               "lib_ordinal": (syms[idx]["desc"] >> 8) & 0xFF})
     return slots
-
 
 def main():
     path = sys.argv[1]
@@ -159,7 +147,6 @@ def main():
         out = sys.argv[sys.argv.index("--json") + 1]
         with open(out, "w") as f:
             json.dump({"info": info, "imports": slots}, f, indent=1)
-
 
 if __name__ == "__main__":
     main()

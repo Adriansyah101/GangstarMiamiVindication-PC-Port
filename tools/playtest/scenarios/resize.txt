@@ -1,5 +1,4 @@
-# The player sizes the window, in the menu and in the city: the picture must fill it with its shape kept,
-# a click must land on what it shows, and the screen FBO must stay the size the game asked for
+# Window resize in menu and city: aspect kept, clicks land, screen FBO keeps the game's size
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720
@@ -10,15 +9,12 @@ wait 8
 key SPACE
 wait 12
 shot before
-# The cursor stays inside the picture, so it needs the room for the drag
 move 0.9 0.9
 wait 1
 drag -320 -180
 wait 3
 shot smaller
 size 960 540
-# The mouse still down: the picture has to be in the window already.  Read this shot: the menu goes black by
-# itself between scenes, so only the one in the city is compared
 move 0.1 0.1
 wait 1
 drag 320 90 wider-held

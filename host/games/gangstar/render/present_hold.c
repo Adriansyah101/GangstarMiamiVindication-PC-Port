@@ -1,4 +1,3 @@
-/* present_hold.c -- MENUFLASH_FIX, and the start-up flicker diagnostic */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,32 +11,23 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* Diagnostic for the start-up flicker (GMV_FLICKER_CAP=1).  Armed when the rating splash (top
-   state vtable 0x65a388) or the title/menu state (0x659f28, "press any key" and the main menu)
-   comes to the top of the game's state stack, it reads back every presented frame for 60 s after
-   the last arming, subsampled to at most 480 px wide, and keeps the last three.  A frame unlike
-   both neighbours while they are alike (A B A), much darker or brighter than both (a flash), or
-   sharply different from both (A B C, a one-frame shot between two cuts) is saved with its neighbours as gmv_flick_e<n>_{1,2,3}_f<frame>.bmp; every 30th presented frame is
-   saved as gmv_flick_ctx_f<frame>.bmp for context.  Each presented frame logs a [flickcap] line:
-   ticks held back since the last present, clears and draws, mean brightness, and the largest
-   change of a 16x9-cell mean from the previous frame.  Images go to the game's cwd. */
-#define CINE_FADE_ALPHA 0x006424b4u   /* black overlay alpha 0..255, -999 = none drawn (0x34918)            */
+/* 0x65a388 0x659f28 */
+#define CINE_FADE_ALPHA 0x006424b4u   /* -999 0x34918 */
 #if GMV_DEV
-#define CINE_FADE_TIMER 0x006424b0u   /* cutscene fader: ms left, -999 idle (CineFadeIn/Out 0xcd8be/0xcda6c) */
+#define CINE_FADE_TIMER 0x006424b0u   /* -999 0xcd8be/0xcda6c */
 #define FLK_MS 60000u
 #define FLK_W 480
 #define FLK_GX 16
 #define FLK_GY 9
 typedef struct { unsigned char *px; unsigned frame; int mean, cell[FLK_GX * FLK_GY]; } flk_frame;
 static flk_frame g_flk[3];
-static int g_flk_ow, g_flk_oh, g_flk_row, g_flk_n, g_flk_i;   /* g_flk_i = slot of the newest */
+static int g_flk_ow, g_flk_oh, g_flk_row, g_flk_n, g_flk_i;
 static DWORD g_flk_until, g_flk_t0;
 static uint32_t g_flk_vt;
 static unsigned g_flk_presented, g_flk_held, g_flk_events, g_flk_saved;
 #endif
 
-/* vtable of the state on top of the game's state stack (App [0x6853a0] -> manager [+0x17ac0] ->
-   stack base [+0xc], top [+0x10]; see state_trace in shimsinput.c), 0 when there is none. */
+/* [0x6853a0] -> [+0x17ac0] [+0xc] [+0x10] */
 uint32_t gmv_top_state_vtable(void)
 {
     const unsigned char *app = *(const unsigned char *const *)(uintptr_t)0x6853a0u;
@@ -71,18 +61,9 @@ static void flk_save(const flk_frame *fr, const char *tag)
 }
 #endif
 
-/* Main-menu entry flash (original game; GMV_MENUFLASH_FIX, default on).  Pressing a key on the
-   title (state vtable 0x65a388) switches to the main-menu state (0x659f28), whose 3D background is a
-   scripted camera flight that opens with CineFadeIn.  The game draws two frames before the script
-   runs its fades: the camera still at its default spot (facing a building) and no black overlay.
-   The script opens with a 1 ms CineFadeOut, so the first frame with the fader running has alpha 0
-   (transparent) and the next one 255; the raw scene therefore flashes between the title and the
-   fade from black -- ~66 ms at 60 ticks/s, the same frames on the Mac.  From that switch, frames
-   are drawn as normal but not presented until the overlay is fully black (alpha 255), so the title
-   stays up until the first black frame.  Capped at 300 ms in case a fade never comes.  Returns 1
-   to skip this present. */
+/* MENUFLASH_FIX 0x65a388 -> 0x659f28 CineFadeIn */
 #define MF_CAP_MS 300u
-static int g_menuflash = -1;                            /* MENUFLASH_FIX; the options menu sets it */
+static int g_menuflash = -1;
 
 void gmv_set_menuflash_fix(int on)
 {
@@ -95,7 +76,8 @@ static int menu_flash_hold(unsigned frame, uint32_t vt, int drew)
     static uint32_t prev_vt;
     static DWORD t0;
     static unsigned held;
-    if (g_menuflash < 0) { const char *e = gmv_getenv("GMV_MENUFLASH_FIX"); g_menuflash = !(e && *e == '0'); }
+    if (g_menuflash < 0)
+        g_menuflash = !gmv_env_off(gmv_getenv("GMV_MENUFLASH_FIX"));
     if (vt != prev_vt) {
         if (g_menuflash && prev_vt == 0x65a388u && vt == 0x659f28u) {
             holding = 1;
@@ -165,7 +147,7 @@ void flicker_cap(unsigned frame, int presented, uint32_t vt)
         return;
     int step = (w + FLK_W - 1) / FLK_W, ow = w / step, oh = h / step;
     int inrow = (w * 3 + 3) & ~3, outrow = (ow * 3 + 3) & ~3;
-    if (ow != g_flk_ow || oh != g_flk_oh) {             /* first use or a resolution change */
+    if (ow != g_flk_ow || oh != g_flk_oh) {
         for (int k = 0; k < 3; k++) {
             free(g_flk[k].px);
             g_flk[k].px = malloc((size_t)outrow * oh);
@@ -212,7 +194,7 @@ void flicker_cap(unsigned frame, int presented, uint32_t vt)
         int lo = p2->mean < cur->mean ? p2->mean : cur->mean, hi = p2->mean > cur->mean ? p2->mean : cur->mean;
         int aba = d12 >= 24 && d1c >= 24 && 2 * d2c < (d12 < d1c ? d12 : d1c);
         int flash = p1->mean + 24 < lo || p1->mean > hi + 24;
-        int odd = d12 >= 96 && d1c >= 96;       /* A B C: one frame unlike both sides, e.g. between two cuts */
+        int odd = d12 >= 96 && d1c >= 96;
         if (aba || flash || odd) {
             char tag[16];
             gmv_log("[flickcap] EVENT %u (%s%s%s) at f%u: means %d / %d / %d, cell changes %d / %d, ends %d apart\n",

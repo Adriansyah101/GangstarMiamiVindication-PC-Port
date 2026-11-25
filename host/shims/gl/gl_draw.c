@@ -1,4 +1,3 @@
-/* gl_draw.c -- the draw wrappers and TEXFIX */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,26 +10,105 @@
 #include "log.h"
 #include "shims.h"
 #if GMV_DEV
-#define GMV_GLQ_NO_MACROS                               /* the timed queries below call GL itself */
+#define GMV_GLQ_NO_MACROS
 #endif
 #include "glshim.h"
 
-/* ---- untextured draws with a stale texture (NOTES item 8: the death fade never turned black) ----
-   glitch's setTexture(stage, NULL) only records the NULL and never unbinds, and a material without
-   texture coordinates can leave GL_TEXTURE_2D enabled on unit 0 with whatever the previous 2D batch
-   bound (the HUD atlas, texture 2).  For the texcoord array it disables, the driver sets the current
-   texcoord to (0,0,0,0) via glMultiTexCoord4f, so the fixed pipeline samples at s/q = 0/0: undefined.
-   On the Mac the full-screen black rectangles (draw2DRectangle: the death/respawn fade 0x1a5cea, the
-   generic fade 0x1b5094, the cutscene fader) came out black; here the sample is a transparent texel
-   and MODULATE turns the black into alpha 0, so the fade draws but changes nothing.  A draw with
-   no texture coordinates cannot mean to show a texture, so for the duration of such a draw every
-   unit that is enabled without a texcoord array is disabled, leaving plain vertex colour (= a white
-   opaque sample under MODULATE).  Point sprites (GL_POINTS) generate their own coordinates and are
-   left alone.  GMV_TEXFIX=0 turns this off for comparison. */
+/* TEXFIX 0x1a5cea 0x1b5094 */
 int g_texfix = 1;
-unsigned g_tf_active, g_tf_client;               /* glActiveTexture / glClientActiveTexture unit */
-uint8_t g_tf_tex2d, g_tf_tcarr;                  /* per-unit bits: GL_TEXTURE_2D on, texcoord array on */
-static unsigned g_tf_fixed;                             /* draws patched (for the fade trace) */
+unsigned g_tf_active, g_tf_client;
+uint8_t g_tf_tex2d, g_tf_tcarr;
+GLuint g_tf_bound[8];
+static unsigned g_tf_fixed;
+
+#if GMV_DEV
+static struct {
+    int on;
+    unsigned calls[SC_N], same[SC_N];
+    GLuint tex[4];
+    unsigned draws, same_sig, same_mv, merge;
+    GLint sig[22];
+    GLfloat mv[16];
+    const char *end;
+    int have;
+} dp = {.on = -1};
+
+void gmv_gl_state_note(int kind, int same)
+{
+    dp.calls[kind]++;
+    dp.same[kind] += same != 0;
+}
+
+static GLint dp_ptr(GLenum pname)
+{
+    void *p = NULL;
+    glGetPointerv(pname, &p);
+    return (GLint)(uintptr_t)p;
+}
+
+static void draw_probe(GLenum mode, GLsizei count, GLenum type, const void *idx)
+{
+    if (dp.on < 0) {
+        const char *e = gmv_dbgenv("GMV_DRAW_PROBE");
+        dp.on = gmv_perf_on() && gmv_env_on(e);
+    }
+    if (!dp.on)
+        return;
+    GLint s[22] = {0};
+    GLfloat mv[16];
+    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+    glGetIntegerv(GL_BLEND_SRC, &s[0]);
+    glGetIntegerv(GL_BLEND_DST, &s[1]);
+    glGetIntegerv(GL_ALPHA_TEST_FUNC, &s[2]);
+    glGetFloatv(GL_ALPHA_TEST_REF, (GLfloat *)&s[3]);
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &s[4]);
+    s[5] = glIsEnabled(GL_ALPHA_TEST) | glIsEnabled(GL_BLEND) << 1 | glIsEnabled(GL_DEPTH_TEST) << 2 |
+           glIsEnabled(GL_FOG) << 3 | glIsEnabled(GL_CULL_FACE) << 4;
+    s[6] = g_tf_tex2d | g_tf_tcarr << 8;
+    s[7] = (GLint)dp.tex[0];
+    s[8] = (GLint)dp.tex[1];
+    s[9] = g_te[0].mode;
+    s[10] = g_te[1].mode;
+    s[11] = g_te[0].crgb;
+    s[12] = g_te[1].crgb;
+    glGetFloatv(GL_CURRENT_COLOR, (GLfloat *)&s[13]);
+    glGetIntegerv(0x8896, &s[17]);
+    s[18] = dp_ptr(GL_VERTEX_ARRAY_POINTER);
+    s[19] = dp_ptr(GL_TEXTURE_COORD_ARRAY_POINTER) ^ dp_ptr(GL_COLOR_ARRAY_POINTER);
+    glGetIntegerv(0x8895, &s[20]);
+    s[21] = (GLint)(mode | type << 16);
+    int same = dp.have && !memcmp(s, dp.sig, sizeof s);
+    int same_mv = same && !memcmp(mv, dp.mv, sizeof mv);
+    const char *at = idx;
+    dp.draws++;
+    dp.same_sig += same;
+    dp.same_mv += same_mv;
+    dp.merge += same_mv && mode == GL_TRIANGLES && at == dp.end;
+    dp.end = at + (size_t)count * (type == GL_UNSIGNED_SHORT ? 2 : type == GL_UNSIGNED_BYTE ? 1 : 4);
+    memcpy(dp.sig, s, sizeof s);
+    memcpy(dp.mv, mv, sizeof mv);
+    dp.have = 1;
+}
+
+void gmv_gl_draw_probe_report(double seconds)
+{
+    static const char *const nm[SC_N] = {"glBindTexture", "glTexEnv", "glBlendFunc", "glAlphaFunc", "glDepthMask"};
+    char b[400];
+    int len = 0;
+    for (int k = 0; k < SC_N && len < (int)sizeof b - 80; k++)
+        len += snprintf(b + len, sizeof b - len, "%s %s %.0f (%.0f%% the same)", k ? "," : "", nm[k],
+                        dp.calls[k] / seconds, dp.calls[k] ? dp.same[k] * 100.0 / dp.calls[k] : 0.0);
+    gmv_logfile("[perf]   state calls a second:%s\n", b);
+    if (dp.draws)
+        gmv_logfile("[perf]   draw probe: %.0f glDrawElements a second; state as the draw before %.1f%%, with its "
+                    "modelview too %.1f%%, and triangles going on from its indices %.1f%% (%.0f a second)\n",
+                    dp.draws / seconds, dp.same_sig * 100.0 / dp.draws, dp.same_mv * 100.0 / dp.draws,
+                    dp.merge * 100.0 / dp.draws, dp.merge / seconds);
+    memset(dp.calls, 0, sizeof dp.calls);
+    memset(dp.same, 0, sizeof dp.same);
+    dp.draws = dp.same_sig = dp.same_mv = dp.merge = 0;
+}
+#endif
 
 void(APIENTRY *tf_active_real(void))(GLenum)
 {
@@ -41,7 +119,7 @@ void(APIENTRY *tf_active_real(void))(GLenum)
 static void tr_ActiveTexture(GLenum unit)
 {
     void(APIENTRY * real)(GLenum) = tf_active_real();
-    g_tf_active = (unit - 0x84C0) & 7;                  /* GL_TEXTURE0 */
+    g_tf_active = (unit - 0x84C0) & 7;
     if (real) real(unit);
 }
 static void tr_ClientActiveTexture(GLenum unit)
@@ -52,11 +130,19 @@ static void tr_ClientActiveTexture(GLenum unit)
     gmv_game_gl_client_unit(g_tf_client);
     if (real) real(unit);
 }
+static void tr_cap(GLenum cap, int on)
+{
+    if (cap == GL_SCISSOR_TEST) g_glt.scissor = on;
+    else if (cap == GL_STENCIL_TEST) g_glt.stencil = on;
+    else if (cap == GL_CULL_FACE) g_glt.cull = on;
+    else if (cap == GL_POLYGON_OFFSET_FILL) g_glt.poly_fill = on;
+}
 static void tr_Enable(GLenum cap)
 {
     static void(APIENTRY * real)(GLenum);
     if (!real) real = gl_real("glEnable");
     if (cap == GL_TEXTURE_2D) g_tf_tex2d |= (uint8_t)(1u << g_tf_active);
+    tr_cap(cap, 1);
     gmv_game_gl_cap(cap, 1);
     if (real) real(cap);
 }
@@ -65,6 +151,7 @@ static void tr_Disable(GLenum cap)
     static void(APIENTRY * real)(GLenum);
     if (!real) real = gl_real("glDisable");
     if (cap == GL_TEXTURE_2D) g_tf_tex2d &= (uint8_t)~(1u << g_tf_active);
+    tr_cap(cap, 0);
     gmv_game_gl_cap(cap, 0);
     if (real) real(cap);
 }
@@ -73,7 +160,7 @@ static void tr_EnableClientState(GLenum a)
     static void(APIENTRY * real)(GLenum);
     if (!real) real = gl_real("glEnableClientState");
     if (a == GL_TEXTURE_COORD_ARRAY) g_tf_tcarr |= (uint8_t)(1u << g_tf_client);
-    gmv_gl_arr_state(a, 1);                             /* QUERY_FREE */
+    gmv_gl_arr_state(a, 1);
     gmv_game_gl_client_state(a, 1);
     if (real) real(a);
 }
@@ -82,31 +169,36 @@ static void tr_DisableClientState(GLenum a)
     static void(APIENTRY * real)(GLenum);
     if (!real) real = gl_real("glDisableClientState");
     if (a == GL_TEXTURE_COORD_ARRAY) g_tf_tcarr &= (uint8_t)~(1u << g_tf_client);
-    gmv_gl_arr_state(a, 0);                             /* QUERY_FREE */
+    gmv_gl_arr_state(a, 0);
     gmv_game_gl_client_state(a, 0);
     if (real) real(a);
 }
-/* Each unit's texture environment as the game set it, so the hybrid fog (FOG_MODE=2) can pick the
-   shader that combines the textures as it does without asking GL at every draw.  Starts at GL's
-   defaults: MODULATE, and for COMBINE: sources texture / previous / constant, colour operands. */
 #define TE_DEFAULT {GL_MODULATE, GL_MODULATE, GL_MODULATE, {0x1702, 0x8578, 0x8576, 0x1702, 0x8578, 0x8576}, \
                     {0x300, 0x300, 0x302, 0x302, 0x302, 0x302}, {1, 1}}
 g_te_t g_te[4] = {TE_DEFAULT, TE_DEFAULT, TE_DEFAULT, TE_DEFAULT};
 
 static void te_note(GLenum target, GLenum pname, GLfloat v)
 {
-    if (target != 0x2300 || g_tf_active >= 4)           /* GL_TEXTURE_ENV */
+    if (target != 0x2300 || g_tf_active >= 4)
         return;
+#if GMV_DEV
+    g_te_t was = g_te[g_tf_active];
+#endif
     GLint i = (GLint)v;
-    if (pname == 0x2200) g_te[g_tf_active].mode = i;                    /* GL_TEXTURE_ENV_MODE */
-    else if (pname == 0x8571) g_te[g_tf_active].crgb = i;               /* GL_COMBINE_RGB */
-    else if (pname == 0x8572) g_te[g_tf_active].calpha = i;             /* GL_COMBINE_ALPHA */
-    else if (pname >= 0x8580 && pname <= 0x8582) g_te[g_tf_active].src[pname - 0x8580] = i;      /* GL_SRCn_RGB */
-    else if (pname >= 0x8588 && pname <= 0x858A) g_te[g_tf_active].src[pname - 0x8588 + 3] = i;  /* GL_SRCn_ALPHA */
-    else if (pname >= 0x8590 && pname <= 0x8592) g_te[g_tf_active].op[pname - 0x8590] = i;       /* GL_OPERANDn_RGB */
-    else if (pname >= 0x8598 && pname <= 0x859A) g_te[g_tf_active].op[pname - 0x8598 + 3] = i;   /* GL_OPERANDn_ALPHA */
-    else if (pname == 0x8573) g_te[g_tf_active].scale[0] = v;           /* GL_RGB_SCALE */
-    else if (pname == 0x0D1C) g_te[g_tf_active].scale[1] = v;           /* GL_ALPHA_SCALE */
+    if (pname == 0x2200) g_te[g_tf_active].mode = i;
+    else if (pname == 0x8571) g_te[g_tf_active].crgb = i;
+    else if (pname == 0x8572) g_te[g_tf_active].calpha = i;
+    else if (pname >= 0x8580 && pname <= 0x8582) g_te[g_tf_active].src[pname - 0x8580] = i;
+    else if (pname >= 0x8588 && pname <= 0x858A) g_te[g_tf_active].src[pname - 0x8588 + 3] = i;
+    else if (pname >= 0x8590 && pname <= 0x8592) g_te[g_tf_active].op[pname - 0x8590] = i;
+    else if (pname >= 0x8598 && pname <= 0x859A) g_te[g_tf_active].op[pname - 0x8598 + 3] = i;
+    else if (pname == 0x8573) g_te[g_tf_active].scale[0] = v;
+    else if (pname == 0x0D1C) g_te[g_tf_active].scale[1] = v;
+#if GMV_DEV
+    else
+        return;
+    gmv_gl_state_note(SC_ENV, !memcmp(&was, &g_te[g_tf_active], sizeof was));
+#endif
 }
 static void tr_TexEnvi(GLenum target, GLenum pname, GLint v)
 {
@@ -137,7 +229,6 @@ static void tr_TexEnvfv(GLenum target, GLenum pname, const GLfloat *v)
     if (real) real(target, pname, v);
 }
 
-/* Before a draw: disable the units that would sample without coordinates; returns their bits. */
 unsigned texfix_begin(GLenum mode)
 {
     unsigned m = g_texfix && mode != GL_POINTS ? (unsigned)(g_tf_tex2d & ~g_tf_tcarr) & 0xF : 0;
@@ -173,7 +264,7 @@ static void tr_DrawArrays(GLenum mode, GLint first, GLsizei count)
 #if GMV_DEV
     long long t0 = gmv_perf_on() ? gmv_prof_now() : 0;
 #endif
-    unsigned cm = gmv_sv_arrays(first, count);          /* STREAM_VBO */
+    unsigned cm = gmv_sv_arrays(first, count);
     gmv_game_draw_arrays((void *)real, mode, first, count, __builtin_return_address(0));
 #if GMV_DEV
     if (t0) gmv_sv_draw_time(cm, t0);
@@ -183,14 +274,9 @@ static void tr_DrawArrays(GLenum mode, GLint first, GLsizei count)
     post_fade_probe("drawarrays mode/count", mode, (unsigned)count);
 }
 #if GMV_DEV
-/* The fade rectangle itself: the first 6-index glDrawElements after a fade call.  Dumps its
-   vertices (position / colour / texcoord as the client arrays describe them), the texture units
-   that are enabled and what is bound on them, the bound texture's size and a few texels, and the GL
-   error state, so a fade that draws but does not darken can be compared with one that does (the
-   cutscene fader).  Called before the draw. */
 static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
 {
-    static struct { uint32_t caller; unsigned n; } seen[8];   /* a few lines per caller */
+    static struct { uint32_t caller; unsigned n; } seen[8];
     uint32_t caller = g_quad_probe;
     if (count != 6)
         return;
@@ -209,15 +295,15 @@ static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
     void(APIENTRY * active_tex)(GLenum) = gl_real("glActiveTexture");
     if (!active_tex) active_tex = gl_real("glActiveTextureARB");
     GLint act = 0, cact = 0, ebo = 0, abo = 0;
-    glGetIntegerv(0x84E0, &act);                        /* GL_ACTIVE_TEXTURE */
-    glGetIntegerv(0x84E1, &cact);                       /* GL_CLIENT_ACTIVE_TEXTURE */
-    glGetIntegerv(0x8895, &ebo);                        /* GL_ELEMENT_ARRAY_BUFFER_BINDING */
-    glGetIntegerv(0x8894, &abo);                        /* GL_ARRAY_BUFFER_BINDING */
+    glGetIntegerv(0x84E0, &act);
+    glGetIntegerv(0x84E1, &cact);
+    glGetIntegerv(0x8895, &ebo);
+    glGetIntegerv(0x8894, &abo);
     char units[160] = "";
     if (active_tex) {
         size_t ul = 0;
         for (int u = 0; u < 4; u++) {
-            active_tex(0x84C0 + u);                     /* GL_TEXTURE0 + u */
+            active_tex(0x84C0 + u);
             GLint t = 0, env = 0;
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &t);
             glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &env);
@@ -235,10 +321,9 @@ static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
     gmv_log("[fadequad] caller=0x%06x err_before=0x%x active=0x%x clientactive=0x%x ebo=%d abo=%d%s | bound tex=%d %dx%d ifmt=0x%x min=0x%x\n",
             caller, err_before, act, cact, ebo, abo, units, tex, tw, th, tif, tmin);
     GLfloat tc[4] = {0, 0, 0, 0};
-    glGetFloatv(0x0B03, tc);                            /* GL_CURRENT_TEXTURE_COORDS (active unit) */
+    glGetFloatv(0x0B03, tc);
     gmv_log("[fadequad]   current texcoord=%.3f,%.3f,%.3f,%.3f  texfix=%s tex2d_bits=0x%x tcarray_bits=0x%x patched_draws=%u\n",
             tc[0], tc[1], tc[2], tc[3], g_texfix ? "on" : "off", g_tf_tex2d, g_tf_tcarr, g_tf_fixed);
-    /* client arrays */
     struct { GLenum en, sz, ty, st, ptr; const char *nm; } arr[3] = {
         {GL_VERTEX_ARRAY, GL_VERTEX_ARRAY_SIZE, GL_VERTEX_ARRAY_TYPE, GL_VERTEX_ARRAY_STRIDE, GL_VERTEX_ARRAY_POINTER, "pos"},
         {GL_COLOR_ARRAY, GL_COLOR_ARRAY_SIZE, GL_COLOR_ARRAY_TYPE, GL_COLOR_ARRAY_STRIDE, GL_COLOR_ARRAY_POINTER, "col"},
@@ -273,7 +358,7 @@ static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
             qvp[0], qvp[1], qvp[2], qvp[3], glIsEnabled(GL_SCISSOR_TEST), qsc[0], qsc[1], qsc[2], qsc[3], pmode[0],
             glIsEnabled(GL_CULL_FACE), cullm, glIsEnabled(GL_POLYGON_SMOOTH), glIsEnabled(GL_POLYGON_STIPPLE));
     if (ebo || abo || !idx || IsBadReadPtr(idx, 12))
-        return;                                         /* buffer objects: pointers are offsets */
+        return;
     float u0 = -1, v0 = -1;
     for (int k = 0; k < 6; k++) {
         unsigned vi = type == GL_UNSIGNED_SHORT ? ((const uint16_t *)idx)[k]
@@ -284,7 +369,7 @@ static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
             if (!aptr[a])
                 continue;
             int esz = aty[a] == GL_FLOAT ? 4 : aty[a] == GL_SHORT || aty[a] == GL_UNSIGNED_SHORT ? 2 : 1;
-            int ncomp = asz[a] == 0x80E1 ? 4 : asz[a];  /* GL_BGRA as size */
+            int ncomp = asz[a] == 0x80E1 ? 4 : asz[a];
             int stride = ast[a] ? ast[a] : esz * ncomp;
             const unsigned char *p = aptr[a] + (size_t)vi * stride;
             if (IsBadReadPtr(p, esz * ncomp))
@@ -302,7 +387,6 @@ static void fade_quad_dump(GLsizei count, GLenum type, const void *idx)
         }
         gmv_log("[fadequad]   %s\n", line);
     }
-    /* texel of the bound texture under vertex 0's texcoord */
     if (tex && tw > 0 && th > 0 && (long)tw * th <= 4096L * 4096L) {
         unsigned char *px = malloc((size_t)tw * th * 4);
         if (px) {
@@ -330,6 +414,7 @@ static void tr_DrawElements(GLenum mode, GLsizei count, GLenum type, const void 
     if (g_fade_pending) fade_state_log("elements", mode, count);
 #if GMV_DEV
     if (g_quad_probe) fade_quad_dump(count, type, idx);
+    if (dp.on) draw_probe(mode, count, type, idx);
 #endif
     g_drew_since_swap = 1;
     if (g_gl_trace) {
@@ -338,7 +423,7 @@ static void tr_DrawElements(GLenum mode, GLsizei count, GLenum type, const void 
             logged++;
             gmv_log("[gltrace] glDrawElements mode=0x%x count=%d type=0x%x caller=%p\n",
                     mode, count, type, __builtin_return_address(0));
-            const uint32_t *sp = (const uint32_t *)&mode;   /* scan the stack for the game call chain */
+            const uint32_t *sp = (const uint32_t *)&mode;
             for (int k = 0; k < 64; k++)
                 if (sp[k] >= GMV_TEXT_LO && sp[k] < GMV_TEXT_HI)
                     gmv_log("        [sp+%02x] -> game 0x%08x\n", k * 4, sp[k]);
@@ -347,7 +432,7 @@ static void tr_DrawElements(GLenum mode, GLsizei count, GLenum type, const void 
 #if GMV_DEV
     long long t0 = gmv_perf_on() ? gmv_prof_now() : 0;
 #endif
-    unsigned cm = gmv_sv_elements(count, type, idx);    /* STREAM_VBO */
+    unsigned cm = gmv_sv_elements(count, type, idx);
     gmv_game_draw_elements((void *)real, mode, count, type, idx, __builtin_return_address(0));
 #if GMV_DEV
     if (t0) gmv_sv_draw_time(cm, t0);
@@ -374,10 +459,9 @@ static void tr_BindFramebuffer(GLenum target, GLuint fb)
         cap_seq(b);
     }
 #endif
-    if (real) real(target, fb ? fb : g_ms_fbo);         /* the screen is the MSAA framebuffer when on */
-    gmv_gl_fb_note(target, fb ? fb : g_ms_fbo);         /* QUERY_FREE */
+    if (real) real(target, fb ? fb : g_ms_fbo);
+    gmv_gl_fb_note(target, fb ? fb : g_ms_fbo);
 }
-/* The game deleting framebuffers: one may be bound (GL then binds 0), so QUERY_FREE asks again. */
 static void tr_DeleteFramebuffers(GLsizei n, const GLuint *fbs)
 {
     static void(APIENTRY * real)(GLsizei, const GLuint *);
@@ -397,12 +481,161 @@ static void tr_BindTexture(GLenum target, GLuint tex)
     static void(APIENTRY * real)(GLenum, GLuint);
     if (!real) real = gl_real("glBindTexture");
     g_glt.tex_binds++;
+    if (target == GL_TEXTURE_2D)
+        g_tf_bound[g_tf_active] = tex;
+#if GMV_DEV
+    if (target == GL_TEXTURE_2D && g_tf_active < 4) {
+        gmv_gl_state_note(SC_BIND, dp.tex[g_tf_active] == tex);
+        dp.tex[g_tf_active] = tex;
+    }
+#endif
     if (real) real(target, tex);
+}
+
+static struct { GLushort w, h; } *g_tex_dim;
+static GLuint g_tex_dim_n;
+
+void gmv_gl_tex_size(GLenum target, GLint level, GLsizei w, GLsizei h)
+{
+    GLuint t = g_tf_bound[g_tf_active];
+    if (target != GL_TEXTURE_2D || level || !t || t >= (1u << 20))
+        return;
+    if (t >= g_tex_dim_n) {
+        GLuint n = g_tex_dim_n ? g_tex_dim_n : 1024;
+        while (n <= t)
+            n *= 2;
+        void *a = realloc(g_tex_dim, n * sizeof *g_tex_dim);
+        if (!a)
+            return;
+        g_tex_dim = a;
+        memset(g_tex_dim + g_tex_dim_n, 0, (n - g_tex_dim_n) * sizeof *g_tex_dim);
+        g_tex_dim_n = n;
+    }
+    g_tex_dim[t].w = (GLushort)w;
+    g_tex_dim[t].h = (GLushort)h;
+}
+
+void gmv_gl_tex_deleted(GLsizei n, const GLuint *names)
+{
+    for (GLsizei i = 0; names && i < n; i++) {
+        if (names[i] < g_tex_dim_n)
+            g_tex_dim[names[i]].w = g_tex_dim[names[i]].h = 0;
+        for (int u = 0; u < 8; u++)
+            if (g_tf_bound[u] == names[i])
+                g_tf_bound[u] = 0;
+    }
+}
+
+void gmv_gl_tex_dims(GLuint t, GLint *w, GLint *h)
+{
+    *w = t < g_tex_dim_n ? g_tex_dim[t].w : 0;
+    *h = t < g_tex_dim_n ? g_tex_dim[t].h : 0;
+}
+
+static void tr_TexImage2D(GLenum target, GLint level, GLint ifmt, GLsizei w, GLsizei h, GLint border,
+                          GLenum format, GLenum type, const void *px)
+{
+    static void(APIENTRY * real)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum,
+                                 const void *);
+    if (!real) real = gl_real("glTexImage2D");
+    gmv_gl_tex_size(target, level, w, h);
+    if (real) real(target, level, ifmt, w, h, border, format, type, px);
+}
+static void tr_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w, GLsizei h,
+                                    GLint border, GLsizei size, const void *data)
+{
+    static void(APIENTRY * real)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void *);
+    if (!real) real = gl_real("glCompressedTexImage2D");
+    gmv_gl_tex_size(target, level, w, h);
+    if (real) real(target, level, ifmt, w, h, border, size, data);
+}
+static void tr_DeleteTextures(GLsizei n, const GLuint *names)
+{
+    static void(APIENTRY * real)(GLsizei, const GLuint *);
+    if (!real) real = gl_real("glDeleteTextures");
+    gmv_gl_tex_deleted(n, names);
+    if (real) real(n, names);
+}
+static void tr_ColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+{
+    static void(APIENTRY * real)(GLboolean, GLboolean, GLboolean, GLboolean);
+    if (!real) real = gl_real("glColorMask");
+    g_glt.cmask[0] = r; g_glt.cmask[1] = g; g_glt.cmask[2] = b; g_glt.cmask[3] = a;
+    if (real) real(r, g, b, a);
+}
+static void tr_DepthFunc(GLenum f)
+{
+    static void(APIENTRY * real)(GLenum);
+    if (!real) real = gl_real("glDepthFunc");
+    g_glt.depth_func = f;
+    if (real) real(f);
+}
+static void tr_ClearDepth(GLclampd d)
+{
+    static void(APIENTRY * real)(GLclampd);
+    if (!real) real = gl_real("glClearDepth");
+    g_glt.clear_depth = d;
+    if (real) real(d);
+}
+static void tr_StencilFunc(GLenum f, GLint ref, GLuint mask)
+{
+    static void(APIENTRY * real)(GLenum, GLint, GLuint);
+    if (!real) real = gl_real("glStencilFunc");
+    g_glt.st_func = f; g_glt.st_ref = ref; g_glt.st_mask = mask;
+    if (real) real(f, ref, mask);
+}
+static void tr_StencilOp(GLenum sf, GLenum zf, GLenum zp)
+{
+    static void(APIENTRY * real)(GLenum, GLenum, GLenum);
+    if (!real) real = gl_real("glStencilOp");
+    g_glt.st_op[0] = sf; g_glt.st_op[1] = zf; g_glt.st_op[2] = zp;
+    if (real) real(sf, zf, zp);
+}
+static void tr_StencilMask(GLuint mask)
+{
+    static void(APIENTRY * real)(GLuint);
+    if (!real) real = gl_real("glStencilMask");
+    g_glt.st_wmask = mask;
+    if (real) real(mask);
+}
+static void tr_ClearStencil(GLint s)
+{
+    static void(APIENTRY * real)(GLint);
+    if (!real) real = gl_real("glClearStencil");
+    g_glt.st_clear = s;
+    if (real) real(s);
+}
+static void tr_CullFace(GLenum m)
+{
+    static void(APIENTRY * real)(GLenum);
+    if (!real) real = gl_real("glCullFace");
+    g_glt.cull_face = m;
+    if (real) real(m);
+}
+static void tr_FrontFace(GLenum m)
+{
+    static void(APIENTRY * real)(GLenum);
+    if (!real) real = gl_real("glFrontFace");
+    g_glt.front_face = m;
+    if (real) real(m);
+}
+static void tr_PolygonOffset(GLfloat f, GLfloat u)
+{
+    static void(APIENTRY * real)(GLfloat, GLfloat);
+    if (!real) real = gl_real("glPolygonOffset");
+    g_glt.po[0] = f; g_glt.po[1] = u;
+    if (real) real(f, u);
+}
+static void tr_Scissor(GLint x, GLint y, GLsizei w, GLsizei h)
+{
+    static void(APIENTRY * real)(GLint, GLint, GLsizei, GLsizei);
+    if (!real) real = gl_real("glScissor");
+    g_glt.sbox[0] = x; g_glt.sbox[1] = y; g_glt.sbox[2] = w; g_glt.sbox[3] = h;
+    if (real) real(x, y, w, h);
 }
 
 void *gl_trace_intercept(const char *name)
 {
-    /* name still has the leading underscore here (e.g. "_glClear") */
     void *gs = gmv_game_gl_draw_intercept(name);
     if (gs)
         return gs;
@@ -431,6 +664,20 @@ void *gl_trace_intercept(const char *name)
         {"_glTexEnvf", (void *)tr_TexEnvf},
         {"_glTexEnviv", (void *)tr_TexEnviv},
         {"_glTexEnvfv", (void *)tr_TexEnvfv},
+        {"_glTexImage2D", (void *)tr_TexImage2D},
+        {"_glCompressedTexImage2D", (void *)tr_CompressedTexImage2D},
+        {"_glDeleteTextures", (void *)tr_DeleteTextures},
+        {"_glColorMask", (void *)tr_ColorMask},
+        {"_glDepthFunc", (void *)tr_DepthFunc},
+        {"_glClearDepth", (void *)tr_ClearDepth},
+        {"_glStencilFunc", (void *)tr_StencilFunc},
+        {"_glStencilOp", (void *)tr_StencilOp},
+        {"_glStencilMask", (void *)tr_StencilMask},
+        {"_glClearStencil", (void *)tr_ClearStencil},
+        {"_glCullFace", (void *)tr_CullFace},
+        {"_glFrontFace", (void *)tr_FrontFace},
+        {"_glPolygonOffset", (void *)tr_PolygonOffset},
+        {"_glScissor", (void *)tr_Scissor},
         {NULL, NULL},
     };
     for (int i = 0; t[i].n; i++)
@@ -440,17 +687,15 @@ void *gl_trace_intercept(const char *name)
 }
 
 #if GMV_DEV
-/* GMV_LOAD_PROFILE (loadprof.c): time the texture and buffer uploads.  Any single upload over
-   10 ms is also logged with its size and caller (the first 40). */
 static long long tex_bytes(GLsizei w, GLsizei h, GLenum format, GLenum type)
 {
     int bpp;
     switch (type) {
-    case 0x8363: case 0x8033: case 0x8034: bpp = 2; break;    /* 5_6_5, 4_4_4_4, 5_5_5_1 */
+    case 0x8363: case 0x8033: case 0x8034: bpp = 2; break;
     case GL_FLOAT: bpp = 16; break;
     default:
         switch (format) {
-        case GL_RGBA: case 0x80E1: bpp = 4; break;              /* RGBA, BGRA */
+        case GL_RGBA: case 0x80E1: bpp = 4; break;
         case GL_RGB: case GL_BGR_EXT: bpp = 3; break;
         case GL_LUMINANCE_ALPHA: bpp = 2; break;
         default: bpp = 1; break;
@@ -462,7 +707,7 @@ static long long tex_bytes(GLsizei w, GLsizei h, GLenum format, GLenum type)
 static void pf_done(int kind, long long t0, long long bytes, const char *what, GLsizei w, GLsizei h,
                     GLenum fmt, void *caller)
 {
-    (void)kind;                         /* without the profiler gmv_prof_add is empty */
+    (void)kind;
     gmv_prof_add(kind, t0, bytes);
     static int logged;
     static LARGE_INTEGER freq;
@@ -482,6 +727,7 @@ static void pf_TexImage2D(GLenum target, GLint level, GLint ifmt, GLsizei w, GLs
     static void(APIENTRY * real)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum,
                                  const void *);
     if (!real) real = gl_real("glTexImage2D");
+    gmv_gl_tex_size(target, level, w, h);
     long long t0 = gmv_prof_now();
     if (real) real(target, level, ifmt, w, h, border, format, type, px);
     pf_done(GMV_PROF_TEX, t0, px ? tex_bytes(w, h, format, type) : 0, "glTexImage2D", w, h,
@@ -503,6 +749,7 @@ void pf_CompressedTexImage2D(GLenum target, GLint level, GLenum ifmt, GLsizei w,
 {
     static void(APIENTRY * real)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void *);
     if (!real) real = gl_real("glCompressedTexImage2D");
+    gmv_gl_tex_size(target, level, w, h);
     long long t0 = gmv_prof_now();
     if (real) real(target, level, ifmt, w, h, border, size, data);
     pf_done(GMV_PROF_TEX, t0, size, "glCompressedTexImage2D", w, h, ifmt, __builtin_return_address(0));
@@ -541,26 +788,17 @@ static void pf_BufferSubData(GLenum target, intptr_t off, intptr_t size, const v
     pf_done(GMV_PROF_BUF, t0, size, "glBufferSubData", 0, 0, 0, __builtin_return_address(0));
 }
 
-/* PERF_PROFILE's count of the GL state queries (QUERY_FREE's question: how many a frame, and what they cost): the
-   game's glGetError and glGetFloatv here, its glGetIntegerv in ms_GetIntegerv, the host's own through glshim.h. */
 volatile unsigned gmv_glq_host;
 static unsigned q_err, q_flt, q_int;
 static long long q_err_t, q_flt_t;
-
-static long long q_now(void)
-{
-    LARGE_INTEGER t;
-    QueryPerformanceCounter(&t);
-    return t.QuadPart;
-}
 
 static GLenum pf_GetError(void)
 {
     static GLenum(APIENTRY * real)(void);
     if (!real) real = gl_real("glGetError");
-    long long t0 = q_now();
+    long long t0 = gmv_qpc();
     GLenum e = real ? real() : 0;
-    q_err_t += q_now() - t0;
+    q_err_t += gmv_qpc() - t0;
     q_err++;
     return e;
 }
@@ -569,9 +807,9 @@ static void pf_GetFloatv(GLenum pname, GLfloat *v)
 {
     static void(APIENTRY * real)(GLenum, GLfloat *);
     if (!real) real = gl_real("glGetFloatv");
-    long long t0 = q_now();
+    long long t0 = gmv_qpc();
     if (real) real(pname, v);
-    q_flt_t += q_now() - t0;
+    q_flt_t += gmv_qpc() - t0;
     q_flt++;
 }
 
@@ -580,7 +818,6 @@ void gmv_gl_query_note_int(void)
     q_int++;
 }
 
-/* The host's queries by source line (glshim.h's macros), with their time. */
 static struct { const char *file; int line; unsigned n; long long t; } q_site[128];
 static long long q_host_t;
 
@@ -606,9 +843,9 @@ static void q_site_add(const char *file, int line, long long dt)
 }
 
 #define Q_TIMED(call)                                                                                                  \
-    long long t0 = q_now();                                                                                            \
+    long long t0 = gmv_qpc();                                                                                            \
     call;                                                                                                              \
-    q_site_add(file, line, q_now() - t0)
+    q_site_add(file, line, gmv_qpc() - t0)
 void gmv_q_GetIntegerv(const char *file, int line, GLenum p, GLint *v) { Q_TIMED(glGetIntegerv(p, v)); }
 void gmv_q_GetFloatv(const char *file, int line, GLenum p, GLfloat *v) { Q_TIMED(glGetFloatv(p, v)); }
 void gmv_q_GetBooleanv(const char *file, int line, GLenum p, GLboolean *v) { Q_TIMED(glGetBooleanv(p, v)); }
@@ -630,7 +867,7 @@ void gmv_gl_query_report(double seconds)
                 q_err / seconds, q_err_t * ms / seconds, q_flt / seconds, q_flt_t * ms / seconds, q_int / seconds,
                 gmv_glq_host / seconds, q_host_t * ms / seconds);
     q_host_t = 0;
-    for (int k = 0; k < 10; k++) {                              /* the busiest lines */
+    for (int k = 0; k < 10; k++) {
         int best = -1;
         for (int i = 0; i < 128; i++)
             if (q_site[i].n && (best < 0 || q_site[i].n > q_site[best].n))

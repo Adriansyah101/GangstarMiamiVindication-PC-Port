@@ -1,4 +1,3 @@
-/* gl_context.c -- the window, the GL context and the sizes the game sees */
 #include <stdint.h>
 #include <string.h>
 #include "compat.h"
@@ -10,14 +9,9 @@
 #include "shims.h"
 #include "glshim.h"
 
-/* On the main thread, before the game: the game asks for the display's modes early (shimscg.c).  The window
-   keeps to the DPI awareness main.c chose.  SDL's own defaults are left out where they would change how the
-   port has always behaved: a full-screen window behind another stays open, the click that brings the window
-   forward counts, and the screen saver is left alone. */
 void gmv_video_start(void)
 {
-    const char *da = gmv_getenv("GMV_DPI_AWARE");
-    SDL_SetHint("SDL_WINDOWS_DPI_AWARENESS", da && *da == '0' ? "unaware" : "system");
+    SDL_SetHint("SDL_WINDOWS_DPI_AWARENESS", gmv_env_off(gmv_getenv("GMV_DPI_AWARE")) ? "unaware" : "system");
     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1");
@@ -30,7 +24,6 @@ void gmv_video_start(void)
               (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency());
 }
 
-/* The primary monitor's size. */
 void gmv_video_desktop(int *w, int *h)
 {
     const SDL_DisplayMode *m = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
@@ -41,13 +34,6 @@ void gmv_video_desktop(int *w, int *h)
 }
 
 #ifdef _WIN32
-/* Mac flushBuffer keeps the back buffer's contents; the game relies on that where it has no screen FBO (it
-   draws every other tick, and its fades darken the retained frame instead of redrawing it).  The format SDL
-   would choose is SWAP_EXCHANGE, whose back buffer holds the frame before last after a swap, and with which
-   the driver takes over a window covering the screen: full screen stops going through the desktop, and
-   screen captures of it freeze (seen on an NVIDIA driver).  So swap for the same format with PFD_SWAP_COPY
-   when the driver offers one.  SDL has no attribute for this but copies the format of a window it is given,
-   so this makes a hidden one.  GMV_SWAP_COPY=0 disables. */
 static LRESULT CALLBACK pf_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     return DefWindowProcA(h, m, w, l);
@@ -55,8 +41,7 @@ static LRESULT CALLBACK pf_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 static HWND pf_window(void)
 {
-    const char *sc = gmv_getenv("GMV_SWAP_COPY");
-    if (sc && *sc == '0')
+    if (gmv_env_off(gmv_getenv("GMV_SWAP_COPY")))
         return NULL;
     WNDCLASSA wc = {0};
     wc.lpfnWndProc = pf_wndproc;
@@ -110,13 +95,9 @@ static HWND pf_window(void)
 }
 #endif
 
-/* The client size the game last asked for in a window (gl_window_fit). */
 static int g_asked_w, g_asked_h;
 
 #if !defined(_WIN32) && defined(GMV_ICON_FILE)
-/* The game's app.ico (App icon.png), built into the program by linux/build.sh when it is present, as the exe
-   gets it on Windows.  Its pictures are 32-bit BGRA bitmaps stored bottom row first; the largest becomes the
-   window's icon and the others its smaller sizes. */
 __asm__(".pushsection .rodata\n"
         "gmv_icon_ico:\n"
         ".incbin \"" GMV_ICON_FILE "\"\n"
@@ -127,7 +108,6 @@ extern const unsigned char gmv_icon_ico[], gmv_icon_ico_end[];
 static unsigned ico16(const unsigned char *p) { return p[0] | (unsigned)p[1] << 8; }
 static uint32_t ico32(const unsigned char *p) { return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 
-/* One picture of the icon file from its directory entry, or NULL if it is not a 32-bit bitmap. */
 static SDL_Surface *ico_picture(const unsigned char *ico, size_t n, const unsigned char *entry)
 {
     uint32_t len = ico32(entry + 8), off = ico32(entry + 12);
@@ -135,7 +115,7 @@ static SDL_Surface *ico_picture(const unsigned char *ico, size_t n, const unsign
         return NULL;
     const unsigned char *h = ico + off;
     uint32_t hs = ico32(h);
-    int w = (int)ico32(h + 4), ht = (int)ico32(h + 8) / 2;     /* the height counts the mask below the colours */
+    int w = (int)ico32(h + 4), ht = (int)ico32(h + 8) / 2;
     if (hs < 40 || ico16(h + 14) != 32 || ico32(h + 16) != 0 || w <= 0 || w > 256 || ht != w
         || len - hs < (uint32_t)w * (uint32_t)ht * 4)
         return NULL;
@@ -172,7 +152,7 @@ static void set_window_icon(SDL_Window *win)
     for (int i = 0; i < np; i++)
         if (i != big) {
             SDL_AddSurfaceAlternateImage(pic[big], pic[i]);
-            SDL_DestroySurface(pic[i]);     /* the big picture keeps its own reference */
+            SDL_DestroySurface(pic[i]);
         }
     if (SDL_SetWindowIcon(win, pic[big]))
         gmv_log("[gl] window icon: %d sizes, largest %dx%d\n", np, pic[big]->w, pic[big]->h);
@@ -187,11 +167,6 @@ void ensure_gl(void)
     if (g_glctx)
         return;
 
-    /* Size the window from the game's own saved resolution/fullscreen option (NSUserDefaults, via
-       shimsfnd.c).  Windowed: a bordered window with a ScreenWidth x ScreenHeight CLIENT area.
-       Fullscreen: a borderless window covering the monitor; the game still draws at the chosen
-       resolution (gmv_gl_render_size), scaled to the monitor.  A change in the Video options is applied
-       at once (gmv_gl_apply_mode). */
     uint64_t t0 = SDL_GetPerformanceCounter();
     long rw = 1024, rh = 768; int fs = 0;
     gmv_effective_screen(&rw, &rh, &fs);
@@ -236,9 +211,6 @@ void ensure_gl(void)
     gmv_input_set_client_size(cw, ch);
 
 #ifdef _WIN32
-    /* Give the window a big AND a small icon at their proper sizes, picked from the multi-size
-       app.ico (App icon.png).  The window-class icon alone yields only the 32px icon, which the
-       taskbar/alt-tab then shrink -- so the app icon looked tiny; these set the right sizes. */
     {
         HWND hwnd = (HWND)gmv_gl_window_hwnd();
         HINSTANCE inst = GetModuleHandleA(NULL);
@@ -266,7 +238,7 @@ void ensure_gl(void)
     gmv_log("[gl] window + GL context ready: GL %s, %s\n", ver ? ver : "?", ren ? ren : "?");
     gmv_trace("[gl] window and context took %.1f ms\n",
               (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency());
-    {   /* report what we actually got */
+    {
         int db = 0, r = 0, g = 0, b = 0, a = 0, d = 0, st = 0;
         SDL_GL_GetAttribute(SDL_GL_DOUBLEBUFFER, &db);
         SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &r);
@@ -278,10 +250,6 @@ void ensure_gl(void)
         gmv_trace("[gl] pixel format doublebuffer=%d color=%d/%d/%d alpha=%d depth=%d stencil=%d\n", db, r, g, b, a, d, st);
     }
 
-    /* Swap interval (GMV_SWAP_INTERVAL: 0 = vsync off, 1 = on, 2 = half-rate).  With the 60 Hz
-       pacer active (the default, pace_frame_ms) vsync is turned off: the pacer owns the cadence, and
-       a vblank wait on top of it would quantise each tick to the panel's refresh again (the dt
-       alternation the pacer removes).  With the pacer off and no override, the driver default stays. */
     {
         int v = swap_want() >= 0 ? swap_want() : (pace_frame_ms() > 0.0 ? 0 : -1);
         SDL_GL_GetSwapInterval(&g_swap_default);
@@ -293,13 +261,10 @@ void ensure_gl(void)
                 gmv_log("[framepace] swap interval not available; left at the driver's default\n");
         }
     }
-    gmv_gpu_profile_start();            /* GPU_PROFILE: the GPU's kind, on a thread of its own */
+    gmv_gpu_profile_start();
     msaa_init();
 }
 
-/* Raw context helpers for the intro-video player (shimsvideo.c): it draws its own frames on this
-   thread between the game's logo and menu, so it needs to guarantee the context is current and to
-   present the back buffer directly (the game's swap path adds frame bookkeeping it shouldn't touch). */
 void gmv_gl_make_current_raw(void)
 {
     ensure_gl();
@@ -315,8 +280,6 @@ void gmv_gl_present_raw(void)
     }
 }
 
-/* The last frame again, at the window's present size.  Only on the thread that draws, and only with
-   a screen FBO, which keeps the frame; no pacing or frame count, as the game has not drawn one. */
 void gmv_gl_redraw(void)
 {
     static int said;
@@ -330,7 +293,6 @@ void gmv_gl_redraw(void)
     }
 }
 
-/* The GL window's client size. */
 void gmv_gl_client_size(int *w, int *h)
 {
     int cw = 0, ch = 0;
@@ -340,15 +302,11 @@ void gmv_gl_client_size(int *w, int *h)
     }
 }
 
-/* Present what is in the window's back buffer. */
 void gl_swap_window(void)
 {
     SDL_GL_SwapWindow(g_window);
 }
 
-/* The window as the game's options want it: full screen covers the monitor; a window has a client area of w x h.
-   Only a new size moves a window: the game asks the same one again at times, and the player's own
-   sizing of the window has to stay then. */
 void gl_window_fit(int fs, int w, int h)
 {
     int full = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0;
@@ -379,12 +337,6 @@ void gl_window_fit(int fs, int w, int h)
     gmv_input_set_client_size(cw, ch);
 }
 
-/* The size the game draws at, i.e. its backing size and the screen FBO's.  In a window, the size the
-   game asked for it, whatever the player has sized the window to since: the game seldom sets its
-   viewport again, so it could not follow the client area.  In full screen, the chosen resolution, as
-   on the Mac (the EAGLView's setBackingSize:: sets kCGLCPSurfaceBackingSize to it, and fitWindowSize
-   switches the display to that mode).  msaa_present scales either to the client area.  Without a
-   screen FBO, the client area (in full screen the monitor's size). */
 void gmv_gl_render_size(int *w, int *h)
 {
     gmv_gl_client_size(w, h);
@@ -405,9 +357,6 @@ void gmv_gl_render_size(int *w, int *h)
     }
 }
 
-/* Where msaa_present puts the picture in the client area (x, y from the top-left), and the
-   picture's own size (gw x gh): the whole client area, or the screen FBO scaled to fit it with its
-   shape kept, centred between black bars.  Any pointer may be NULL. */
 void gmv_gl_view_rect(int *x, int *y, int *w, int *h, int *gw, int *gh)
 {
     int cw = 1024, ch = 768;
@@ -419,9 +368,9 @@ void gmv_gl_view_rect(int *x, int *y, int *w, int *h, int *gw, int *gh)
     }
     int vw = cw, vh = ch;
     if (sw != cw || sh != ch) {
-        if ((long long)cw * sh > (long long)ch * sw)    /* the window is wider: bars left and right */
+        if ((long long)cw * sh > (long long)ch * sw)
             vw = (int)(((long long)sw * ch + sh / 2) / sh);
-        else                                            /* taller: bars top and bottom */
+        else
             vh = (int)(((long long)sh * cw + sw / 2) / sw);
     }
     if (x) *x = (cw - vw) / 2;
@@ -432,7 +381,6 @@ void gmv_gl_view_rect(int *x, int *y, int *w, int *h, int *gw, int *gh)
     if (gh) *gh = sh;
 }
 
-/* -[NSOpenGLContext initWithFormat:shareContext:] */
 void *gmv_gl_context_init(void *self, const char *sel, void *format, void *share)
 {
     (void)sel;
@@ -442,7 +390,6 @@ void *gmv_gl_context_init(void *self, const char *sel, void *format, void *share
     return self;
 }
 
-/* -[NSOpenGLContext makeCurrentContext] */
 void *gmv_gl_make_current(void *self, const char *sel, ...)
 {
     (void)self;
@@ -452,7 +399,6 @@ void *gmv_gl_make_current(void *self, const char *sel, ...)
     return NULL;
 }
 
-/* -[NSOpenGLContext flushBuffer] */
 void *gmv_gl_flush_buffer(void *self, const char *sel, ...)
 {
     (void)self;

@@ -1,4 +1,3 @@
-/* menu_hide.c -- HIDE_MORE_GAMES and HIDE_GAMELOFT_LIVE */
 #include "compat.h"
 #include <stdint.h>
 #include <string.h>
@@ -9,33 +8,19 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- HIDE_MORE_GAMES / HIDE_GAMELOFT_LIVE: no "More Games!" corner and no Gameloft LIVE! badge on the
-   main menu (enhancements, off by default and under ORIGINAL_MAC_EXPERIENCE) ----
-   The page-curl corner is the button widgetMainMenu.btnMore of the menu's flash file.  Pressing it
-   calls the menu's listener with action 4 (0x1691b0), which opens Gameloft's in-game ads page
-   (ingameads.gameloft.com, long gone; the port's networking is inert anyway).  The badge at the
-   top right is widgetMainMenu.btnGLLive; pressing it calls the listener with action 3, which opens
-   the Gameloft LIVE! sign-in (GLLivehtmlmacViewController, an online service also long gone).
-   The main-menu widget's vtable at 0x659048 holds show (slot 1, 0x16e91c, plays the clip's "show"
-   label) and the text setup (slot 6, 0x171c00, which also labels the corner).  gmv_mg_show and
-   gmv_mg_texts call those and then hide the buttons with the game's own set-visible,
-   0x2fdf80(flash, path, 0).  The click handler (slot 5, 0x1729da) compares the clicked button's
-   name with "btnGLLive" and "btnMore" on press (actions 3 and 4) and on release (the
-   released-button flag); the matches of a hidden button are dropped, so its empty place takes no
-   clicks either.  The options menu switches them with hide_main_menu_set; a button hidden before
-   is shown again the next time the main menu shows. */
-#define MG_VT_SHOW     0x0065904cu   /* main-menu widget vtable slot 1: show                    */
+/* 0x1691b0 0x659048 0x16e91c 0x171c00 0x1729da 0x2fdf80 */
+#define MG_VT_SHOW     0x0065904cu
 #define MG_SHOW_FN     0x0016e91cu
-#define MG_VT_TEXTS    0x00659060u   /* slot 6: set the button texts                            */
+#define MG_VT_TEXTS    0x00659060u
 #define MG_TEXTS_FN    0x00171c00u
-#define MG_SET_VISIBLE 0x002fdf80u   /* (flash, path, visible): byte +0xab of the clip found      */
-#define MG_PRESS_JNE   0x00172bf1u   /* press: jne past the btnMore action, 75 2b -> jmp eb 2b   */
-#define MG_RELEASE_JE  0x00172aceu   /* release: je to the btnMore flag, 74 dc -> nop nop        */
-#define GL_PRESS_JNE   0x00172bb5u   /* press: jne past the btnGLLive action, 75 26 -> jmp eb 26 */
-#define GL_RELEASE_JNE 0x00172aaau   /* release: jne past the btnGLLive flag, 75 0e -> jmp eb 0e */
+#define MG_SET_VISIBLE 0x002fdf80u   /* +0xab */
+#define MG_PRESS_JNE   0x00172bf1u
+#define MG_RELEASE_JE  0x00172aceu
+#define GL_PRESS_JNE   0x00172bb5u
+#define GL_RELEASE_JNE 0x00172aaau
 
 int mg_more, mg_live;
-static int mg_hooked;               /* the widget's show and texts are ours */
+static int mg_hooked;
 static int mg_more_hidden, mg_live_hidden;
 
 static void mg_hide_one(void *fx, const char *path, int hide, int *hidden)
@@ -68,8 +53,6 @@ static void gmv_mg_texts(unsigned char *w)
     mg_hide(w);
 }
 
-/* Hide (1) or show (0) the corner and the badge: 1 done, -1 if the code is not the expected bytes,
-   -2 if a write failed. */
 int hide_main_menu_set(int more, int live)
 {
     static const unsigned char more_press[2][2] = { { 0x75, 0x2b }, { 0xeb, 0x2b } };
@@ -99,7 +82,6 @@ int hide_main_menu_set(int more, int live)
     return 1;
 }
 
-/* Both shown again already: the widget's show and texts back too. */
 void hide_main_menu_unhook(void)
 {
     uint32_t a = MG_SHOW_FN, b = MG_TEXTS_FN;

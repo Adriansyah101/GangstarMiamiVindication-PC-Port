@@ -1,4 +1,3 @@
-/* bloom.c -- BLOOM */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,27 +13,12 @@
 
 #define AO_MIN_DRAWS 4
 
-/* ---- BLOOM: an enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE ------------------------
-   A glow around the bright parts of the 3D world (neon, lamps, headlights, the sun), applied where and
-   when the ambient occlusion is (between the world and the 2D layer, once per frame, inside ao_run's
-   state save) and after it.  The screen and its depth are resolved to textures; a bright pass with a
-   soft knee keeps what is above BLOOM_THRESHOLD at half resolution, weighting each tap down by its
-   brightness so single bright pixels do not flicker.  On the world the brightness is the brightest
-   channel, so saturated neon counts as much as white; on the sky (at the far end of the depth range the
-   most draws had, or beyond) it is the dimmest, so the sun and its glow bloom but a sunset or a blue sky,
-   bright in one channel only, does not turn white;
-   BL_LEVELS dual-filter downsamples and tent upsamples, each added onto the level above, spread it; and
-   the sum is screen-blended into the frame (1 - (1 - frame)(1 - glow), so it brightens without clipping)
-   at BLOOM_INTENSITY.  The bright pass also adds the glow layer (BLOOM_LIGHTS, BLOOM_WINDOWS; bg_draw_begin),
-   resolved to a texture: what glows whatever its brightness.  BLOOM=1 (LOW) is the bloom alone, BLOOM=2
-   (HIGH) adds the glow layer. */
-int g_bloom_want;                                /* BLOOM=1 or 2 */
-static int g_bloom = 1;                                 /* 0 once the setup failed */
+int g_bloom_want;
+static int g_bloom = 1;
 float g_bloom_intensity = 1.0f, g_bloom_threshold = 0.75f;
-float g_bloom_lights, g_bloom_windows;           /* BLOOM_LIGHTS, BLOOM_WINDOWS at BLOOM=2; 0 = off */
-int g_bg_want;                                   /* either of them, with BLOOM */
+float g_bloom_lights, g_bloom_windows;
+int g_bg_want;
 
-/* BLOOM_LIGHTS or BLOOM_WINDOWS (blank = 1) at BLOOM=2, 0 below it. */
 float bloom_part(int level, const char *env)
 {
     const char *s = gmv_getenv(env);
@@ -46,11 +30,12 @@ static const char bl_fs_pre[] =
     "#version 120\n"
     "uniform sampler2D src, dep, glw;\n"
     "uniform vec2 dst, tx;\n"
-    "uniform vec3 curve;\n"                             /* threshold, knee, 1 / (1 - threshold) */
-    "uniform float sky, gg;\n"                          /* depth from which a pixel is sky; the glow layer's gain */
+    "uniform vec3 curve;\n"
+    "uniform float sky, gg;\n"
     "vec3 tap(vec2 uv, inout float ws) {\n"
     "    vec3 c = texture2D(src, uv).rgb;\n"
-    "    float b = texture2D(dep, uv).r >= sky ? min(c.r, min(c.g, c.b)) : max(c.r, max(c.g, c.b));\n"
+    "    float lo = min(c.r, min(c.g, c.b)), hi = max(c.r, max(c.g, c.b));\n"
+    "    float b = texture2D(dep, uv).r >= sky ? lo : min(dot(c, vec3(0.2126, 0.7152, 0.0722)) + 0.35 * (hi - lo), hi);\n"
     "    float s = clamp(b - curve.x + curve.y, 0.0, 2.0 * curve.y);\n"
     "    s = s * s / (4.0 * curve.y + 1e-4);\n"
     "    c *= max(s, b - curve.x) * curve.z / max(b, 1e-4);\n"
@@ -79,8 +64,6 @@ static const char bl_fs_down[] =
     "    gl_FragColor = vec4(c / 8.0, 1.0);\n"
     "}\n";
 
-/* A 3x3 tent of the smaller level, times k: the upsamples (k = 1, added onto the level above) and the
-   composite (k = BLOOM_INTENSITY / BL_LEVELS, screen-blended, with a dither against banding). */
 static const char bl_fs_up[] =
     "#version 120\n"
     "uniform sampler2D src;\n"
@@ -95,7 +78,8 @@ static const char bl_fs_up[] =
     "       + texture2D(src, uv + vec2(tx.x, -tx.y)).rgb + texture2D(src, uv + vec2(-tx.x, tx.y)).rgb;\n"
     "    c *= k / 16.0;\n"
     "    if (dith > 0.0) {\n"
-    "        c = min(c, vec3(1.0));\n"
+    "        float m = max(c.r, max(c.g, c.b));\n"
+    "        c = m > 1.0 ? mix(c / m, vec3(1.0), 0.2 - 0.2 / m) : c;\n"
     "        c += (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5) * dith;\n"
     "        c = max(c, vec3(0.0));\n"
     "    }\n"
@@ -104,21 +88,12 @@ static const char bl_fs_up[] =
 
 bl_t bl;
 
-/* ---- SHARED_RESOLVE (a port speed-up, [Advanced], on by default and under ORIGINAL_MAC_EXPERIENCE) -------
-   The passes inside ao_run each read the screen's depth: the shadows, the sea's and the cars' reflections, the AO and
-   the bloom.  Each used to copy it out of the screen FBO for itself, which at MSAA 4 resolves four samples a pixel every
-   time: up to five resolves a frame of the same depth, since no pass writes depth (ao_run turns the depth mask off).
-   With SHARED_RESOLVE the first pass that needs it copies it once into pd.t, of the same format (DEPTH24_STENCIL8,
-   nearest, no compare) by the same blit, and the others sample that; the colour cannot be shared, as each pass but the
-   last draws onto the screen before the next one reads it.  GMV_SHARED_RESOLVE=0 brings back a copy for each pass.
-   GMV_SHARED_RESOLVE_CHECK=1 (dev) copies the depth again after the last pass every 600 runs and compares the two. */
 int g_shared_resolve = 1;
 static struct {
     GLuint fbo, t;
-    int w, h, bad, fresh;                               /* fresh: copied during this ao_run */
+    int w, h, bad, fresh;
 } pd;
 
-/* The screen's depth as drawn so far, in a texture (0 if it cannot be had: the caller copies its own). */
 GLuint post_depth(int w, int h)
 {
     if (!g_shared_resolve || pd.bad)
@@ -128,10 +103,10 @@ GLuint post_depth(int w, int h)
             glGenTextures(1, &pd.t);
             msf.GenFramebuffers(1, &pd.fbo);
         }
-        ao_tex(pd.t, 0x88F0, w, h, 0x84F9, 0x84FA);             /* DEPTH24_STENCIL8, DEPTH_STENCIL, 24_8 */
-        glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);        /* GL_TEXTURE_COMPARE_MODE */
+        ao_tex(pd.t, 0x88F0, w, h, 0x84F9, 0x84FA);
+        glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);
         msf.BindFramebuffer(MS_FRAMEBUFFER, pd.fbo);
-        aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, pd.t, 0);   /* DEPTH_STENCIL_ATTACHMENT */
+        aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, pd.t, 0);
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
         GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
@@ -153,9 +128,12 @@ GLuint post_depth(int w, int h)
     return pd.t;
 }
 
+static struct {
+    GLuint fbo, t;
+    int w, h;
+} pc;
+
 #if GMV_DEV
-/* GMV_SHARED_RESOLVE_CHECK=1: after the passes, the depth copied again into scratch, read back with the shared one and
-   compared, every 600 runs: the sharing is right only if no pass changed the screen's depth. */
 static void post_depth_check(int w, int h)
 {
     static int on = -1;
@@ -190,7 +168,7 @@ static void post_depth_check(int w, int h)
         glPixelStorei(GL_PACK_ALIGNMENT, pack);
         unsigned n = 0;
         for (size_t i = 0; i < (size_t)w * h; i++)
-            n += (a[i] >> 8) != (b[i] >> 8);                    /* the 24 depth bits */
+            n += (a[i] >> 8) != (b[i] >> 8);
         n ? diff++ : same++;
         gmv_log("[post] SHARED_RESOLVE check %u: %u of %d pixels differ (%u checks the same, %u not)\n", same + diff, n,
                 w * h, same, diff);
@@ -229,7 +207,6 @@ void bl_linear(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
-/* Size the textures to the screen and check the framebuffers; called inside ao_run's state save. */
 static int bl_alloc(int w, int h)
 {
     bl.w = w;
@@ -239,17 +216,21 @@ static int bl_alloc(int w, int h)
     msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo_scene);
     aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8CE0, GL_TEXTURE_2D, bl.t_scene, 0);
     GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
-    ao_tex(bl.t_depth, 0x88F0, w, h, 0x84F9, 0x84FA);          /* DEPTH24_STENCIL8, DEPTH_STENCIL, 24_8 */
-    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);            /* GL_TEXTURE_COMPARE_MODE */
+    ao_tex(bl.t_depth, 0x88F0, w, h, 0x84F9, 0x84FA);
+    glTexParameteri(GL_TEXTURE_2D, 0x884C, GL_NONE);
     msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo_depth);
-    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, bl.t_depth, 0);   /* DEPTH_STENCIL_ATTACHMENT */
+    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, bl.t_depth, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
     GLenum sd = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
+    msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo_scene);
+    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x821A, GL_TEXTURE_2D, bl.t_depth, 0);
     if (st == 0x8CD5)
         st = sd;
+    if (st == 0x8CD5)
+        st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
     if (g_bg_want && st == 0x8CD5) {
-        ao_tex(bl.t_glow, 0x881A, w, h, GL_RGBA, GL_FLOAT);    /* RGBA16F, as the layer */
+        ao_tex(bl.t_glow, 0x881A, w, h, GL_RGBA, GL_FLOAT);
         bl_linear();
         msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo_glow);
         aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8CE0, GL_TEXTURE_2D, bl.t_glow, 0);
@@ -263,7 +244,7 @@ static int bl_alloc(int w, int h)
             break;
         bl.lw[k] = lw;
         bl.lh[k] = lh;
-        ao_tex(bl.t[k], 0x881A, lw, lh, GL_RGBA, GL_FLOAT);    /* RGBA16F */
+        ao_tex(bl.t[k], 0x881A, lw, lh, GL_RGBA, GL_FLOAT);
         bl_linear();
         msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo[k]);
         aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8CE0, GL_TEXTURE_2D, bl.t[k], 0);
@@ -277,14 +258,39 @@ static int bl_alloc(int w, int h)
     return 1;
 }
 
+GLuint post_color(int w, int h)
+{
+    GLuint fbo = bl.fbo_scene, t = bl.t_scene;
+    if (!g_bloom || !t || w != bl.w || h != bl.h) {
+        if (!pc.fbo) {
+            glGenTextures(1, &pc.t);
+            msf.GenFramebuffers(1, &pc.fbo);
+        }
+        if (w != pc.w || h != pc.h) {
+            ao_tex(pc.t, GL_RGBA8, w, h, GL_RGBA, GL_UNSIGNED_BYTE);
+            bl_linear();
+            msf.BindFramebuffer(MS_FRAMEBUFFER, pc.fbo);
+            aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8CE0, GL_TEXTURE_2D, pc.t, 0);
+            if (msf.CheckFramebufferStatus(MS_FRAMEBUFFER) != 0x8CD5)
+                return 0;
+            pc.w = w;
+            pc.h = h;
+        }
+        fbo = pc.fbo;
+        t = pc.t;
+    }
+    msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
+    msf.BindFramebuffer(MS_DRAW_FB, fbo);
+    msf.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    return t;
+}
+
 static void bl_size(GLuint p, int dw, int dh, int sw, int sh)
 {
     aof.Uniform2f(aof.GetUniformLocation(p, "dst"), (GLfloat)dw, (GLfloat)dh);
     aof.Uniform2f(aof.GetUniformLocation(p, "tx"), 1.0f / sw, 1.0f / sh);
 }
 
-/* Inside ao_run's state save (depth test, blend, scissor and the rest off; unit 0 active).  `sky_from` is
-   the depth from which a pixel counts as sky (above 1 = none). */
 static void bl_pass(int w, int h, float sky_from)
 {
     static int ready;
@@ -294,10 +300,25 @@ static void bl_pass(int w, int h, float sky_from)
         g_bloom = 0;
         return;
     }
-    /* the frame as drawn so far, resolved if multisampled */
     msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
     msf.BindFramebuffer(MS_DRAW_FB, bl.fbo_scene);
     msf.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (g_cp_mark == g_frame_no + 1) {
+        glStencilMask(BG_CP_BIT);
+        glClearStencil(0);
+        glClear(GL_STENCIL_BUFFER_BIT);
+        msf.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+        glEnable(GL_STENCIL_TEST);
+        glStencilFunc(GL_EQUAL, BG_CP_BIT, BG_CP_BIT);
+        glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+        glViewport(0, 0, w, h);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        aof.UseProgram(bl.p_up);
+        aof.Uniform1f(aof.GetUniformLocation(bl.p_up, "k"), 0.0f);
+        aof.Uniform1f(aof.GetUniformLocation(bl.p_up, "dith"), 0.0f);
+        ao_tri();
+        glDisable(GL_STENCIL_TEST);
+    }
     GLuint dep = post_depth(w, h);
     if (!dep) {
         msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
@@ -306,9 +327,9 @@ static void bl_pass(int w, int h, float sky_from)
         dep = bl.t_depth;
     }
     msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
-    int glow = g_ms_glow && g_glow_used && g_bg_want;   /* the glow layer was drawn this frame */
+    int glow = g_ms_glow && g_glow_used && g_bg_want;
     if (glow) {
-        glReadBuffer(0x8CE1);                           /* COLOR_ATTACHMENT1, of the screen FBO bound for reading */
+        glReadBuffer(0x8CE1);
         msf.BindFramebuffer(MS_DRAW_FB, bl.fbo_glow);
         msf.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
         glReadBuffer(0x8CE0);
@@ -316,7 +337,7 @@ static void bl_pass(int w, int h, float sky_from)
     glDisable(GL_BLEND);
 
     GLuint p = bl.p_pre;
-    float t = g_bloom_threshold, knee = t * 0.5f + 1e-3f;
+    float t = 0.74f + 0.26f * g_bloom_threshold - 0.17f * bg_night(), knee = (1.0f - t) * 0.65f;
     aof.UseProgram(p);
     aof.Uniform1i(aof.GetUniformLocation(p, "src"), 0);
     aof.Uniform1i(aof.GetUniformLocation(p, "dep"), 1);
@@ -349,11 +370,11 @@ static void bl_pass(int w, int h, float sky_from)
     p = bl.p_up;
     aof.UseProgram(p);
     aof.Uniform1i(aof.GetUniformLocation(p, "src"), 0);
-    aof.Uniform1f(aof.GetUniformLocation(p, "k"), 1.0f);
+    aof.Uniform1f(aof.GetUniformLocation(p, "k"), 1.08f);
     aof.Uniform1f(aof.GetUniformLocation(p, "dith"), 0.0f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
-    aof.BlendEquation(0x8006);                                  /* GL_FUNC_ADD */
+    aof.BlendEquation(0x8006);
     for (int k = bl.n - 1; k > 0; k--) {
         msf.BindFramebuffer(MS_FRAMEBUFFER, bl.fbo[k - 1]);
         glViewport(0, 0, bl.lw[k - 1], bl.lh[k - 1]);
@@ -362,7 +383,7 @@ static void bl_pass(int w, int h, float sky_from)
         ao_tri();
     }
 
-    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);             /* the screen */
+    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);
     glViewport(0, 0, w, h);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
@@ -405,7 +426,10 @@ static void ao_run(int why)
     int do_ssr = g_ssr_want && g_ssr && g_ao_nlayers && ssr_frame();
     int do_vr = g_vr_want && g_vr && g_ao_nlayers && vr_frame();
     int do_ds = g_ds_want && g_ds && g_ao_nlayers && ds_frame();
-    if (!do_ao && !do_bloom && !do_ssr && !do_vr && !do_ds)
+    int do_paa = paa_frame() && paa_init();
+    if (!do_ao && !do_bloom && !do_ssr && !do_vr && !do_ds && !do_paa)
+        return;
+    if (!ao_procs("post effects"))
         return;
     int w = g_ms_w, h = g_ms_h;
     if (!g_ms_fbo)
@@ -416,29 +440,29 @@ static void ao_run(int why)
     GLint dfb = 0, rfb = 0, prog = 0, act = 0;
     dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING);
     rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
-    prog = gmv_gl_cur_prog();                               /* GL_CURRENT_PROGRAM, QUERY_FREE */
-    glGetIntegerv(0x84E0, &act);                                /* GL_ACTIVE_TEXTURE */
-    bg_single();                                                /* the AO and the bloom draw the screen alone */
+    prog = gmv_gl_cur_prog();
+    act = (GLint)(0x84C0 + g_tf_active);
+    bg_single();
     glPushAttrib(GL_ALL_ATTRIB_BITS);
     static const GLenum off[] = {GL_DEPTH_TEST, GL_BLEND, GL_ALPHA_TEST, GL_CULL_FACE, GL_SCISSOR_TEST,
                                  GL_STENCIL_TEST, GL_POLYGON_OFFSET_FILL, GL_COLOR_LOGIC_OP, GL_FOG,
-                                 0x80A0, 0x809E,                /* SAMPLE_COVERAGE, SAMPLE_ALPHA_TO_COVERAGE */
-                                 0x3000, 0x3001, 0x3002, 0x3003, 0x3004, 0x3005};  /* CLIP_PLANE0-5 */
+                                 0x80A0, 0x809E,
+                                 0x3000, 0x3001, 0x3002, 0x3003, 0x3004, 0x3005};
     for (size_t i = 0; i < sizeof off / sizeof *off; i++)
         glDisable(off[i]);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDepthMask(GL_FALSE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     aof.ActiveTexture(0x84C0);
-    pd.fresh = 0;                                               /* SHARED_RESOLVE: the depth not copied yet */
+    pd.fresh = 0;
 
     pm_mark(PM_POST);
-    if (do_ds)                                                  /* first, so the reflections show the shadows */
+    if (do_ds)
         ds_pass(w, h, li);
-    if (do_ssr)                                                 /* first, so the AO and the bloom see the reflections */
+    if (do_ssr)
         ssr_pass(w, h, li);
     pm_mark(PM_SSR);
-    if (do_vr)                                                  /* after the sea's, so the cars reflect it */
+    if (do_vr)
         vr_pass(w, h, li);
     pm_mark(PM_VR);
     int ok = 1;
@@ -447,7 +471,6 @@ static void ao_run(int why)
         ok = ao_attach();
     }
     if (do_ao && ok) {
-        /* the depth, as drawn so far (sample 0 of each pixel when multisampled) */
         GLuint dep = post_depth(w, h);
         if (!dep) {
             msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
@@ -471,14 +494,14 @@ static void ao_run(int why)
         aof.Uniform1f(aof.GetUniformLocation(p, "str"), g_ao_strength);
         GLfloat fm = fogs[0];
         aof.Uniform4f(aof.GetUniformLocation(p, "fog"), fm == 0x2601 ? 1.0f : fm == GL_EXP ? 2.0f : fm == GL_EXP2 ? 3.0f : 0.0f,
-                      fogs[1], fogs[2], fogs[3]);                  /* 0x2601 = GL_LINEAR */
+                      fogs[1], fogs[2], fogs[3]);                  /* 0x2601 GL_LINEAR */
         ao_tri();
 
         p = ao.p_blur;
         aof.UseProgram(p);
         aof.Uniform1i(aof.GetUniformLocation(p, "src"), 0);
         aof.Uniform2f(aof.GetUniformLocation(p, "hres"), (GLfloat)ao.hw, (GLfloat)ao.hh);
-        for (int k = 0; k < 2; k++) {                           /* t0 -> t1 across, t1 -> t0 down */
+        for (int k = 0; k < 2; k++) {
             msf.BindFramebuffer(MS_FRAMEBUFFER, ao.fbo[!k]);
             glBindTexture(GL_TEXTURE_2D, ao.t[k]);
             aof.Uniform2f(aof.GetUniformLocation(p, "dir"), k ? 0.0f : 1.0f, k ? 1.0f : 0.0f);
@@ -486,11 +509,11 @@ static void ao_run(int why)
         }
 
         p = ao.p_comp;
-        msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);         /* the screen */
+        msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);
         glViewport(0, 0, w, h);
         glEnable(GL_BLEND);
         glBlendFunc(GL_ZERO, GL_SRC_COLOR);
-        aof.BlendEquation(0x8006);                              /* GL_FUNC_ADD */
+        aof.BlendEquation(0x8006);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
         aof.UseProgram(p);
         glBindTexture(GL_TEXTURE_2D, ao.t[0]);
@@ -512,6 +535,9 @@ static void ao_run(int why)
     if (do_bloom)
         bl_pass(w, h, g_ao_nlayers ? g_ao_layer[li].dr[1] - 1e-5f : 2.0f);
     pm_mark(PM_BLOOM);
+    if (do_paa)
+        paa_pass(w, h);
+    pm_mark(PM_PAA);
 #if GMV_DEV
     post_depth_check(w, h);
 #endif
@@ -547,7 +573,6 @@ static void ao_run(int why)
 #endif
 }
 
-/* The layer the current draw goes to, added if new (-1 = no room). */
 static int ao_layer(void)
 {
     for (int k = 0; k < g_ao_nlayers; k++)
@@ -570,12 +595,10 @@ static void ao_layers_reset(void)
     g_ao_3d = 0;
 }
 
-/* A pass is wanted: AMBIENT_OCCLUSION, BLOOM, WATER_REFLECTIONS, VEHICLE_REFLECTIONS or DYNAMIC_SHADOWS, while
-   its setup has not failed. */
 static int post_on(void)
 {
     return (g_ao_want && g_ao) || (g_bloom_want && g_bloom) || (g_ssr_want && g_ssr) || (g_vr_want && g_vr) ||
-           (g_ds_want && g_ds);
+           (g_ds_want && g_ds) || paa_frame();
 }
 
 static int ao_pending(void)
@@ -587,13 +610,12 @@ void ao_proj_refresh(void)
 {
     if (g_ao_proj_dirty) {
         g_ao_proj_dirty = 0;
-        glGetFloatv(GL_PROJECTION_MATRIX, g_ao_proj);
+        memcpy(g_ao_proj, ao_matrix(GL_PROJECTION), sizeof g_ao_proj);
         g_ao_persp = fabsf(g_ao_proj[11]) > 0.5f && fabsf(g_ao_proj[15]) < 0.5f;
         g_ao_cur = -1;
     }
 }
 
-/* Before each draw (tr_DrawArrays / tr_DrawElements). */
 void ao_draw(void)
 {
     if (!post_on() || g_ao_done || g_glt.last_fb)
@@ -615,7 +637,6 @@ void ao_draw(void)
         memcpy(g_ao_layer[g_ao_cur].fog, g_ao_fogp, sizeof g_ao_fogp);
 }
 
-/* Before glClear: a depth clear would lose the scene's depth. */
 void ao_clear(GLbitfield m)
 {
     if (!(m & GL_DEPTH_BUFFER_BIT) || g_glt.last_fb)
@@ -623,11 +644,10 @@ void ao_clear(GLbitfield m)
     if (ao_pending())
         ao_run(1);
     else
-        ao_layers_reset();                                  /* what was drawn so far is gone */
+        ao_layers_reset();
 }
 
-/* Before the present: the frame's 2D layer never came. */
-unsigned g_frame_no;                              /* presents so far */
+unsigned g_frame_no;
 
 unsigned gmv_gl_frame_no(void)
 {
@@ -655,4 +675,8 @@ void ao_cap(GLenum cap, int on)
         g_ao_fog_on = on;
     else if (cap == GL_BLEND)
         g_blend_on = on;
+    else if (cap == GL_ALPHA_TEST)
+        g_alpha_on = on;
+    else if (cap == 0x809E)
+        g_game_a2c = on;
 }

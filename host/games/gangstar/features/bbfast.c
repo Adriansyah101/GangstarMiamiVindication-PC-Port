@@ -1,37 +1,3 @@
-/* bbfast.c -- the billboard turn 0x131f1e with its range tests before the mesh lookup, same results.
-
-   0x131f1e(node) turns flat scene elements to face the camera once a frame (called only from the
-   scene node method 0x1315bc, vtable 0x656b78 slot 4, while the byte at 0x641111 is set).  PERF_PROFILE
-   runs put it at ~3.6% of a tick, most of it in the element loop: for every element
-   (820-2256 a frame) it first follows ~7 dependent loads to the element's mesh and takes a reference,
-   and only then tests the element's box against the camera; ~60% fail and just drop the reference.
-
-   The function, as read (camera = *(*(*(*0x6853a0 + 0x17aa4) + 0x1c) + 0xe4), fetched again before
-   each use; nothing at all without a camera or without a group):
-     M = node+0x118 (reference taken); P = camera vt+0xa0(), T = vt+0x108() (float* x, y);
-     d = T - P (x, y; z = 0), normalized unless zero; F = vt+0x120() (float); r2 = 1.5 * F * F
-     groups: node+0x1c4..+0x1c8, 12-byte {begin, end, cap} vectors of element pointers; per element:
-       mesh = lookup(M, element+4), reference taken
-       box = *(element+0xc) (min xyz, max xyz), c = (min + max) * 0.5
-       |c - P|^2 (x, y) >= r2, or (c - P) . d < 0: skip
-       data = map 0x517b10(mesh+8 -> +0x14 vertex buffer, 5); vertices at data + mesh+8 -> +0x18,
-       stride u16 at +0x22, element's range u16 +0x24 (first) .. +0x26 (end); face normal from the
-       first three; angle = acosf(clamp(normal . d, -1, 1)); |angle| >= 0.01: signed by the cross
-       product's sign, sinf/cosf, every vertex of the range turned about c in x/y
-       unmap (+0x13 map count, vt+0x18 when GL-mapped); mesh reference dropped
-     M reference dropped
-   The mesh lookup only reads, and its result is used only by elements that pass the tests; the
-   reference it takes is dropped again at once (the mesh is held by M, so it never reaches zero).  So
-   this copy runs the tests first and looks the mesh up only for the elements that pass: the same
-   calls (camera, map/unmap, acosf/sinf/cosf, the game's own stubs) in the same order with the same
-   arguments, and the same writes.  The float work is the original's, operation for operation, in SSE
-   single precision (the file is built with fpmath=sse; max/min/sqrt by their SSE instructions).
-
-   Dev: GMV_BB_VERIFY=1 in the environment (with GMV_PERF_PROFILE=1) runs this copy, notes what it wrote, puts the old values
-   back and runs the original on the same frame, with its map and sinf calls (0x13223a, 0x1323eb)
-   recorded; the buffers mapped, the angles and every value written are compared bit for bit.
-   GMV_FAST_BILLBOARD=0 keeps the original. */
-
 #include "compat.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -42,24 +8,23 @@
 #include "shims.h"
 #include "gangstar.h"
 
-#ifndef __clang__                       /* clang takes SSE for floats when -msse2 is on, and has no such pragma */
+#ifndef __clang__
 #pragma GCC target("sse2,fpmath=sse")
 #endif
 
-#define BB_FN       0x00131f1eu   /* the billboard turn(node)                                     */
+#define BB_FN       0x00131f1eu
 #define BB_FN_END   0x001325d0u
-#define BB_FN_FNV   0xa43f962au   /* FNV-1a of its bytes, the six call fields below left out       */
-#define BB_CALLER   0x001315dau   /* its only call (in 0x1315bc)                                  */
-#define BB_SITE_MAP 0x0013223au   /* call 0x517b10 map                                            */
-#define BB_SITE_SIN 0x001323ebu   /* call 0x5eeeae sinf stub                                      */
-#define BB_MAP      0x00517b10u   /* IBuffer::map(buffer, access) -> data                         */
-#define BB_ACOSF    0x005ee986u   /* the game's stubs                                             */
+#define BB_FN_FNV   0xa43f962au
+#define BB_CALLER   0x001315dau   /* 0x1315bc */
+#define BB_SITE_MAP 0x0013223au   /* call 0x517b10 */
+#define BB_SITE_SIN 0x001323ebu   /* call 0x5eeeae */
+#define BB_MAP      0x00517b10u
+#define BB_ACOSF    0x005ee986u
 #define BB_SINF     0x005eeeaeu
 #define BB_COSF     0x005ee9dau
-#define BB_APP      0x006853a0u   /* -> the object holding the camera chain                        */
-#define BB_GETAPP   0x000031b0u   /* returns *BB_APP; low code, so the image loader leads its four  */
+#define BB_APP      0x006853a0u
+#define BB_GETAPP   0x000031b0u
 static const uint32_t bb_getapp_sites[4] = { 0x131f30u, 0x131f76u, 0x131fa8u, 0x13203du };
-                                  /* calls here to its copy (+GMV_LOW_DELTA, gmv_patch.bin)         */
 
 #define AT(p, o, T) (*(T *)((uint8_t *)(p) + (o)))
 #define U16(p, o) AT(p, o, uint16_t)
@@ -74,8 +39,8 @@ typedef uint8_t *(*bb_mapfn)(void *, int);
 typedef void (*bb_vfn)(void *);
 typedef float (*bb_mathfn)(float);
 
-static void (*g_orig)(void *);           /* trampoline: the original's first instructions, then back */
-static bb_mapfn g_fwd_map;               /* what the original's map / sinf calls led to (verify) */
+static void (*g_orig)(void *);
+static bb_mapfn g_fwd_map;
 static bb_mathfn g_fwd_sin;
 static int g_on, g_verify;
 
@@ -83,19 +48,18 @@ static struct {
     unsigned calls, fallback, checked, bad, rewritten;
     unsigned long long elems, passed, turned, verts;
 } g_st;
-static unsigned g_checked_all, g_bad_all, g_logged;   /* since the start */
+static unsigned g_checked_all, g_bad_all, g_logged;
 
-/* GMV_BB_VERIFY records */
 typedef struct { float *p; uint32_t ox, oy, nx, ny; } bb_write;
 typedef struct { void **a; int n, cap; } bb_plist;
 typedef struct { uint32_t *a; int n, cap; } bb_ulist;
 static bb_write *g_w;
 static int g_nw, g_wcap, g_wfull;
-static uint32_t *g_seen;                 /* open-addressing set of vertex addresses (last write wins) */
+static uint32_t *g_seen;
 static int g_seencap;
 static bb_plist g_maps_mine, g_maps_orig, g_data_mine, g_data_orig;
 static bb_ulist g_ang_mine, g_ang_orig;
-static int g_rec_orig;                   /* the original is running under the check */
+static int g_rec_orig;
 
 static int bb_grow(void **a, int *cap, int need, size_t sz)
 {
@@ -116,7 +80,7 @@ static void bb_padd(bb_plist *l, void *p)
 {
     if (bb_grow((void **)&l->a, &l->cap, l->n + 1, sizeof *l->a))
         l->a[l->n] = p;
-    l->n++;                              /* counted even when the record could not grow */
+    l->n++;
 }
 
 static void bb_uadd(bb_ulist *l, uint32_t v)
@@ -133,7 +97,6 @@ static uint32_t bb_bits(float f)
     return u;
 }
 
-/* The original's sqrtss, and its maxss/minss: a > b ? a : b and a < b ? a : b (NaN: b). */
 static inline float bb_sqrt(float x)
 {
     float r;
@@ -167,14 +130,12 @@ static void bb_release(uint8_t *o)
     }
 }
 
-/* One element that passed the tests: c = its box center, d = the camera direction. */
 static void bb_element(uint8_t *m, uint8_t *e, const float *b, float cx, float cy, float dx, float dy,
                        float dz, float dz0, int rec)
 {
     float cz = (b[2] + b[5]) * 0.5f;
     uint32_t lim = U16(e, 0x26), first = U16(e, 0x24);
 
-    /* the mesh, as the original looks it up */
     uint32_t idx = U32(e, 4);
     uint8_t *tbl = PTR(m, 8), *ent = PTR(m, 0x14), *arr = PTR(m, 0x20);
     uint32_t k = U16(arr, U32(ent, idx * 8) * 0x14 + 0xc) + U32(ent, idx * 8 + 4);
@@ -255,7 +216,7 @@ static void bb_element(uint8_t *m, uint8_t *e, const float *b, float cx, float c
         }
     }
 
-    if ((uint32_t)(uintptr_t)data + off0) {      /* unmap */
+    if ((uint32_t)(uintptr_t)data + off0) {
         uint8_t *bf = PTR(mb, 0x14);
         uint8_t st = bf[0x13], n = st & 0x1f;
         if (n >= 2)
@@ -270,6 +231,7 @@ static void bb_element(uint8_t *m, uint8_t *e, const float *b, float cx, float c
         bb_release(mesh);
 }
 
+/* node+0x1c4 */
 static void bb_turn(uint8_t *n, int rec)
 {
     if (!bb_cam())
@@ -339,8 +301,6 @@ static void bb_turn(uint8_t *n, int rec)
         bb_release(m);
 }
 
-/* ---- GMV_BB_VERIFY ---- */
-
 __attribute__((cdecl, force_align_arg_pointer))
 static uint8_t *bbv_map(void *vb, int access)
 {
@@ -360,7 +320,6 @@ static float bbv_sin(float a)
     return g_fwd_sin(a);
 }
 
-/* At most 8 lines a call and 80 in all, so later calls that differ still show; every one is counted. */
 static int g_call_bad, g_call_lines;
 
 static void bb_mismatch(const char *what, int i, uint32_t mine, uint32_t orig, uint32_t old)
@@ -374,7 +333,6 @@ static void bb_mismatch(const char *what, int i, uint32_t mine, uint32_t orig, u
     }
 }
 
-/* 1 if p was already in the set (it is added otherwise); the set is sized for this call's writes */
 static int bb_seen(const float *p)
 {
     uint32_t v = (uint32_t)(uintptr_t)p, h = (v >> 2) * 0x9e3779b1u;
@@ -395,7 +353,7 @@ static void bb_check(uint8_t *n)
     g_maps_mine.n = g_maps_orig.n = g_data_mine.n = g_data_orig.n = 0;
     g_ang_mine.n = g_ang_orig.n = 0;
     bb_turn(n, 1);
-    for (int i = g_nw - 1; i >= 0; i--) {        /* old values back, newest first */
+    for (int i = g_nw - 1; i >= 0; i--) {
         memcpy(&g_w[i].p[0], &g_w[i].ox, 4);
         memcpy(&g_w[i].p[1], &g_w[i].oy, 4);
     }
@@ -433,7 +391,6 @@ static void bb_check(uint8_t *n)
         for (int i = 0; i < g_ang_mine.n; i++)
             if (g_ang_mine.a[i] != g_ang_orig.a[i])
                 bb_mismatch("angle", i, g_ang_mine.a[i], g_ang_orig.a[i], 0);
-    /* a vertex written more than once (elements sharing vertices): only its last value counts */
     memset(g_seen, 0, (size_t)g_seencap * sizeof *g_seen);
     for (int i = g_nw - 1; i >= 0; i--) {
         if (bb_seen(g_w[i].p)) {
@@ -455,12 +412,11 @@ done:
     }
 }
 
-/* ---- entry ---- */
-
+/* 0x131f1e 0x1315bc 0x641111 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void bb_entry(uint8_t *n)
 {
-    if (!PTR(n, 0x118)) {                        /* not seen; the original as it is */
+    if (!PTR(n, 0x118)) {
         g_st.fallback++;
         g_orig(n);
         return;
@@ -490,64 +446,35 @@ void gmv_bbfast_report(double seconds)
 }
 #endif
 
-/* ---- install ---- */
-
-static int bb_patch(uint32_t va, const void *buf, size_t n)
-{
-    DWORD old;
-    if (!VirtualProtect((void *)(uintptr_t)va, n, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    memcpy((void *)(uintptr_t)va, buf, n);
-    VirtualProtect((void *)(uintptr_t)va, n, old, &old);
-    return 1;
-}
-
-static uint32_t bb_call_target(uint32_t site)
-{
-    const unsigned char *p = (const unsigned char *)(uintptr_t)site;
-    int32_t rel;
-    memcpy(&rel, p + 1, 4);
-    return p[0] == 0xe8 ? site + 5 + (uint32_t)rel : 0;
-}
-
-static int bb_redirect(uint32_t site, void *to)
-{
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (site + 5));
-    return bb_patch(site + 1, &rel, 4);
-}
-
 void gmv_apply_bbfast(void)
 {
-    const char *e = gmv_dbgenv("GMV_FAST_BILLBOARD");
-    if (e && *e == '0') {
+    if (gmv_env_off(gmv_dbgenv("GMV_FAST_BILLBOARD"))) {
         gmv_log("[bbfast] FAST_BILLBOARD=0: the original billboard turn kept\n");
         return;
     }
     uint32_t h = 0x811c9dc5u;
     for (uint32_t a = BB_FN; a < BB_FN_END; a++) {
         if ((a > BB_SITE_MAP && a <= BB_SITE_MAP + 4) || (a > BB_SITE_SIN && a <= BB_SITE_SIN + 4))
-            continue;                            /* PERF_PROFILE's probe may lead these elsewhere */
+            continue;
         int site = 0;
         for (int i = 0; i < 4; i++)
             site |= a > bb_getapp_sites[i] && a <= bb_getapp_sites[i] + 4;
         if (site)
-            continue;                            /* checked below: 0x31b0 or its copy */
+            continue;                            /* 0x31b0 */
         h = (h ^ *(const uint8_t *)(uintptr_t)a) * 0x01000193u;
     }
-    /* the constants it reads: 1.0, 1.5, 0.5, -1.0, 0.01, -0.0 (used here as literals) */
     static const struct { uint32_t va, bits; } k[] = {
         { 0x5f0680u, 0x3f800000u }, { 0x5f0964u, 0x3fc00000u }, { 0x5f096cu, 0x3f000000u },
         { 0x5f0688u, 0xbf800000u }, { 0x5f0968u, 0x3c23d70au }, { 0x5f0d28u, 0x80000000u },
         { 0x5f5540u, 0x80000000u }, { 0x5f5550u, 0x7fffffffu },
     };
-    /* the caller only has to be a call: PERF_PROFILE's billboard probe leads it through its timer,
-       which still calls 0x131f1e (and so lands in the jump written there) */
-    int ok = h == BB_FN_FNV && bb_call_target(BB_CALLER) && bb_call_target(BB_SITE_MAP) &&
-             bb_call_target(BB_SITE_SIN) && !memcmp((const void *)(uintptr_t)BB_FN, "\x55\x89\xe5\x53\x57", 5);
+    /* PERF_PROFILE 0x131f1e */
+    int ok = h == BB_FN_FNV && code_call_target(BB_CALLER) && code_call_target(BB_SITE_MAP) &&
+             code_call_target(BB_SITE_SIN) && !memcmp((const void *)(uintptr_t)BB_FN, "\x55\x89\xe5\x53\x57", 5);
     for (size_t i = 0; ok && i < sizeof k / sizeof k[0]; i++)
         ok = *(const uint32_t *)(uintptr_t)k[i].va == k[i].bits;
     for (int i = 0; ok && i < 4; i++) {
-        uint32_t t = bb_call_target(bb_getapp_sites[i]);
+        uint32_t t = code_call_target(bb_getapp_sites[i]);
         ok = t == BB_GETAPP || t == BB_GETAPP + GMV_LOW_DELTA;
     }
     if (!ok) {
@@ -560,7 +487,7 @@ void gmv_apply_bbfast(void)
         gmv_log("[bbfast] VirtualAlloc for the trampoline failed (%lu); skipped\n", GetLastError());
         return;
     }
-    memcpy(tr, (const void *)(uintptr_t)BB_FN, 5);   /* push ebp; mov ebp, esp; push ebx; push edi */
+    memcpy(tr, (const void *)(uintptr_t)BB_FN, 5);   /* push ebp; mov ebp,esp; push ebx; push edi */
     tr[5] = 0xe9;
     int32_t rel = (int32_t)((BB_FN + 5) - (uint32_t)(uintptr_t)(tr + 10));
     memcpy(tr + 6, &rel, 4);
@@ -570,17 +497,14 @@ void gmv_apply_bbfast(void)
     if (GMV_DEV) {
         const char *v = gmv_dbgenv("GMV_BB_VERIFY");
         if (gmv_env_on(v)) {
-            g_fwd_map = (bb_mapfn)(uintptr_t)bb_call_target(BB_SITE_MAP);
-            g_fwd_sin = (bb_mathfn)(uintptr_t)bb_call_target(BB_SITE_SIN);
-            g_verify = bb_redirect(BB_SITE_MAP, (void *)bbv_map) && bb_redirect(BB_SITE_SIN, (void *)bbv_sin);
+            g_fwd_map = (bb_mapfn)(uintptr_t)code_call_target(BB_SITE_MAP);
+            g_fwd_sin = (bb_mathfn)(uintptr_t)code_call_target(BB_SITE_SIN);
+            g_verify = code_call(BB_SITE_MAP, (void *)bbv_map) && code_call(BB_SITE_SIN, (void *)bbv_sin);
             if (!g_verify)
                 gmv_log("[bbfast] BB_VERIFY: write at the original's calls failed (%lu)\n", GetLastError());
         }
     }
-    unsigned char j[5] = { 0xe9 };
-    rel = (int32_t)((uint32_t)(uintptr_t)bb_entry - (BB_FN + 5));
-    memcpy(j + 1, &rel, 4);
-    if (!bb_patch(BB_FN, j, 5)) {
+    if (!code_jmp(BB_FN, (void *)bb_entry)) {
         gmv_log("[bbfast] write at 0x%06x failed (%lu)\n", BB_FN, GetLastError());
         FlushInstructionCache(GetCurrentProcess(), NULL, 0);
         return;

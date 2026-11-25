@@ -1,4 +1,3 @@
-/* tutorial_keys.c -- TUTORIAL_KEYS: popups with PC keys */
 #include "compat.h"
 #include <stdint.h>
 
@@ -9,38 +8,25 @@
 #include "patch.h"
 
 #define CS_VT          0x00658e88u
-#define CS_SHOW_SITE   0x000cde01u              /* the dialog line's arrow show */
-#define CS_CURSOR_SITE 0x00036a86u              /* the cutscene start's CursorGame show */
+#define CS_SHOW_SITE   0x000cde01u
+#define CS_CURSOR_SITE 0x00036a86u
 
-/* ---- TUTORIAL_KEYS (menu: POPUP KEYS): Esc, Enter or Space presses the OK of a tutorial popup, and
-   Enter/Space = YES, Esc = NO in a question popup (an enhancement; off
-   under ORIGINAL_MAC_EXPERIENCE) ----
-   The popup ("Combat ... OK") is widgetTutoBlock, menu widget 25 (Widgets::BlockingTutorial, vtable
-   0x658e28, built at 0x15f725; show 0x16f748 sets [w+0x10], the base hide 0x16e978 clears it).  Its
-   OK click (event slot 5, 0x16f842) plays sound 0x57, drops the popup's input listeners and calls
-   [w+0xc]->vt[0x3c](l, w, 1).  Its keyboard listener 0x17eaac (called through slot 7, 0x16f9bc) does
-   the same for an event of kind 2 and code 0x1b, so a key here calls that with such an event. */
+/* 0x658e28 0x15f725 0x16f748 0x16e978 0x16f842 0x57 */
 #define TK_WIDGET      25
 #define TK_VT          0x00658e28u
-#define TK_INPUT       0x0016f9bcu              /* slot 7 */
-#define TK_ESC         0x0017eaacu              /* (w, event): kind [ev+8] == 2, code [ev+0xc] == 0x1b */
-/* The question popups ("Repair? ... YES / NO") are the dialog widgets: show 0x17d430 sets [w+0x10],
-   the click handler 0x17d494 (slot 5) stores the button's answer at [w+0x18] (btnYes 0xb, btnNo 0xd)
-   and calls [w+0xc]->vt[0x3c](l, w, 1).  The YES/NO kinds differ only in their texts slot 6:
-   0x659a88 (0x17243a) and widgetConfirm 0x659ac8 (0x17da90, the price in blue); 0x659a48
-   (0x172324) has one button, btnYes, labelled OK.  With the setting on, Enter or Space answers YES
-   and Esc answers NO (the OK one: any of the three), found by a walk of the menu's widgets. */
+#define TK_INPUT       0x0016f9bcu
+#define TK_ESC         0x0017eaacu              /* [ev+0xc] 0x1b */
+/* 0x17d430 0x17d494 [w+0x18] 0xb 0xd 0x659a88 0x17243a */
 #define TK_DLG_EVENT   0x0017d494u
 #define TK_ANS_YES     0xb
 #define TK_ANS_NO      0xd
 
-static const uint32_t tk_dlg_vt[3][2] = {       /* vtable, its texts slot; [0] is the one-button kind */
+static const uint32_t tk_dlg_vt[3][2] = {
     { 0x00659a48u, 0x00172324u }, { 0x00659a88u, 0x0017243au }, { 0x00659ac8u, 0x0017da90u },
 };
 
 volatile int g_tk_on, g_tk_ok, g_tk_press, g_tk_answer;
 
-/* A question popup up now (or NULL); *one = it has the one button. */
 static unsigned char *tk_dialog(int *one)
 {
     unsigned char *app = (unsigned char *)(uintptr_t)CS_APP;
@@ -99,8 +85,6 @@ void apply_tutorial_keys(void)
             "Esc = NO in question popups\n", g_tk_on ? "on" : "off");
 }
 
-/* shimsinput.c, on a key going down: 1 if it is ours (a cutscene or a tutorial popup is up and it is
-   Esc, Enter or Space), so the game does not get it. */
 int gmv_cutscene_key(unsigned sym)
 {
     enum { KEY_ESC = 0x1b, KEY_ENTER = '\r', KEY_SPACE = ' ' };
@@ -127,7 +111,6 @@ int gmv_cutscene_key(unsigned sym)
     return 1;
 }
 
-/* shimsinput.c, after each input pump: what the keys asked for. */
 __attribute__((force_align_arg_pointer))
 void gmv_cutscene_pump(void)
 {
@@ -136,7 +119,7 @@ void gmv_cutscene_pump(void)
     if (g_tk_press) {
         g_tk_press = 0;
         if (g_tk_on && (w = tk_widget()) && w[0x10] && *(void **)(w + 0xc)) {
-            int ev[4] = { 0, 0, 2, 0x1b };          /* only kind and code are read */
+            int ev[4] = { 0, 0, 2, 0x1b };
             ((void (*)(void *, void *))(uintptr_t)TK_ESC)(w, ev);
             gmv_trace("[gamepatch] tutorial popup closed by a key\n");
         }
@@ -148,7 +131,7 @@ void gmv_cutscene_pump(void)
             void **l = *(void ***)(w + 0xc);
             if (one)
                 ans = TK_ANS_YES;
-            *(int *)(w + 0x18) = ans;               /* as the button's click does */
+            *(int *)(w + 0x18) = ans;
             ((void (*)(void *, void *, int))(*(uintptr_t **)l)[0x3c / 4])(l, w, 1);
             gmv_trace("[gamepatch] question popup answered %s by a key\n", ans == TK_ANS_NO ? "NO" : "YES");
         }
@@ -165,7 +148,7 @@ void gmv_cutscene_pump(void)
             gmv_trace("[gamepatch] cutscene skipped by a key\n");
         }
     } else if (g_cs_line && w[0x18])
-        w[0x18] = 0;                            /* as a press on the arrows does */
+        w[0x18] = 0;
 }
 
 int cs_set(int on)
@@ -187,7 +170,7 @@ void apply_cutscene_keys(void)
     uint32_t tx = (uint32_t)(uintptr_t)gmv_cs_texts;
     int ok = 1;
     if (gmv_config_mac())
-        return;                                 /* the Mac's: the hooks come with the switch */
+        return;
     ok &= ((const uint32_t *)(uintptr_t)CS_VT)[6] == CS_TEXTS && sm_is_call(CS_SHOW_SITE, CS_ARROW_SHOW) &&
           sm_is_call(CS_CURSOR_SITE, CS_CURSOR_SET);
     for (size_t i = 0; i < sizeof cs_hide_sites / sizeof *cs_hide_sites; i++)

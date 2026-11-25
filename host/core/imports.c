@@ -1,4 +1,3 @@
-/* imports.c -- the game's imports: what each one is, and what its bind slots get pointed at (see imports.h). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,9 +13,7 @@
 #define THUNK_BYTES 16
 #define GUARD_BYTES 64
 
-/* The implemented host symbols live in shims.c / shimsw.c; gmv_shim_lookup searches them. */
-
-static const import_table *active;      /* for the fault handler and missing-import reports */
+static const import_table *active;
 
 extern void gmv_missing_entry(void);
 
@@ -29,12 +26,10 @@ const char *imports_lib_name(const macho *m, int ordinal)
     return ordinal == 0 ? "self" : ordinal == -1 ? "main" : ordinal == -2 ? "flat" : "?";
 }
 
-/* ---- collecting ----------------------------------------------------------------------- */
-
 typedef struct {
     const macho *m;
     import_table *t;
-    int *hash;                          /* index + 1 */
+    int *hash;
     uint32_t mask;
     int weak_seen, strong_seen;
     char *err;
@@ -42,17 +37,9 @@ typedef struct {
     int failed;
 } collect_ctx;
 
-static uint32_t hash_str(const char *s)
-{
-    uint32_t h = 2166136261u;
-    while (*s)
-        h = (h ^ (uint8_t)*s++) * 16777619u;
-    return h;
-}
-
 static int find_or_add(collect_ctx *c, const char *name, int ordinal)
 {
-    uint32_t h = hash_str(name) & c->mask;
+    uint32_t h = gmv_fnv1a(name) & c->mask;
     while (c->hash[h]) {
         import *im = &c->t->imp[c->hash[h] - 1];
         if (!strcmp(im->name, name))
@@ -102,8 +89,6 @@ static int collect_cb(void *ctx, uint32_t slot, const char *name, int ordinal, i
     return 0;
 }
 
-/* Imports reached only through non-lazy pointers can be either functions whose address is
-   taken or data; these name rules decide (the classification is logged for review). */
 static int data_by_name(const char *n)
 {
     static const char *const exact[] = {
@@ -147,16 +132,12 @@ int imports_collect(const macho *m, import_table *t, char *err, size_t errsz)
         }
     }
     free(c.hash);
-    /* a lazy slot is only ever called through; anything else may also be a function pointer
-       kept in a table, so the name decides */
     for (int i = 0; i < t->n; i++) {
         import *im = &t->imp[i];
         im->is_data = im->lazy_slots ? 0 : data_by_name(im->name);
     }
     return 0;
 }
-
-/* ---- binding -------------------------------------------------------------------------- */
 
 static const import *find_import(const import_table *t, const char *name)
 {
@@ -172,7 +153,7 @@ typedef struct {
     int failed;
     char *err;
     size_t errsz;
-    int last;                           /* streams repeat a name for runs of slots */
+    int last;
 } bind_ctx;
 
 static int bind_cb(void *ctx, uint32_t slot, const char *name, int ordinal, int32_t addend, int flags)
@@ -206,7 +187,7 @@ int imports_bind(const macho *m, import_table *t, char *err, size_t errsz)
             im->how = IMP_HOST;
             im->target = (uint32_t)(uintptr_t)shim;
         } else if (im->weak_import) {
-            im->how = IMP_WEAK_NULL;    /* dyld semantics for a missing weak import */
+            im->how = IMP_WEAK_NULL;
             im->target = 0;
         } else if (im->is_data) {
             if ((ndata + 1) * GUARD_BYTES > GMV_DATAGUARD_SIZE)
@@ -216,7 +197,6 @@ int imports_bind(const macho *m, import_table *t, char *err, size_t errsz)
         } else {
             if ((ncode + 1) * THUNK_BYTES > GMV_THUNK_SIZE)
                 FAIL("too many missing imports");
-            /* push <import index>; jmp gmv_missing_entry */
             uint8_t *p = thunks + ncode++ * THUNK_BYTES;
             uint32_t idx = (uint32_t)i, rel = (uint32_t)(uintptr_t)gmv_missing_entry - (uint32_t)(uintptr_t)(p + 10);
             p[0] = 0x68;
@@ -255,10 +235,8 @@ const char *imports_guard_name(uint32_t addr)
     return "?";
 }
 
-/* Reached from a missing-code thunk: the thunk pushed the import index on top of the game's
-   return address.  Stops the process; nothing sensible can be returned to the game. */
 #ifndef _WIN32
-__attribute__((force_align_arg_pointer))     /* the thunk pushed one word: Linux C wants 16 */
+__attribute__((force_align_arg_pointer))
 #endif
 void __cdecl gmv_missing_import(uint32_t index, uint32_t ret)
 {

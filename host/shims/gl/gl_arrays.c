@@ -1,4 +1,3 @@
-/* gl_arrays.c -- QUERY_FREE's client array state: what the vertex, normal, colour and texcoord arrays point at */
 #include <stdint.h>
 #include <string.h>
 #include "compat.h"
@@ -8,28 +7,17 @@
 #include "shims.h"
 #include "glshim.h"
 
-/* ---- QUERY_FREE, the client arrays (a port speed-up, [Advanced], on by default and under ORIGINAL_MAC_EXPERIENCE) ---
-   The effects look at the game's arrays before many of its draws (the sky's and the sea's colours, the sea marks, the
-   car bodies, the index and array buffers behind each pointer) and asked GL for every value: ~50,000-60,000 queries a
-   second in the city after the framebuffer and program bindings stopped being asked (PERF_PROFILE, 6 ms of the main
-   thread's second on NVIDIA).  The game sets that state only through glBindBuffer, glDeleteBuffers, the four pointer
-   calls, glClientActiveTexture and glEnable/DisableClientState (its imports; no glPushClientAttrib, no VAOs), so those
-   are wrapped (gmv_gl_arrays_intercept) and the last values kept here; the host's own changes go through
-   gmv_gl_bind_buffer / gmv_gl_arr_pointer, or sit between glPushClientAttrib and glPopClientAttrib.  A value not known
-   yet (the start, an array whose buffer was deleted) is asked of GL once.  QUERY_FREE=0 asks GL every time;
-   GMV_QUERY_CHECK=1 (dev) asks as well and logs any difference. */
-
 typedef struct {
-    signed char known;                                  /* size, type, stride, buffer and pointer */
-    signed char on;                                     /* -1 = not known */
+    signed char known;
+    signed char on;
     GLint size, type, stride, buf;
     const char *ptr;
 } ga_t;
 static ga_t ga[GA_N];
-static GLint ga_abo = -1, ga_ebo = -1;                  /* GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER, -1 = not known */
-static int ga_live;                                     /* the game's calls come through the wrappers */
+static GLint ga_abo = -1, ga_ebo = -1;
+static int ga_live;
 static void(APIENTRY *ga_bind_real)(GLenum, GLuint);
-static void(APIENTRY *ga_ptr_real[4])(GLint, GLenum, GLsizei, const void *);   /* vertex, -, colour, texcoord */
+static void(APIENTRY *ga_ptr_real[4])(GLint, GLenum, GLsizei, const void *);
 static void(APIENTRY *ga_nptr_real)(GLenum, GLsizei, const void *);
 static void(APIENTRY *ga_del_real)(GLsizei, const GLuint *);
 #if GMV_DEV
@@ -54,7 +42,6 @@ static int ga_on_shadow(void)
     return ga_live && gmv_gl_query_free();
 }
 
-/* GL_CLIENT_ACTIVE_TEXTURE as the game left it (the TEXFIX wrapper keeps it). */
 static void(APIENTRY *ga_client_real(void))(GLenum)
 {
     static void(APIENTRY * real)(GLenum);
@@ -62,8 +49,6 @@ static void(APIENTRY *ga_client_real(void))(GLenum)
     return real;
 }
 
-/* Ask GL for one array's values (texcoords: the unit's, switching the client unit if needed; with the shadow off,
-   the callers only ask for the client-active unit's, and the unit kept may be stale, so no switching). */
 static void ga_ask(int which, ga_t *a, int want_on)
 {
     int k = ga_kind(which);
@@ -93,7 +78,7 @@ static void ga_ask(int which, ga_t *a, int want_on)
 static void ga_check(int which, const ga_t *s)
 {
     if (!gmv_gl_query_check() || (gmv_sv_moved() & (1u << which)))
-        return;                                         /* STREAM_VBO pointed it at its ring */
+        return;
     ga_t g;
     ga_ask(which, &g, 1);
     if ((s->known && (g.size != s->size || g.type != s->type || g.stride != s->stride || g.buf != s->buf ||
@@ -165,8 +150,6 @@ static GLint ga_bound(GLint *kept, GLenum pname)
     return *kept;
 }
 
-/* glGetIntegerv for the buffer bindings: GL_ARRAY_BUFFER_BINDING, GL_ELEMENT_ARRAY_BUFFER_BINDING, and the vertex,
-   normal, colour and (client-active unit's) texcoord array's. */
 GLint gmv_gl_buf(GLenum pname)
 {
     gmv_arr_t a;
@@ -190,11 +173,9 @@ GLint gmv_gl_client_unit(void)
     if (ga_on_shadow())
         return (GLint)(0x84C0 + g_tf_client);
     GLint v = 0;
-    glGetIntegerv(0x84E1, &v);                              /* GL_CLIENT_ACTIVE_TEXTURE */
+    glGetIntegerv(0x84E1, &v);
     return v;
 }
-
-/* ---- the notes: the game's calls (the wrappers below) and the host's ---- */
 
 void gmv_gl_arr_state(GLenum array, int on)
 {
@@ -207,8 +188,8 @@ void gmv_gl_arr_state(GLenum array, int on)
 
 static void ga_note_bind(GLenum target, GLuint b)
 {
-    if (target == 0x8892) ga_abo = (GLint)b;                /* GL_ARRAY_BUFFER */
-    else if (target == 0x8893) ga_ebo = (GLint)b;           /* GL_ELEMENT_ARRAY_BUFFER */
+    if (target == 0x8892) ga_abo = (GLint)b;
+    else if (target == 0x8893) ga_ebo = (GLint)b;
 }
 
 static void ga_note_ptr(int which, GLint size, GLenum type, GLsizei stride, const void *p)
@@ -216,14 +197,14 @@ static void ga_note_ptr(int which, GLint size, GLenum type, GLsizei stride, cons
     if (which < 0 || which >= GA_N)
         return;
     ga_t *a = &ga[which];
-    if (ga_abo < 0) {                                       /* the buffer the pointer now refers to */
+    if (ga_abo < 0) {
         GLint v = 0;
         glGetIntegerv(0x8894, &v);
         ga_abo = v;
     }
     a->size = size, a->type = (GLint)type, a->stride = stride, a->buf = ga_abo, a->ptr = p;
     a->known = 1;
-    gmv_sv_pointer_set(which);                          /* STREAM_VBO: the game's pointer from now on */
+    gmv_sv_pointer_set(which);
 }
 
 static int ga_unit_which(void)
@@ -242,7 +223,7 @@ void gmv_gl_arr_pointer(int which, GLint size, GLenum type, GLsizei stride, cons
 {
     int k = ga_kind(which);
     if (which >= GA_TEX0 && which != ga_unit_which())
-        return;                                             /* only the client-active unit's */
+        return;
     if (k == 1) {
         if (!ga_nptr_real) ga_nptr_real = gl_real("glNormalPointer");
         if (ga_nptr_real) ga_nptr_real(type, stride, p);
@@ -260,7 +241,7 @@ void gmv_gl_buffers_deleted(GLsizei n, const GLuint *names)
         GLint b = (GLint)names[i];
         if (!b)
             continue;
-        if (ga_abo == b) ga_abo = -1;                       /* GL binds 0; asked again to be sure */
+        if (ga_abo == b) ga_abo = -1;
         if (ga_ebo == b) ga_ebo = -1;
         for (int w = 0; w < GA_N; w++)
             if (ga[w].known && ga[w].buf == b)
@@ -268,7 +249,6 @@ void gmv_gl_buffers_deleted(GLsizei n, const GLuint *names)
     }
 }
 
-/* The game's calls. */
 static void ga_BindBuffer(GLenum target, GLuint b)
 {
     gmv_gl_bind_buffer(target, b);
@@ -294,7 +274,7 @@ static void ga_ColorPointer(GLint size, GLenum type, GLsizei stride, const void 
 static void ga_TexCoordPointer(GLint size, GLenum type, GLsizei stride, const void *p)
 {
     int w = ga_unit_which();
-    if (w < 0) {                                            /* a unit past the four kept: GL's own */
+    if (w < 0) {
         static void(APIENTRY * real)(GLint, GLenum, GLsizei, const void *);
         if (!real) real = gl_real("glTexCoordPointer");
         if (real) real(size, type, stride, p);
@@ -303,8 +283,6 @@ static void ga_TexCoordPointer(GLint size, GLenum type, GLsizei stride, const vo
     gmv_gl_arr_pointer(w, size, type, stride, p);
 }
 
-/* gl_bind.c: the names wrapped while QUERY_FREE is on (the client unit and the enables are the TEXFIX wrappers',
-   which note here too).  Decided once, at the first GL name the game resolves. */
 void *gmv_gl_arrays_intercept(const char *name)
 {
     static const struct { const char *n; void *f; } t[] = {

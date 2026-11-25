@@ -1,11 +1,6 @@
-"""Group a Mach-O's imported symbols by the dylib they bind to.
-
-usage: python -I imports_by_lib.py <analysis.json> [--names]
-"""
 import collections
 import json
 import sys
-
 
 def main():
     with open(sys.argv[1]) as f:
@@ -21,7 +16,6 @@ def main():
         if "--names" in sys.argv:
             for s in sorted(syms):
                 print("    " + s)
-
 
 if __name__ == "__main__":
     main()

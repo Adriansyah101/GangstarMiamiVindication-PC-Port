@@ -1,4 +1,3 @@
-/* tab_swf.c -- GAMEPATCH_TAB: the SOUND page's rows and the page's credit, added to the menu file as it loads */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -12,49 +11,31 @@
 #include "gangstar.h"
 #include "patch.h"
 
-#define OM_RES_SIZE    0x000039dau   /* (app, &index, &w, &h); their count to app + OM_RES_COUNT    */
-#define OM_OPENER_SITE 0x002f9854u   /* RenderFX set-up: register_file_opener_callback(opener)      */
+#define OM_RES_SIZE    0x000039dau
+#define OM_OPENER_SITE 0x002f9854u
 #define OM_OPENER_SET  0x002ad250u
-#define OM_GS_MALLOC   0x00321530u   /* gameswf's allocator: (bytes, 0), and its free (p, bytes)    */
+#define OM_GS_MALLOC   0x00321530u
 #define OM_GS_FREE     0x00321500u
-#define OM_FILE_INIT   0x003054a0u   /* tu_file(file, data, read, write, seek, seek_to_end, tell, eof, close) */
+#define OM_FILE_INIT   0x003054a0u
 #define OM_FILE_CLOSE  0x00306170u
 #define OM_FILE_BYTES  0x28
-#define OM_INFLATE_INIT 0x00363020u  /* the game's zlib 1.2.3: inflateInit_(stream, "1.2.3", 0x38)  */
+#define OM_INFLATE_INIT 0x00363020u  /* inflateInit_ 0x38 */
 #define OM_INFLATE     0x003636f0u
 #define OM_INFLATE_END 0x00362d80u
 
-/* ---- the SOUND page's Custom Radio rows and the GAMEPATCH page's credit, added to the menu file as it loads ----
-   widgetVolumes (sprite 797) places three rows 98.5 units apart: a title (txtSFX, txtVFX, txtMusic:
-   one edittext each, PlaceObject3 with its outline filter) and a bar (barSFX, barVFX, barMusic:
-   sprite 794 with the slider btnVolume and the speaker btnMute).  With CUSTOM_RADIO's rows the page
-   has five, 88 units apart and 80 higher (four sat too low):
-     4. "Custom Radio Volume": a copy of the Music row (txtRadio, barRadio);
-     5. "Custom Radio": its title (txtRadioOn) and the options' ◀ value ▶ (widgetActionKeyTitle's
-        bar, btnLeft, btnRight and txtValue, as the GAMEPATCH lines have them), named crValueBar,
-        btnCrLeft, btnCrRight and crTextValue.
-   The titles are edittexts of their own (the Music title's, wider, with their text in it).  With
-   the options tab and OM_SHOW_CREDIT (patch.h; 0, so left out), widgetActionKeyTitle (sprite 759) also
-   gets OM_CREDIT (txtPatchBy) at the screen's top right, which only the GAMEPATCH page shows (the
-   author's credit). */
-#define CR_ROW_DEPTH   40                       /* our placements in sprite 797: 40.. */
-#define CR_SEL_X       3640                     /* row 5's ◀ value ▶: centre (under the sliders' centre) */
+#define CR_ROW_DEPTH   40
+#define CR_SEL_X       3640
 #define CR_SEL_Y       (CR_BAR0 + 4 * CR_STEP + 342)
 #define CR_SEL_SCALE   0.6
 #if OM_SHOW_CREDIT
-#define CR_CREDIT_DEPTH 60                      /* in sprite 759 */
+#define CR_CREDIT_DEPTH 60
 #endif
-/* Our text boxes: wider than txtMusic's (-40..3120 twips, centre 1540), but gameswf lays a text out
-   from the box's left edge as if it were at txtMusic's -40, so a box that starts further left shows
-   its text too far right.  Ours start at -40 too, 8360 wide, and their placements move left by
-   the difference of the centres. */
 #define CR_TEXT_X0  (-40)
 #define CR_TEXT_X1  8320
 #define CR_TEXT_DX  (1540 - (CR_TEXT_X0 + CR_TEXT_X1) / 2)
 
 static const char *const cr_sel_names[4] = {"crValueBar", "btnCrLeft", "btnCrRight", "crTextValue"};
 
-/* Write a matrix (no rotation if !r) at bit; the bit after it. */
 static void om_matrix_write(unsigned char *d, size_t *bit, int32_t sx, int32_t sy, int r, int32_t r0, int32_t r1,
                             int32_t tx, int32_t ty)
 {
@@ -79,8 +60,6 @@ static void om_matrix_write(unsigned char *d, size_t *bit, int32_t sx, int32_t s
     om_put_bits(d, bit, (uint32_t)ty, k);
 }
 
-/* The parts of a PlaceObject2/3 tag (code, data d of n bytes) that has a character, a matrix and
-   a name: where its matrix and its name start and end, and the matrix.  0 if it is not one. */
 typedef struct {
     size_t ms, me, ns, ne;
     int32_t sx, sy, r0, r1, tx, ty;
@@ -99,7 +78,7 @@ static int om_place3_read(int code, const unsigned char *d, size_t n, om_place3 
     fl = d[p++];
     if (code == 70)
         fl2 = d[p++];
-    p += 2;                                     /* depth */
+    p += 2;
     if (code == 70 && ((fl2 & 8) || ((fl2 & 0x10) && (fl & 2)))) {
         const unsigned char *z = memchr(d + p, 0, n - p);
         if (!z)
@@ -108,7 +87,7 @@ static int om_place3_read(int code, const unsigned char *d, size_t n, om_place3 
     }
     if (!(fl & 2) || !(fl & 4) || !(fl & 0x20) || p + 3 > n)
         return 0;
-    p += 2;                                     /* character */
+    p += 2;
     o->ms = p;
     bit = p * 8;
     if (om_bits(d, &bit, 1)) {
@@ -135,7 +114,7 @@ static int om_place3_read(int code, const unsigned char *d, size_t n, om_place3 
         p = (bit + 7) / 8;
     }
     if (fl & 0x10)
-        p += 2;                                 /* ratio */
+        p += 2;
     if (p >= n || !memchr(d + p, 0, n - p))
         return 0;
     o->ns = p;
@@ -143,9 +122,6 @@ static int om_place3_read(int code, const unsigned char *d, size_t n, om_place3 
     return 1;
 }
 
-/* A copy of that tag, written at o: at depth, of character cid (-1: its own), with the matrix m4
-   {sx, sy, tx, ty} (NULL: its own, dx twips right and dy lower) and named name; its length, or 0
-   if the tag is not one it can copy. */
 static size_t om_place_clone(unsigned char *o, int code, const unsigned char *d, size_t n, int depth, int cid,
                              const int32_t *m4, int32_t dx, int32_t dy, const char *name)
 {
@@ -155,7 +131,7 @@ static size_t om_place_clone(unsigned char *o, int code, const unsigned char *d,
     if (n > 400 || !om_place3_read(code, d, n, &m))
         return 0;
     memset(body, 0, sizeof body);
-    memcpy(body, d, m.ms);                      /* flags, depth, class name, character */
+    memcpy(body, d, m.ms);
     body[(code == 70) + 1] = (unsigned char)depth;
     body[(code == 70) + 2] = (unsigned char)(depth >> 8);
     if (cid >= 0) {
@@ -168,11 +144,11 @@ static size_t om_place_clone(unsigned char *o, int code, const unsigned char *d,
     else
         om_matrix_write(body, &bit, m.sx, m.sy, m.r, m.r0, m.r1, m.tx + dx, m.ty + dy);
     p = (bit + 7) / 8;
-    memcpy(body + p, d + m.me, m.ns - m.me);    /* colour transform, ratio */
+    memcpy(body + p, d + m.me, m.ns - m.me);
     p += m.ns - m.me;
     memcpy(body + p, name, strlen(name) + 1);
     p += strlen(name) + 1;
-    memcpy(body + p, d + m.ne, n - m.ne);       /* clip depth, filters, blend mode, ... */
+    memcpy(body + p, d + m.ne, n - m.ne);
     p += n - m.ne;
     if (p < 63) {
         o[0] = (unsigned char)(code << 6 | p);
@@ -190,7 +166,6 @@ static size_t om_place_clone(unsigned char *o, int code, const unsigned char *d,
     return p + 6;
 }
 
-/* The highest character id the file defines. */
 static int swf_max_cid(const unsigned char *s, size_t start, size_t n)
 {
     static const unsigned char defs[] = {2, 6, 7, 10, 11, 14, 20, 21, 22, 32, 33, 34, 35, 36, 37, 39, 46, 48, 60,
@@ -206,12 +181,10 @@ static int swf_max_cid(const unsigned char *s, size_t start, size_t n)
     return top;
 }
 
-/* A DefineEditText like the SOUND page's titles (Arial 23, centred, read-only HTML) holding text,
-   x0..x1 twips wide, in colour rgb ("rrggbb"), written at o; its length. */
 static size_t swf_edittext(unsigned char *o, int cid, int32_t x0, int32_t x1, const char *rgb, const char *text)
 {
-    static const unsigned char mid[] = {0xed, 0x23, 43, 0, 0xcc, 0x01};        /* flags; font 43, 23 px */
-    static const unsigned char layout[] = {2, 0, 0, 0, 0, 0, 0, 0x28, 0, 0};   /* centred, leading 2, no name */
+    static const unsigned char mid[] = {0xed, 0x23, 43, 0, 0xcc, 0x01};
+    static const unsigned char layout[] = {2, 0, 0, 0, 0, 0, 0, 0x28, 0, 0};
     unsigned char d[600] = {0};
     size_t bit = 2 * 8, p;
     int32_t y0 = -40, y1 = 556;
@@ -248,12 +221,8 @@ static size_t swf_edittext(unsigned char *o, int cid, int32_t x0, int32_t x1, co
     return p + 6;
 }
 
-/* A placement tag of a sprite's first frame, rewritten at o (its length) or left as it is (0). */
 typedef size_t (*swf_fix_fn)(unsigned char *o, int code, const unsigned char *d, size_t n);
 
-/* The swf s with sprite cid's first frame changed: each placement through fix (if any), the an
-   bytes of add before its first ShowFrame, and the dn bytes of defs (top-level definitions) before
-   the sprite.  NULL if the sprite is not there. */
 static unsigned char *swf_sprite_edit(const unsigned char *s, size_t n, int cid, const unsigned char *defs, size_t dn,
                                       const unsigned char *add, size_t an, swf_fix_fn fix, size_t *out_n)
 {
@@ -282,7 +251,7 @@ static unsigned char *swf_sprite_edit(const unsigned char *s, size_t n, int cid,
             out[q + 1] = (unsigned char)((39 << 6 | 0x3f) >> 8);
             at = q + 2;
             q += 6;
-            memcpy(out + q, s + d, 4);          /* id, frame count */
+            memcpy(out + q, s + d, 4);
             q += 4;
             for (size_t t = d + 4, tn, td, tl; t < d + l; t = tn) {
                 size_t w;
@@ -328,7 +297,6 @@ static unsigned char *swf_sprite_edit(const unsigned char *s, size_t n, int cid,
     return out;
 }
 
-/* The placement named name in sprite cid's first frame: its tag code, data and length. */
 static int swf_find_named(const unsigned char *s, size_t n, int cid, const char *name, int *code, size_t *pd,
                           size_t *pl)
 {
@@ -348,10 +316,6 @@ static int swf_find_named(const unsigned char *s, size_t n, int cid, const char 
     return 0;
 }
 
-/* The SOUND page's three rows to their new places (88 units apart, 80 higher). */
-
-/* The swf s (n bytes, uncompressed, header included) with the SOUND page's Custom Radio rows, or
-   NULL if the page is not the one expected. */
 static unsigned char *cr_swf_patch(const unsigned char *s, size_t n, size_t *out_n)
 {
     static const char *const head_names[4] = {NULL, "btnLeft", "btnRight", "txtValue"};
@@ -370,7 +334,7 @@ static unsigned char *cr_swf_patch(const unsigned char *s, size_t n, size_t *out
             return NULL;
     if (!swf_find_named(s, n, vol.cid, "txtMusic", &tc, &td, &tl) || !swf_find_named(s, n, vol.cid, "barMusic", &bc, &bd, &bl) ||
         swf_find_named(s, n, vol.cid, "txtRadio", &code, &d, &l))
-        return NULL;                            /* (not twice) */
+        return NULL;
     top = swf_max_cid(s, start, n);
     if (top + 2 > 0xffff)
         return NULL;
@@ -401,7 +365,6 @@ static unsigned char *cr_swf_patch(const unsigned char *s, size_t n, size_t *out
 }
 
 #if OM_SHOW_CREDIT
-/* The swf s with OM_CREDIT in widgetActionKeyTitle (the options tab's header), or NULL. */
 static unsigned char *om_credit_patch(const unsigned char *s, size_t n, size_t *out_n)
 {
     size_t start, td, tl, dn, an, d, l;
@@ -419,10 +382,6 @@ static unsigned char *om_credit_patch(const unsigned char *s, size_t n, size_t *
         return NULL;
     dn = swf_edittext(defs, top + 1, CR_TEXT_X0, CR_TEXT_X1, "42d8fb", OM_CREDIT);
     {
-        /* The titles' size, centred on the stage's (1072, 63.3): the text spans about x 917..1227 of the 1280, right
-           of the page's title (widgetTitle, its box 625..1043, the text at its centre).  1227 is where the old, shorter
-           credit ended; further right was cut off at the screen's edge in a test.  The box's centre is
-           ((CR_TEXT_X0 + CR_TEXT_X1) / 2, 258) twips in its own units. */
         const double g = 1.0, cx = 1072.0 * 20 - head.tx, cy = 63.3 * 20 - head.ty;
         const int32_t m4[4] = {(int32_t)lround(g * 65536), (int32_t)lround(g * 65536),
                                (int32_t)lround(cx - g * (CR_TEXT_X0 + CR_TEXT_X1) / 2), (int32_t)lround(cy - g * 258)};
@@ -433,7 +392,6 @@ static unsigned char *om_credit_patch(const unsigned char *s, size_t n, size_t *
 }
 #endif
 
-/* A gameswf stream over memory: (dst, bytes, data), (pos, data), (data). */
 typedef struct { unsigned char *p; int n, at; } om_mem;
 
 __attribute__((cdecl, force_align_arg_pointer))
@@ -490,13 +448,12 @@ static int om_mem_close(om_mem *m)
     return 0;
 }
 
-/* newmenu.fua's stream f read to the end and uncompressed: the swf with its header, or NULL. */
 static unsigned char *om_swf_read(uint32_t *f, unsigned char **raw, size_t *raw_n, size_t *n)
 {
     typedef int (*read_fn)(void *, int, void *);
     size_t cap = 1 << 22, got = 0;
     unsigned char *b = malloc(cap), *swf;
-    uint32_t total, zs[14] = {0};               /* a z_stream */
+    uint32_t total, zs[14] = {0};
     int r;
     *raw = NULL;
     for (;;) {
@@ -533,7 +490,7 @@ static unsigned char *om_swf_read(uint32_t *f, unsigned char **raw, size_t *raw_
     zs[4] = total - 8;
     r = ((int (*)(void *, const char *, int))(uintptr_t)OM_INFLATE_INIT)(zs, "1.2.3", (int)sizeof zs);
     if (r == 0) {
-        r = ((int (*)(void *, int))(uintptr_t)OM_INFLATE)(zs, 4);          /* Z_FINISH: Z_STREAM_END */
+        r = ((int (*)(void *, int))(uintptr_t)OM_INFLATE)(zs, 4);
         ((int (*)(void *))(uintptr_t)OM_INFLATE_END)(zs);
     }
     if (r != 1 || zs[5] != total - 8) {
@@ -560,7 +517,7 @@ static uint32_t *gmv_om_open(const char *name)
         sel = (out = om_swf_patch(swf, n, &out_n)) != NULL;
 #if OM_SHOW_CREDIT
         size_t cn = 0;
-        unsigned char *cred = om_credit_patch(out ? out : swf, out ? out_n : n, &cn);    /* OM_CREDIT */
+        unsigned char *cred = om_credit_patch(out ? out : swf, out ? out_n : n, &cn);
         om_credit = cred != NULL;
         if (cred) {
             free(out);
@@ -570,7 +527,7 @@ static uint32_t *gmv_om_open(const char *name)
             gmv_log("[gamepatch] options tab: the header is not the one expected; no credit\n");
 #endif
     }
-    if (swf && g_cr_row_want) {                 /* the SOUND page's fourth row (CUSTOM_RADIO) */
+    if (swf && g_cr_row_want) {
         size_t row_n = 0;
         unsigned char *row = cr_swf_patch(out ? out : swf, out ? out_n : n, &row_n);
         g_cr_row = row != NULL;
@@ -586,7 +543,7 @@ static uint32_t *gmv_om_open(const char *name)
         free(swf);
     nf = ((uint32_t * (*)(int, int))(uintptr_t)OM_GS_MALLOC)(OM_FILE_BYTES, 0);
     m = malloc(sizeof *m);
-    if (!raw || !nf || !m) {                    /* (no memory: the stream from its start, if it can) */
+    if (!raw || !nf || !m) {
         free(raw);
         free(out);
         free(m);
@@ -609,7 +566,7 @@ static uint32_t *gmv_om_open(const char *name)
         m->n = (int)out_n;
         gmv_trace("[gamepatch] menu file %u bytes, %u patched\n", (unsigned)n, (unsigned)out_n);
     } else {
-        m->p = raw;                             /* the file as it was read */
+        m->p = raw;
         m->n = (int)raw_n;
     }
     m->at = 0;
@@ -630,7 +587,6 @@ static void gmv_om_set_opener(void *(*opener)(const char *))
     ((void (*)(void *))(uintptr_t)OM_OPENER_SET)((void *)opener);
 }
 
-/* Our opener in front of the game's (once): 1 if it is, 0 if the set-up is not the expected one. */
 int om_opener_hook(void)
 {
     if (sm_is_call(OM_OPENER_SITE, (uint32_t)(uintptr_t)gmv_om_set_opener))
@@ -644,7 +600,7 @@ void om_selectors_visible(void *fx, int line, int on)
         om_line_visible(fx, line, om_sel_names[e], on);
 }
 
-unsigned om_resolution(int i, unsigned *h)        /* its width; the count to the app */
+unsigned om_resolution(int i, unsigned *h)
 {
     unsigned w = 0;
     *h = 0;
@@ -658,15 +614,15 @@ int om_density(const char *key, double v)
         if (strcmp(pd_kinds[j].env + 4, key))
             continue;
         if (!pd_on || (v > 1 && !pd_centres_on))
-            return 0;                           /* the start-up set-up did not make room for it */
+            return 0;
         pd_user[j] = v;
         if (!pd_racing) {
             pd_scale[j] = v;
             if (pd_write() < 0)
                 return 0;
-        }                                       /* else when the race is over */
+        }
         if (pd_built[j] && v > pd_built[j] + 0.001)
-            pd_pool_top_up();                   /* more than the pool was built for */
+            pd_pool_top_up();
         return 1;
     }
     return 0;

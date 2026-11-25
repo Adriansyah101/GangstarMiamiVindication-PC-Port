@@ -1,4 +1,3 @@
-/* draw_distance.c -- DRAW_DISTANCE */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -11,46 +10,24 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- DRAW_DISTANCE: the city drawn further than on the Mac (an enhancement, off by default and under
-   ORIGINAL_MAC_EXPERIENCE) ----
-   At start-up 0x1a8c5e reads the device profile, Structs::PhonePerformanceProfile, into 0x949a00.  The
-   Mac takes profile 1 of _packMac/file002743.dat (profile 0 is the phones' 15000/30000):
-     +0x0c perfFarHighRes 45000: the camera's far plane for the full-detail city each frame, the start
-           of the fog, the full-detail streaming window (1.5x) and the actor removal distance (1.5x);
-     +0x10 perfFarLowRes  90000: the far end of the low-detail band drawn behind it, and of the fog.
-   Both are scaled right after the read, before the city is built, so they all move together.  The
-   actor removal at 0x76c59 reads a copy of the Mac's profile instead, so traffic and pedestrians come
-   and go as on the Mac.  DRAW_DISTANCE is the multiple, 1 (off) to 4.
-   The buildings' collision is Box2D shapes that the city grid (CCustomBatchGridSceneNode) creates for
-   the objects of the cells within +0x0c of the camera.  Two things break when that distance grows:
-   - The grid adds a cell's objects when the cell comes into range, judged against a rectangle around
-     the last position, which starts at (0,0,0).  On the first update every cell within the distance of
-     the world origin counts as already added, and at 3x that is most of the city: no collision there.
-     apply_origin_collision_fix (below) mends that, and is applied only with this patch.
-   - Right after the read the game sizes the Box2D broadphase from +0x0c: over 7500, 16384 proxies
-     (0x649680) and 131072 pairs (0x649684, also the pair hash table, a power of two).  The menu scenes
-     alone come close to 16384 at 3x, and neither table has a full check (more shapes overwrite the
-     heap).  Both sizes are scaled by s^2 (the pairs to a power of two), and the broadphase's
-     CreateProxy calls are guarded: a full pool gives the shape no proxy (-1, as Box2D does for a shape
-     outside the world) and logs it. */
-#define DD_READ_SITE   0x001a8c5eu   /* call PhonePerformanceProfile::Read(&profile, stream) */
+/* DRAW_DISTANCE 0x1a8c5e 0x949a00 +0x0c +0x10 0x76c59 */
+#define DD_READ_SITE   0x001a8c5eu
 #define DD_READ_FN     0x005edb64u
-#define DD_ACTOR_SITE  0x00076c59u   /* movl 0x5c7f1b(%eax),%ecx: the profile pointer */
-#define DD_PROXIES_IMM 0x001a8c9fu   /* movl $0x4000,(%eax): the proxy count */
-#define DD_PAIRS_IMM   0x001a8ca4u   /* movl $0x20000,%eax: the pair count and hash table size */
+#define DD_ACTOR_SITE  0x00076c59u   /* 0x5c7f1b(%eax),%ecx */
+#define DD_PROXIES_IMM 0x001a8c9fu   /* movl $0x4000 */
+#define DD_PAIRS_IMM   0x001a8ca4u   /* movl $0x20000,%eax: */
 #define DD_MAX_PAIRS   0x00649684u
 #define DD_MAX         4.0
 #define DD_KEEP_K      0x005f096cu
-#define DD_LIVE_AREA   4.0           /* GAMEPATCH_TAB: collision sized for at least 2x from the start */
+#define DD_LIVE_AREA   4.0
 
 static const unsigned char dd_actor_code[6] = { 0x8b, 0x88, 0x1b, 0x7f, 0x5c, 0x00 };
-const uint32_t dd_proxy_sites[2] = { 0x001bf2a0u, 0x001bf400u };  /* polygon, circle shape */
-int dd_mac_profile[5];        /* the Mac's +0x0c and +0x10 for the actor removal */
+const uint32_t dd_proxy_sites[2] = { 0x001bf2a0u, 0x001bf400u };
+int dd_mac_profile[5];        /* +0x0c +0x10 */
 double dd_scale;
-static int dd_proxy_peak = 1024;     /* next proxy count to log: 1024, 2048, 4096, ... */
+static int dd_proxy_peak = 1024;
 
-/* The broadphase starts with its pair manager: free pair +0x0c, pairs +0x10; then free proxy +0x24,
-   proxies +0x50. */
+/* +0x0c +0x10 +0x24 +0x50 */
 __attribute__((cdecl, force_align_arg_pointer))
 int gmv_create_proxy(char *bp, void *aabb, void *shape)
 {
@@ -81,12 +58,11 @@ static void gmv_read_perf_profile(int *prof, void *stream)
             dd_scale, dd_mac_profile[3], prof[3], dd_mac_profile[4], prof[4]);
 }
 
-int dd_on;                    /* the draw distance patch is in */
-int dd_live;                  /* and the cell updates are ours: the options menu can change it */
-int dd_tables_in;             /* the collision sizes and the CreateProxy guard are in */
+int dd_on;
+int dd_live;
+int dd_tables_in;
 patch_undo dd_undo, dd_tables_undo;
 
-/* The collision sizes for a draw distance of s */
 static void dd_sizes(double s, uint32_t *proxies, uint32_t *pairs)
 {
     double area = s * s;
@@ -99,9 +75,7 @@ static void dd_sizes(double s, uint32_t *proxies, uint32_t *pairs)
     *pairs = 0x20000u * k;
 }
 
-/* The sizes for s, in the game's set-up (0x1a8c79, which runs before the world is made) and, once that
-   has run, in the running game: its tables grow in place (gmv_bp_grow), so no start is needed.  The
-   four variables are the proxies, the pairs, the pair hash table and that table's mask. */
+/* 0x1a8c79 */
 void dd_tables_fit(double s)
 {
     uint32_t proxies, pairs, *sizes = (uint32_t *)(uintptr_t)DD_MAX_PROXIES;
@@ -113,7 +87,7 @@ void dd_tables_fit(double s)
     if (*(const uint32_t *)(uintptr_t)DD_PAIRS_IMM < pairs)
         patch_bytes(DD_PAIRS_IMM, (const unsigned char *)&pairs, 4);
     if (!((const int *)(uintptr_t)DD_PROFILE)[3])
-        return;                             /* the game has yet to size them, from the above */
+        return;
     proxies = proxies > sizes[0] ? proxies : sizes[0];
     pairs = pairs > sizes[1] ? pairs : sizes[1];
     if (proxies == sizes[0] && pairs == sizes[1])
@@ -128,9 +102,6 @@ void dd_tables_fit(double s)
     sizes[0] = proxies, sizes[1] = pairs, sizes[2] = pairs, sizes[3] = pairs - 1;
 }
 
-/* The options menu's DRAW DISTANCE: the profile's two distances and the streaming's radii, which it
-   caches at its first run; gmv_update_cells then adds (or takes away) only the cells between the old
-   radius and the new.  Before the profile is read, the read scales it. */
 int dd_set(double s)
 {
     if (!dd_live)
@@ -171,7 +142,7 @@ void apply_draw_distance(void)
         return;
     }
     dd_sizes(dd_scale, &proxies, &pairs);
-    if (!dd_tables_in) {                        /* (still in: they wait for the next world to go) */
+    if (!dd_tables_in) {
         patch_undo *keep = patch_undo_now;
         patch_undo_now = &dd_tables_undo;
         if (!patch_bytes(DD_PROXIES_IMM, (const unsigned char *)&proxies, 4) ||
@@ -180,10 +151,8 @@ void apply_draw_distance(void)
             gmv_log("[gamepatch] collision size write failed (%lu); draw distance skipped\n", GetLastError());
             return;
         }
-        for (int i = 0; i < 2; i++) {
-            int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_create_proxy - (dd_proxy_sites[i] + 5));
-            patch_bytes(dd_proxy_sites[i] + 1, (const unsigned char *)&r, 4);
-        }
+        for (int i = 0; i < 2; i++)
+            patch_call(dd_proxy_sites[i], (void *)gmv_create_proxy);
         patch_undo_now = keep;
         dd_tables_in = 1;
     }
@@ -196,8 +165,7 @@ void apply_draw_distance(void)
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); draw distance skipped\n", DD_ACTOR_SITE, GetLastError());
         return;
     }
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)gmv_read_perf_profile - (DD_READ_SITE + 5));
-    if (!patch_bytes(DD_READ_SITE + 1, (const unsigned char *)&rel, 4)) {
+    if (!patch_call(DD_READ_SITE, (void *)gmv_read_perf_profile)) {
         patch_bytes(DD_ACTOR_SITE, dd_actor_code, sizeof dd_actor_code);
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); draw distance skipped\n", DD_READ_SITE + 1, GetLastError());
         return;
@@ -205,15 +173,7 @@ void apply_draw_distance(void)
     dd_on = 1;
 }
 
-/* ---- the city's cells when the draw distance changes in game ----
-   updateCells(grid, pos, r1, r2) adds the cells within r1 of pos that were not within r1 of the last
-   position (+0x1a4), and takes away those within r1 + r2 of the last that are not within r1 + r2 of
-   pos, both through the same rectangle difference (0x13d3f0, any two rectangles).  The last
-   position's rectangles are built from the same r1, so a new r1 alone would add nothing.  Its eight
-   operands there are pointed at two arguments more, the old r1 and the old r1 + r2, which
-   gmv_update_cells passes (the same as the new but for the update after a change).  The adds and
-   takes then cover the band between the old and new radius, as when the camera moves; a cell taken
-   away that never came in only leaves its objects' counts at 0, as the game's own moves do. */
+/* updateCells +0x1a4 0x13d3f0 */
 static const uint32_t dd_cells_old_r1[4] = { 0x0013d672u, 0x0013d708u, 0x0013d72fu, 0x0013d751u };   /* [ebp+0x10] */
 static const uint32_t dd_cells_old_r12[4] = { 0x0013d822u, 0x0013d8b1u, 0x0013d8d8u, 0x0013d8f6u };  /* [ebp-0x7c] */
 
@@ -223,7 +183,7 @@ int dd_cells_aim(void)
         if (*(const uint8_t *)(uintptr_t)dd_cells_old_r1[i] != 0x10 ||
             *(const uint8_t *)(uintptr_t)dd_cells_old_r12[i] != 0x84)
             return 0;
-    const unsigned char r1 = 0x18, r12 = 0x1c;   /* [ebp+0x18], [ebp+0x1c] */
+    const unsigned char r1 = 0x18, r12 = 0x1c;   /* [ebp+0x18] [ebp+0x1c] */
     for (int i = 0; i < 4; i++)
         if (!patch_bytes(dd_cells_old_r1[i], &r1, 1) || !patch_bytes(dd_cells_old_r12[i], &r12, 1))
             return 0;

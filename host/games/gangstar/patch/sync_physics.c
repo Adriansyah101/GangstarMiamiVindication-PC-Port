@@ -1,4 +1,3 @@
-/* sync_physics.c -- PHYSICS_SYNC: one physics step per tick */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -10,64 +9,60 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- physics sync: one physics step per tick, at the tick rate (GMV_PHYSICS_SYNC=1) -------------
+/* 0x1a1752 0x949ab4 [0x949a18] 0x1a1ef3..0x1a1f2c */
+#define PHYS_ACC       0x00949ab4u
+#define PHYS_ACC_SITE  0x001a1f24u   /* addss xmm0,[esi+0x7a8354]; movss [esi+0x7a8354],xmm0 */
+#define PHYS_ACC_CONT  0x001a1f34u   /* movss xmm1,[esi+0x455738]: */
+#define PHYS_PIC_BASE  0x001a1760u   /* esi 0x1a1752 */
+#define PHYS_STEP_LD1  0x001a1f34u   /* movss xmm1,[esi+step] */
+#define PHYS_NEG_LD    0x001a1ffeu   /* addss xmm0,[esi+negstep] */
+#define PHYS_STEP_LD2  0x001a2014u   /* ucomiss xmm0,[esi+step] */
+#define PHYS_IMM1      0x001a1f78u   /* vtbl[0x174] */
+#define PHYS_IMM2      0x001a1faau
 
-   The level update (0x1a1752) runs Box2D -- vehicles and loose objects -- in a fixed-step loop with
-   no interpolation:  acc += min(dt, [0x949a18]) / 1000  (0x1a1ef3..0x1a1f2c, acc at 0x949ab4), then
-   while acc >= 1/60: each body's vtbl[0x174](1/60), b2World::Step(0x1c3620, 1/60, 10), each body's
-   vtbl[0x128] (sync), acc -= 1/60.  The step constant is loaded from 0x5f6e98 (1/60) and 0x5f6e9c
-   (-1/60) and pushed as the immediate 0x3c888889 (1/60) at 0x1a1f78 and 0x1a1faa; nothing else
-   uses acc or those constants.  0x1a1f3f also adds the same 1/60 to a game clock once per update.
-   Drawn every other tick, at 60 ticks/s each drawn frame gets two steps.  At any other tick rate
-   (FRAME_MS=13.333 for a 75 Hz panel: 1.6 steps per drawn frame, so 2,2,1,2,1...) cars move
-   unevenly while the screen updates evenly, which is the driving judder.  The whole-ms dt (13/13/14,
-   16/17/17) also lets the accumulator's phase settle near the threshold, giving 0/2-step ticks.
-   This makes the step the pacer period S and runs exactly one step per paced tick: the three loads
-   are re-aimed at host floats, the two immediates rewritten, and the acc update at 0x1a1f24 sends
-   dt to gmv_physsync, which sets acc to 1.5*S for a tick near S (one step, residual S/2) and keeps
-   the game's own catch-up (acc += dt) for a hitch.  At the default 16.667 ms S is exactly 1/60.
-   On by default, off under ORIGINAL_MAC_EXPERIENCE; needs the tick pacer (FRAME_MS > 0).  After a change of the options menu's FRAME
-   RATE, S follows the new rate, or goes back to 1/60 with the game's own acc += dt outside 1.2-40 ms
-   (physics_sync_set). */
-#define PHYS_ACC       0x00949ab4u   /* float physics accumulator (s)                                */
-#define PHYS_ACC_SITE  0x001a1f24u   /* addss xmm0,[esi+0x7a8354]; movss [esi+0x7a8354],xmm0 (16 B)  */
-#define PHYS_ACC_CONT  0x001a1f34u   /* movss xmm1,[esi+0x455738]: load step, compare acc            */
-#define PHYS_PIC_BASE  0x001a1760u   /* esi in 0x1a1752 (call/pop)                                   */
-#define PHYS_STEP_LD1  0x001a1f34u   /* f3 0f 10 8e <disp32> : movss xmm1,[esi+step]                 */
-#define PHYS_NEG_LD    0x001a1ffeu   /* f3 0f 58 86 <disp32> : addss xmm0,[esi+negstep]              */
-#define PHYS_STEP_LD2  0x001a2014u   /* 0f 2e 86 <disp32>    : ucomiss xmm0,[esi+step]               */
-#define PHYS_IMM1      0x001a1f78u   /* c7 44 24 04 <imm32>  : body vtbl[0x174] step argument        */
-#define PHYS_IMM2      0x001a1faau   /* c7 44 24 04 <imm32>  : b2World::Step step argument           */
+/* 0x48bb0 0x129594 */
+#define ROTOR_SITE     0x00048ca9u
+#define ROTOR_FN       0x00129594u
 
 static float g_phys_step, g_phys_negstep;
 int g_phys_on;
+static uint32_t g_phys_frames, g_rotor_frame;
+static float g_rotor_phase, g_rotor_acc = -1.0f;
+static int g_rotor_open = 1;
 
 __attribute__((cdecl, force_align_arg_pointer))
 static void gmv_physsync(float dt)
 {
     float *acc = (float *)(uintptr_t)PHYS_ACC;
     float s = g_phys_step;
+    g_phys_frames++;
     if (g_phys_on && dt > 0.5f * s && dt < 1.5f * s)
         *acc = 1.5f * s;
     else
         *acc += dt;
 }
 
-/* Tyre grip under physics sync.  Each vehicle's vtbl[0x174] step (Car 0xfef68, Moto 0x10500a, Boat
-   0x120f7e) ends by applying two lateral-grip impulses straight to its b2Body (the inlined
-   ApplyImpulse: v += invMass*I at +0x40/+0x44, w += invI*cross(r,I) at +0x48), I = -k*m*v_lat at
-   the front and rear wheels (k = 1.5*0.15, or 0.375*0.15 at the front in the other branch).  Unlike the drive force (b2Body force, integrated by Step) and the
-   damping (scaled by the step argument), these are per step with no dt, so a shorter step grips
-   proportionally harder per second: at FRAME_MS=6.667 (150 steps/s) 2.5x, and the car snaps into
-   turns.  Read as force*(1/60), the impulse for a step S is I*S*60, so each of the four loads of an
-   impulse component (8-byte movss xmmN,[ebp+disp]) is sent through a stub that multiplies the
-   register by S*60 -- the stack slots are left alone, as Moto reuses them after the block.  The skid
-   tests before the block still see the unscaled impulse, which is what keeps them on the original
-   thresholds.  Helicopters have no grip impulses (only a speed cap). */
+__attribute__((cdecl, force_align_arg_pointer))
+static void gmv_rotor_persist(uint32_t heli, uint32_t other, float x, float y, uint32_t shape)
+{
+    float a = *(const float *)(uintptr_t)PHYS_ACC;
+    if (a != g_rotor_acc || g_phys_frames != g_rotor_frame) {
+        g_rotor_acc = a;
+        g_rotor_frame = g_phys_frames;
+        g_rotor_phase += g_phys_on ? g_phys_step * 60.0f : 1.0f;
+        g_rotor_open = g_rotor_phase >= 1.0f;
+        if (g_rotor_open)
+            g_rotor_phase -= floorf(g_rotor_phase);
+    }
+    if (g_rotor_open)
+        ((void (*)(uint32_t, uint32_t, float, float, uint32_t))(uintptr_t)ROTOR_FN)(heli, other, x, y, shape);
+}
+
+/* vtbl[0x174] 0xfef68 0x10500a 0x120f7e +0x40/+0x44 */
 static const uint32_t grip_sites[] = {
-    0x000ffff0u, 0x00100009u, 0x00100080u, 0x00100099u,     /* Car  [ebp-0x9c/-0xa0], [ebp-0xb0/-0xac]   */
-    0x001065e9u, 0x00106602u, 0x00106679u, 0x00106692u,     /* Moto [ebp-0x118/-0x11c], [-0x12c/-0x128] */
-    0x00121cb2u, 0x00121ccbu, 0x00121d32u, 0x00121d4bu,     /* Boat [ebp-0xb8/-0xb4], [ebp-0xac/-0xb0]   */
+    0x000ffff0u, 0x00100009u, 0x00100080u, 0x00100099u,     /* [ebp-0x9c/-0xa0] [ebp-0xb0/-0xac] */
+    0x001065e9u, 0x00106602u, 0x00106679u, 0x00106692u,     /* [ebp-0x118/-0x11c] [-0x12c/-0x128] */
+    0x00121cb2u, 0x00121ccbu, 0x00121d32u, 0x00121d4bu,     /* [ebp-0xb8/-0xb4] [ebp-0xac/-0xb0] */
 };
 static const unsigned char grip_expect[][8] = {
     { 0xf3, 0x0f, 0x10, 0x8d, 0x64, 0xff, 0xff, 0xff }, { 0xf3, 0x0f, 0x10, 0x95, 0x60, 0xff, 0xff, 0xff },
@@ -81,13 +76,8 @@ static const unsigned char grip_expect[][8] = {
 
 static float g_grip_scale;
 
-/* Bike wheelie/stoppie under physics sync.  Moto's step (0x10500a) turns the change of the rider's
-   lean since its last step into a pitch rate for that one step: rate = (lean - last lean) * 50000
-   (0x106d36, the constant at 0x5f3ca8), which the wheel loop then applies as rate * step.  The lean
-   changes by the same amount whatever the step, so the lift is proportional to the step: at
-   FRAME_MS=1.25 (800 steps/s) 1/13 of the Mac's, and the rider leans while the bike stays down.  The
-   multiply is sent through a stub that also multiplies by 1/(S*60), so the lift is the 1/60 step's. */
-#define KICK_SITE 0x00106d36u   /* f3 0f 59 8a <disp32> : mulss xmm1,[edx+0x4eec8d] */
+/* 0x10500a 0x106d36 0x5f3ca8 */
+#define KICK_SITE 0x00106d36u   /* mulss xmm1,[edx+0x4eec8d] */
 static float g_kick_scale = 1.0f;
 
 int kick_tried, grip_tried;
@@ -109,16 +99,13 @@ static void kick_install(void)
         return;
     }
     size_t o = 0;
-    memcpy(st, expect, 8);                                          /* mulss xmm1,[edx+K]        */
+    memcpy(st, expect, 8);                                          /* mulss xmm1,[edx+K] */
     o = 8;
-    st[o++] = 0xf3; st[o++] = 0x0f; st[o++] = 0x59; st[o++] = 0x0d; /* mulss xmm1,[g_kick_scale] */
+    st[o++] = 0xf3; st[o++] = 0x0f; st[o++] = 0x59; st[o++] = 0x0d;
     { uint32_t a = (uint32_t)(uintptr_t)&g_kick_scale; memcpy(st + o, &a, 4); o += 4; }
     emit_jmp(st, &o, KICK_SITE + 8);
     FlushInstructionCache(GetCurrentProcess(), st, o);
-    unsigned char site[8] = { 0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90 };
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)st - (KICK_SITE + 5));
-    memcpy(site + 1, &rel, 4);
-    if (!patch_bytes(KICK_SITE, site, sizeof site))
+    if (!patch_jmp(KICK_SITE, st, 8))
         gmv_log("[gamepatch] write at 0x%08x failed (%lu); wheelies stay weak under physics sync\n", KICK_SITE,
                 GetLastError());
     else
@@ -126,7 +113,6 @@ static void kick_install(void)
                 g_kick_scale);
 }
 
-/* The stubs read g_grip_scale, so once in they follow a new step. */
 static void grip_scale_in(double ms)
 {
     g_grip_scale = (float)(ms * 0.06);
@@ -134,7 +120,7 @@ static void grip_scale_in(double ms)
     if (!(g_kick_scale > 0.999f && g_kick_scale < 1.001f))
         kick_install();
     if (grip_tried || (g_grip_scale > 0.999f && g_grip_scale < 1.001f))
-        return;                                         /* S is 1/60: the impulses are already right */
+        return;
     grip_tried = 1;
     for (size_t i = 0; i < NGRIP; i++)
         if (memcmp((const void *)(uintptr_t)grip_sites[i], grip_expect[i], 8)) {
@@ -150,17 +136,13 @@ static void grip_scale_in(double ms)
     size_t o = 0;
     for (size_t i = 0; i < NGRIP; i++) {
         unsigned char *stub = st + o;
-        memcpy(st + o, grip_expect[i], 8);                              /* movss xmmN,[ebp+disp]   */
+        memcpy(st + o, grip_expect[i], 8);                              /* movss xmmN,[ebp+disp] */
         o += 8;
-        st[o++] = 0xf3; st[o++] = 0x0f; st[o++] = 0x59;                 /* mulss xmmN,[g_grip_scale] */
+        st[o++] = 0xf3; st[o++] = 0x0f; st[o++] = 0x59;
         st[o++] = (unsigned char)((grip_expect[i][3] & 0x38) | 0x05);
         { uint32_t a = (uint32_t)(uintptr_t)&g_grip_scale; memcpy(st + o, &a, 4); o += 4; }
         emit_jmp(st, &o, grip_sites[i] + 8);
-
-        unsigned char site[8] = { 0xe9, 0, 0, 0, 0, 0x90, 0x90, 0x90 };
-        int32_t rel = (int32_t)((uint32_t)(uintptr_t)stub - (grip_sites[i] + 5));
-        memcpy(site + 1, &rel, 4);
-        if (!patch_bytes(grip_sites[i], site, sizeof site)) {
+        if (!patch_jmp(grip_sites[i], stub, 8)) {
             gmv_log("[gamepatch] write at 0x%08x failed (%lu); grip scaling partial\n", grip_sites[i],
                     GetLastError());
             return;
@@ -206,23 +188,18 @@ static int phys_install(double ms)
     g_phys_step = (float)(ms / 1000.0);
     g_phys_negstep = -g_phys_step;
 
-    /* xmm0 = min(dt, cap) / 1000 here; eax/ecx/edx/xmm are reloaded before their next use. */
+    /* xmm0 eax/ecx/edx/xmm */
     size_t o = 0;
-    tr[o++] = 0x83; tr[o++] = 0xec; tr[o++] = 0x04;                     /* sub esp,4               */
+    tr[o++] = 0x83; tr[o++] = 0xec; tr[o++] = 0x04;                     /* sub esp,4 */
     tr[o++] = 0xf3; tr[o++] = 0x0f; tr[o++] = 0x11; tr[o++] = 0x04; tr[o++] = 0x24; /* movss [esp],xmm0 */
-    tr[o++] = 0xb8;                                                     /* mov eax,&gmv_physsync   */
+    tr[o++] = 0xb8;                                                     /* mov eax,&gmv_physsync */
     { uint32_t fnp = (uint32_t)(uintptr_t)&gmv_physsync; memcpy(tr + o, &fnp, 4); o += 4; }
-    tr[o++] = 0xff; tr[o++] = 0xd0;                                     /* call eax                */
-    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x04;                     /* add esp,4               */
-    tr[o++] = 0xf3; tr[o++] = 0x0f; tr[o++] = 0x10; tr[o++] = 0x05;     /* movss xmm0,[PHYS_ACC]   */
+    tr[o++] = 0xff; tr[o++] = 0xd0;                                     /* call eax */
+    tr[o++] = 0x83; tr[o++] = 0xc4; tr[o++] = 0x04;                     /* add esp,4 */
+    tr[o++] = 0xf3; tr[o++] = 0x0f; tr[o++] = 0x10; tr[o++] = 0x05;
     { uint32_t a = PHYS_ACC; memcpy(tr + o, &a, 4); o += 4; }
     emit_jmp(tr, &o, PHYS_ACC_CONT);
     FlushInstructionCache(GetCurrentProcess(), tr, o);
-
-    unsigned char site[16];
-    memset(site, 0x90, sizeof site);
-    site[0] = 0xe9;
-    { int32_t rel = (int32_t)((uint32_t)(uintptr_t)tr - (PHYS_ACC_SITE + 5)); memcpy(site + 1, &rel, 4); }
 
     uint32_t d_step = (uint32_t)(uintptr_t)&g_phys_step - PHYS_PIC_BASE;
     uint32_t d_neg = (uint32_t)(uintptr_t)&g_phys_negstep - PHYS_PIC_BASE;
@@ -233,18 +210,22 @@ static int phys_install(double ms)
         !patch_bytes(PHYS_STEP_LD2 + 3, (const unsigned char *)&d_step, 4) ||
         !patch_bytes(PHYS_IMM1 + 4, (const unsigned char *)&bits, 4) ||
         !patch_bytes(PHYS_IMM2 + 4, (const unsigned char *)&bits, 4) ||
-        !patch_bytes(PHYS_ACC_SITE, site, sizeof site)) {
+        !patch_jmp(PHYS_ACC_SITE, tr, 16)) {
         gmv_log("[gamepatch] write in the physics step loop failed (%lu); physics sync may be partial\n",
                 GetLastError());
         return 0;
     }
     gmv_log("[gamepatch] physics sync installed at 0x%08x (trampoline %p): one Box2D step per tick, "
             "step %.3f ms (%.2f Hz) instead of 1/60 s\n", PHYS_ACC_SITE, (void *)tr, ms, 1000.0 / ms);
+    if (sm_is_call(ROTOR_SITE, ROTOR_FN) && patch_call(ROTOR_SITE, (void *)gmv_rotor_persist))
+        gmv_log("[gamepatch] helicopter rotor contacts at 0x%08x counted at most 60 times a second, as at 1/60 s\n",
+                ROTOR_SITE);
+    else
+        gmv_log("[gamepatch] rotor contact call at 0x%08x not the expected bytes; rotors wear faster above "
+                "60 ticks/s\n", ROTOR_SITE);
     return 1;
 }
 
-/* Physics sync for a tick of ms: installed the first time the pacer runs at 1.2-40 ms, and from
-   then on a step of ms there and the game's own 1/60 s outside it (the options menu's FRAME RATE). */
 int phys_installed;
 
 static int phys_install_undoable(double ms)
@@ -260,7 +241,6 @@ void physics_sync_set(double ms)
 {
     static int failed;
     const char *e = gmv_getenv("GMV_PHYSICS_SYNC");
-    /* Below ~1.2 ms the whole-ms dt is mostly 1 and the 0.5..1.5*S window stops matching it. */
     int want = ms >= 1.2 && ms <= 40.0, on = gmv_env_on(e);
     if (failed || (!on && !phys_installed))
         return;
@@ -276,7 +256,7 @@ void physics_sync_set(double ms)
         }
         return;
     }
-    if (!on)                                    /* off from ORIGINAL_MAC_EXPERIENCE: the game's own step */
+    if (!on)
         want = 0;
     float s = want ? (float)(ms / 1000.0) : 1.0f / 60.0f;
     uint32_t bits;

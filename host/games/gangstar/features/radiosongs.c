@@ -1,28 +1,3 @@
-/* radiosongs.c -- RADIO_SONGS: the radio songs the Mac version does not have, from the player's own add-on
-   folder.  Not on the Mac; off by default and off under ORIGINAL_MAC_EXPERIENCE.
-
-   add-on\radio\ next to the exe holds the iPhone version's own wavs from the player's copy of the game, raised
-   by 3 dB to the Mac's level (tools\radio_gain.py; the same format as the Mac's songs), and the Java version's
-   two rock songs (see rs_songs).  Any of them may be missing.  The folder can instead
-   be packed into one masked file,
-   add-on\radio.pak (tools\uc_crusher_pack.py, gmv_pak_unpack in ucveh.c), which wins when both are there.
-   None of it is ever shipped with the port.
-
-   No code of the game changes.  The game opens a name its pack index knows as the numbered pack file, with
-   the first four bytes obfuscated (+1..+4), and any other name directly as <_packMac>\<name> (0x53c530).  So:
-   - The songs are names the Mac never had: their opens are sent to the add-on folder.
-   - The sound list (file000482.dat: a big-endian count, then {BE length, file name, BE length, id name}) is
-     sent to a copy in cache\radio with the songs appended; their ids start at the old count, so the game's
-     own ids stay as they are.  It goes after the Crusher's sounds when those are in.  The sound manager
-     sizes its tables from the list (0x60ac8) and takes a name holding "m_" for music (0x5f58e).
-   - The station list (file000338.dat: a count, then per station {nA, A[], nB, B[], x}, A the jingles and B
-     the songs, as RadioStation::Read 0x95610 reads it) is sent to a copy with each station's new songs
-     after its own, so that the first nB entries are exactly the Mac's.  Each station's bags are sized from
-     the list as it is read (0x94ef0); om_set_radio_songs (the patches) turns the new songs off and on again
-     by changing the count, and rs_tick keeps the count to the key once the lists are read.
-   With the add-on there, all this happens at every start, whatever the key says, ORIGINAL_MAC_EXPERIENCE too:
-   the songs are then listed but left out of the stations, so that they can come without a new start. */
-
 #include "compat.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -34,15 +9,11 @@
 #include "gangstar.h"
 #include "addon_io.h"
 
-#define RS_RES_PACK  "file000482.dat"       /* ./Res.array: the sound list */
-#define RS_ST_PACK   "file000338.dat"       /* ./RadioStation.gmap */
-#define RS_RES_MAC   1728                   /* the Mac's sound count */
+#define RS_RES_PACK  "file000482.dat"
+#define RS_ST_PACK   "file000338.dat"
+#define RS_RES_MAC   1728
 #define RS_STATIONS  5
 
-/* In the iPhone's order within each station; the Mac has none of them.  The iPhone has its Jerk It for the
-   electro station in no list: it is here at the player's request.  The two java songs are the Java version's
-   rock songs, taken from the player's copy of Gangstar: West Coast Hustle and brought to the Mac's format and
-   level (32 kHz, 1024-byte blocks, about -22 LUFS); they came last, so the ids before stay. */
 static const struct { const char *file; int station; } rs_songs[] = {
     { "m_radio_electro_stompbox.wav",   1 },
     { "m_radio_electro_jerkit.wav",     1 },
@@ -60,19 +31,10 @@ static const struct { const char *file; int station; } rs_songs[] = {
 
 static char rs_dir[MAX_PATH * 2], rs_cache[MAX_PATH * 2];
 static int rs_have[RS_NSONGS], rs_found;
-static int rs_id[RS_NSONGS];                /* each song's sound id, once the list is built */
-static int rs_built;                        /* the station list is built */
+static int rs_id[RS_NSONGS];
+static int rs_built;
 static int rs_mac[RS_STATIONS], rs_all[RS_STATIONS];
 static CRITICAL_SECTION rs_cs;
-
-static const char *base_name(const char *p)
-{
-    const char *b = p;
-    for (; *p; p++)
-        if (*p == '/' || *p == '\\')
-            b = p + 1;
-    return b;
-}
 
 int gmv_rs_on(void)
 {
@@ -80,9 +42,6 @@ int gmv_rs_on(void)
     return gmv_env_on(e);
 }
 
-/* Finds add-on\radio.pak (unpacked to cache\radio\songs) or else the add-on\radio folder next to the exe; 1 if
-   at least one song is there.  Called once, before the game runs, whatever RADIO_SONGS says (so that the songs
-   can come without a new start); says nothing of a missing add-on unless the key asks for it. */
 int gmv_rs_init(void)
 {
     char exe[MAX_PATH], pak[MAX_PATH * 2];
@@ -116,7 +75,6 @@ int gmv_rs_init(void)
     return rs_found > 0;
 }
 
-/* The sound list: the one the game would read (with the Crusher's sounds when those are in) and the songs. */
 static int build_res(const char *path, const char *dst)
 {
     char via[MAX_PATH * 2];
@@ -166,6 +124,7 @@ done:
     return ok;
 }
 
+/* 0x95610 0x60ac8 0x5f58e */
 static int build_stations(const char *path, const char *dst)
 {
     size_t n = 0;
@@ -182,7 +141,6 @@ static int build_stations(const char *path, const char *dst)
         goto done;
     wr32(out, RS_STATIONS);
     for (st = 0; st < RS_STATIONS; st++) {
-        /* A: the jingles, as they are */
         if (o + 4 > n)
             goto bad;
         uint32_t na = rd32(d + o);
@@ -190,7 +148,6 @@ static int build_stations(const char *path, const char *dst)
             goto bad;
         memcpy(out + q, d + o, 4 + na * 4);
         o += 4 + na * 4, q += 4 + na * 4;
-        /* B: the songs, the new ones after the Mac's */
         if (o + 4 > n)
             goto bad;
         uint32_t nb = rd32(d + o);
@@ -207,11 +164,10 @@ static int build_stations(const char *path, const char *dst)
             }
         wr32(out + at, nb);
         rs_all[st] = (int)nb;
-        /* x */
         memcpy(out + q, d + o, 4);
         o += 4, q += 4;
     }
-    if (n - o > 3)                              /* (the file ends in two spare bytes, which nothing reads) */
+    if (n - o > 3)
         goto bad;
     memcpy(out + q, d + o, n - o);
     q += n - o;
@@ -232,7 +188,6 @@ done:
     return ok;
 }
 
-/* The sound list built once, from its place beside `path`, a file in the pack; 1 if it is there. */
 static int res_ready(const char *path, char *dst, size_t n)
 {
     static int built, good;
@@ -246,7 +201,7 @@ static int res_ready(const char *path, char *dst, size_t n)
     return good;
 }
 
-/* Called by the fopen shim for every open: the path to open instead, written to buf, or NULL. */
+/* 0x53c530 */
 const char *gmv_rs_redirect(const char *path, char *buf, size_t n)
 {
     if (!rs_found || !path || !strstr(path, "_packMac"))
@@ -281,13 +236,11 @@ const char *gmv_rs_redirect(const char *path, char *buf, size_t n)
     return ok ? buf : NULL;
 }
 
-/* Whether the add-on was there at the start. */
 int gmv_rs_have(void)
 {
     return rs_found > 0;
 }
 
-/* Station st's songs with and without the add-on; 0 if the station list has no new songs in. */
 int gmv_rs_counts(int st, int *mac, int *all)
 {
     if (!rs_built || st < 0 || st >= RS_STATIONS)
@@ -297,7 +250,6 @@ int gmv_rs_counts(int st, int *mac, int *all)
     return 1;
 }
 
-/* Whether a sound id is one of the new songs. */
 int gmv_rs_is_song(int id)
 {
     for (int i = 0; i < RS_NSONGS; i++)

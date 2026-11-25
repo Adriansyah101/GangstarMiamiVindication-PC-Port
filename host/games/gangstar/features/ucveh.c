@@ -1,49 +1,3 @@
-/* ucveh.c -- UC_CRUSHER: the Crusher monster truck of Urban Crime (Gameloft's freemium Gangstar Miami),
-   from the player's own add-on folder.  Not on the Mac; off by default and off under
-   ORIGINAL_MAC_EXPERIENCE.
-
-   add-on\crusher\ next to the exe holds Urban Crime's own files, copied unchanged from the player's copy
-   of the game: the models (car_monster.bdae, _lo), the door animations, the ten engine sounds the truck
-   uses and Urban Crime's metatypes.gmap (the truck's entry is read from it), and optionally its exhaust
-   smoke p_smoke_02.bdae (see the patches); plus its two textures, which
-   tools\uc_crusher_tex.py converts from the iPhone's PVRTC to the DXT5 DDS the Mac reads.  The folder
-   can instead be packed into one masked file, add-on\crusher.pak (tools\uc_crusher_pack.py; see
-   uc_unpack), which wins when both are there.  None of it is ever shipped with the port.
-
-   The game opens a name its pack index knows as the numbered pack file, with the first four bytes
-   obfuscated (+1..+4), and any other name directly as <_packMac>\<name> (0x53c530).  So:
-   - The truck's own files are names the Mac never had: their opens are sent to the add-on folder.
-   - The cab's texture, car_update_interior_d.tga, is named by both models but is in neither game's pack,
-     so its material would take the engine's "texture not found" stand-in, plain pink (0x50efd0 on the Mac,
-     getPlaceHolder in Urban Crime, same colour).  Its open is sent to a copy of the Mac's own
-     car_interior_d.tga in cache\uc (build_interior), whose dashboard the truck's dashboard fits.
-   - The type list (metatypes.gmap = file001674.dat: a count, then each type as {u32 size, bytes}) is
-     sent to a copy in cache\uc with the Crusher's entry in type 100, an empty slot (class -1, no name:
-     nothing is ever made of it and the name lookup 0x225f2 skips it).  It cannot be appended as type 255:
-     the type is a byte at object +0x24 and 255 (0xff) is the game's "no type", which the level's objects
-     with names no type matches carry; they would take the truck's category and entry.  Its entry is Urban
-     Crime's, a tuned Pickup; the fields the two games number differently (the name's text id, an id list
-     and one flag) are taken from the Mac's Pickup, which they equal in Urban Crime.  Its enter animation
-     set (13) becomes 44, or the Pickup's 12 (see the animations below).  Its engine sound set 13
-     is handled in the patches (the Mac's switch stops at 12).
-   - The sound list (file000482.dat: a big-endian count, then {BE length, file name, BE length, id name})
-     gets the ten monster sounds appended; their ids start at the old count.
-   - The monster-truck enter and exit animations (optional: Urban Crime's anim_ingame.bdae,
-     anim_ingame.cst.desc.gmap and AnimationSets.gmap in the add-on).  Every person's animations come from
-     one bank, anim_ingame.bdae (file003085.dat, loaded as bank 0 by 0x7cc20), so the truck's 14 clips are
-     added to the Mac's bank (merge_bank): Urban Crime's own bank cannot be loaded whole, since Urban Crime
-     timed and keyed every other animation anew and people would move as in Urban Crime.  The truck's clips
-     go in at clip 209, where Urban Crime has them, and their key data is appended past the Mac's.  The descriptor list
-     (file002894.dat: a count, then 21 bytes per animation: its clip, flags) is rebuilt so that each of the
-     Mac's animation numbers names the same clip in Urban Crime's bank, the truck's 14 coming after as
-     388..401; Urban Crime's list equals the Mac's but for that.  The animation sets (file000899.dat: a
-     count, then 172 animation numbers per set, -3 = "keep"; a character takes its own set and then its
-     vehicle's) get Urban Crime's monster-truck set (its 13) as set 44.  Urban Crime's sets hold two more
-     numbers (33 and 34, which only its own code reads); without them its other 44 sets equal the Mac's,
-     which is checked.  The truck's clips take the motion kind of the Pickup's clip in the same set entry
-     (Urban Crime's jump-off clip had the getting-out kind).  The Crusher then enters with set 44; without
-     these files, with the Pickup's. */
-
 #include "compat.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -55,26 +9,26 @@
 #include "gangstar.h"
 #include "addon_io.h"
 
-#define UC_META_PACK  "file001674.dat"      /* ./metatypes.gmap */
-#define UC_RES_PACK   "file000482.dat"      /* the sound list */
-#define UC_META_MAC   255                   /* the Mac's type count */
-#define UC_SLOT       100                   /* the Mac's empty type (class -1, no name): the Crusher's */
-#define UC_RES_MAC    1728                  /* the Mac's sound count */
-#define UC_BANK_PACK  "file003085.dat"      /* anim_ingame.bdae */
-#define UC_DESC_PACK  "file002894.dat"      /* ./anim_ingame.cst.desc.gmap */
-#define UC_SETS_PACK  "file000899.dat"      /* ./AnimationSets.gmap */
-#define UC_INT_PACK   "file002229.dat"      /* car_interior_d.tga (file002860.dat holds the same bytes) */
+#define UC_META_PACK  "file001674.dat"
+#define UC_RES_PACK   "file000482.dat"
+#define UC_META_MAC   255
+#define UC_SLOT       100
+#define UC_RES_MAC    1728
+#define UC_BANK_PACK  "file003085.dat"
+#define UC_DESC_PACK  "file002894.dat"
+#define UC_SETS_PACK  "file000899.dat"
+#define UC_INT_PACK   "file002229.dat"
 #define UC_INT_NAME   "car_update_interior_d.tga"
-#define UC_DESC_MAC   388                   /* the Mac's animations */
+#define UC_DESC_MAC   388
 #define UC_DESC_SZ    21
-#define UC_MT_AT      219                   /* Urban Crime's first monster-truck animation */
+#define UC_MT_AT      219
 #define UC_MT_N       14
 #define UC_SETS_MAC   44
-#define UC_SLOTS      172                   /* animation numbers per set: the Mac's */
-#define UC_SLOTS_UC   174                   /* Urban Crime's */
-#define UC_EXTRA      33                    /* Urban Crime's two extra numbers, 33 and 34 */
-#define UC_MT_SET     13                    /* Urban Crime's monster-truck set */
-#define UC_PICKUP_SET 12                    /* the Mac's Pickup's set, laid out as the truck's */
+#define UC_SLOTS      172
+#define UC_SLOTS_UC   174
+#define UC_EXTRA      33
+#define UC_MT_SET     13
+#define UC_PICKUP_SET 12
 
 static const char *const uc_anim_files[] = { "anim_ingame.bdae", "anim_ingame.cst.desc.gmap", "AnimationSets.gmap" };
 static const char *const uc_anim_packs[] = { UC_BANK_PACK, UC_DESC_PACK, UC_SETS_PACK };
@@ -87,14 +41,13 @@ static const char *const uc_files[] = {
     "sfx_monster_onverylow.wav", "sfx_monster_startup.wav",
 };
 #define UC_NFILES (sizeof uc_files / sizeof *uc_files)
-#define UC_NSOUNDS 10                       /* the last ten above, in Urban Crime's id order 0x118.. */
+#define UC_NSOUNDS 10                       /* 0x118 */
 
-/* Files the truck does without: its exhaust smoke (the patches, uc_smoke_*). */
 static const char *const uc_opt_files[] = { "p_smoke_02.bdae" };
 #define UC_NOPT (sizeof uc_opt_files / sizeof *uc_opt_files)
 
 static char uc_dir[MAX_PATH * 2], uc_cache[MAX_PATH * 2];
-static int uc_ready;                        /* add-on found and complete */
+static int uc_ready;
 static int uc_opt_have[UC_NOPT];
 static volatile LONG uc_type = -1, uc_res_base = -1, uc_pick = -1;
 static CRITICAL_SECTION uc_cs;
@@ -105,11 +58,6 @@ int gmv_uc_on(void)
     return gmv_env_on(e);
 }
 
-/* add-on\crusher.pak, add-on\radio.pak (radiosongs.c): an add-on folder's files in one file, masked so that
-   neither names nor contents read as they are (tools\uc_crusher_pack.py makes and unpacks it).  "GMVP", u32
-   version 1, then every byte from offset 8 on xored with uc_mask(offset): u32 count, u32 FNV-1a of the files'
-   bytes, count x {u8 name length, name, u32 size}, then the files' bytes in that order.  It is unpacked to
-   its folder in cache when its stamp (size and FNV) differs from the one there. */
 #define UC_PAK_VER 1
 
 static unsigned char uc_mask(uint32_t pos)
@@ -129,7 +77,6 @@ static uint32_t fnv1a(const unsigned char *d, size_t n)
     return h;
 }
 
-/* Unpacked before: the pack's size and checksum are the stamp's, so it need not be read whole. */
 static int pak_same(const char *pak, const char *stamp)
 {
     unsigned char h[16];
@@ -154,7 +101,6 @@ static int pak_same(const char *pak, const char *stamp)
     return !strcmp(have, want);
 }
 
-/* Unpacks pak into dir; 1 if it is a whole, readable pack or was unpacked before.  tag: for the log. */
 int gmv_pak_unpack(const char *pak, const char *dir, const char *tag)
 {
     char stamp[MAX_PATH * 3], want[64], have[64] = "";
@@ -172,7 +118,7 @@ int gmv_pak_unpack(const char *pak, const char *dir, const char *tag)
         d[i] ^= uc_mask((uint32_t)i);
     uint32_t cnt = rd32(d + 8), sum = rd32(d + 12);
     size_t o = 16, data = 0;
-    for (uint32_t k = 0; k < cnt; k++) {               /* the index must fit, the files fill the rest exactly */
+    for (uint32_t k = 0; k < cnt; k++) {
         if (o >= n || o + 1 + d[o] + 4 > n)
             break;
         data += rd32(d + o + 1 + d[o]);
@@ -193,7 +139,7 @@ int gmv_pak_unpack(const char *pak, const char *dir, const char *tag)
         fclose(f);
     }
     if (!strcmp(have, want))
-        goto done;                                     /* unpacked before; ok stays 1 */
+        goto done;
     CreateDirectoryA(dir, NULL);
     DeleteFileA(stamp);
     size_t ix = 16, at = o;
@@ -225,9 +171,6 @@ done:
     return ok;
 }
 
-/* Finds add-on\crusher.pak (unpacked to cache\uc\crusher) or else the add-on\crusher folder next to the
-   exe; 1 if every file is there.  Called once, before the game runs, whatever UC_CRUSHER says (so that the
-   truck can come without a new start); says nothing of a missing add-on unless the key asks for it. */
 int gmv_uc_init(void)
 {
     char exe[MAX_PATH], pak[MAX_PATH * 2];
@@ -275,11 +218,10 @@ int gmv_uc_init(void)
 
 int gmv_uc_type(void) { return (int)uc_type; }
 int gmv_uc_res_base(void) { return (int)uc_res_base; }
-int gmv_uc_pick_type(void) { return (int)uc_pick; }    /* the Mac Pickup's type */
+int gmv_uc_pick_type(void) { return (int)uc_pick; }
 int gmv_uc_has_smoke(void) { return uc_ready && uc_opt_have[0]; }
 
-/* The fields of a vehicle entry (Structs::Vehicle::Read 0x2357a) as offsets into its body (after the
-   size word); 0 if the body does not parse to its exact end. */
+/* Structs::Vehicle::Read 0x2357a */
 typedef struct { size_t b14, v44, v54, arr, vbc; uint32_t narr; } vfields;
 
 static int vwalk(const unsigned char *e, size_t n, vfields *f)
@@ -291,29 +233,28 @@ static int vwalk(const unsigned char *e, size_t n, vfields *f)
     if (rd32(e) != 3)
         return 0;
     o = 4;
-    STR();                                   /* name */
-    NEED(16); f->b14 = o + 12; o += 16;      /* b8 bc b10 b14 */
-    STR(); STR();                            /* model, +0x1c */
-    NEED(32); o += 32;                       /* b20..b3c */
-    NEED(4); o += 4;                         /* v40 */
-    f->v44 = o; NEED(16); o += 16;           /* v44 v48 v4c v50 */
-    f->v54 = o; NEED(16); o += 16;           /* v54 v58 v5c v60 */
+    STR();
+    NEED(16); f->b14 = o + 12; o += 16;
+    STR(); STR();                            /* +0x1c */
+    NEED(32); o += 32;
+    NEED(4); o += 4;
+    f->v44 = o; NEED(16); o += 16;
+    f->v54 = o; NEED(16); o += 16;
     NEED(4); f->narr = rd32(e + o); o += 4;
     if (f->narr > 64) return 0;
     f->arr = o; NEED(4 * f->narr); o += 4 * f->narr;
-    NEED(32); o += 32;                       /* v6c..v88 */
-    STR();                                   /* the left door */
-    NEED(9); o += 9;                         /* v90 v94, v98 (a byte) */
-    NEED(28); o += 28;                       /* v9c..vb4 */
-    STR();                                   /* the right door */
+    NEED(32); o += 32;
+    STR();
+    NEED(9); o += 9;
+    NEED(28); o += 28;
+    STR();
     f->vbc = o; NEED(4); o += 4;
-    NEED(44); o += 44;                       /* vc0..vdc floats, ve0 ve4 ve8 */
+    NEED(44); o += 44;
 #undef STR
 #undef NEED
     return o == n;
 }
 
-/* The body of the class-3 entry called `name` in a type list (count, then {u32 size, body}). */
 static const unsigned char *find_vehicle(const unsigned char *d, size_t n, const char *name, size_t *len,
                                          int *type)
 {
@@ -334,23 +275,14 @@ static const unsigned char *find_vehicle(const unsigned char *d, size_t n, const
     return NULL;
 }
 
-/* Urban Crime's animation number for the Mac's `v` (an entry of a set past its first, which is the set's id). */
 static int32_t uc_anim_of(int32_t v) { return v >= UC_MT_AT ? v + UC_MT_N : v; }
 
-/* The Mac's number for Urban Crime's `v`: its own if the Mac has it, 388.. for the truck's. */
 static int32_t mac_anim_of(int32_t v)
 {
     return v < UC_MT_AT ? v : v < UC_MT_AT + UC_MT_N ? UC_DESC_MAC + (v - UC_MT_AT) : v - UC_MT_N;
 }
 
-/* --- The bank (BRES).  Header: +0x0c file size, +0x10 the number of pointer slots, listed from 0x3c on (each
-   holds a file offset the loader turns into an address), +0x1c the strings ({u32 length, chars, 0}, 4-aligned),
-   +0x20 the root, +0x28 where the key data starts, +0x38 its size.  Root: +0x20 the timeline's length (ms),
-   +0x24/+0x28 the channels (24 bones, 0x20 each: name first), +0x30 the segment table, +0x34/+0x38 the clips
-   (12 bytes: name, start ms, end ms; all clips lie on one timeline, sorted by name).  Segment table: count,
-   pointer, then 0x18 per segment: start ms, end ms, 0, file offset (absolute, not a pointer slot), size, 0.
-   A segment's data stands alone: a count (2 per channel), then {count, offset from that word} per array; the
-   even arrays are the key times as u16 frames at 30 per second, absolute on the timeline. */
+/* BRES +0x0c +0x10 0x3c +0x1c +0x20 +0x28 +0x38 */
 
 static int memmem_s(const char *s, uint32_t n, const char *w)
 {
@@ -364,11 +296,10 @@ static int memmem_s(const char *s, uint32_t n, const char *w)
 typedef struct {
     unsigned char *d;
     size_t n;
-    uint32_t *slot, nslot;                   /* pointer slots */
-    uint32_t *seg, nseg;                     /* segment entries: their offsets (+12) move by hand */
+    uint32_t *slot, nslot;
+    uint32_t *seg, nseg;
 } bres_t;
 
-/* Inserts `len` bytes (zeros, or `src`) at `pos`, moving every offset at or past it.  The buffer has room. */
 static void bres_insert(bres_t *b, uint32_t pos, const void *src, uint32_t len)
 {
     for (uint32_t i = 0; i < b->nslot; i++) {
@@ -420,7 +351,6 @@ static int bres_parse(const unsigned char *d, size_t n, bres_info *i)
 #undef INB
 }
 
-/* The string a pointer slot's value names (its length precedes it); NULL if out of bounds. */
 static const char *bres_str(const unsigned char *d, size_t n, uint32_t p, uint32_t *len)
 {
     if (p < 4 || p > n || (*len = rd32(d + p - 4)) > n - p)
@@ -435,7 +365,6 @@ static int bres_same_str(const unsigned char *a, size_t an, uint32_t pa, const u
     return sa && sb && la == lb && !memcmp(sa, sb, la);
 }
 
-/* Checks a segment's arrays (2 per channel; the even ones u16 key times) and moves its times by `frames`. */
 static int seg_shift(unsigned char *s, uint32_t size, uint32_t nch, uint32_t frames, int write)
 {
     if (size < 4 || rd32(s) != 2 * nch || 4 + 16ull * nch > size)
@@ -459,10 +388,6 @@ static int seg_shift(unsigned char *s, uint32_t size, uint32_t nch, uint32_t fra
     return 1;
 }
 
-/* The Mac's bank with Urban Crime's 14 monster-truck clips added: their clips go in at `at` (Urban Crime's
-   place for them, so its descriptors' clip numbers hold), their key data (the segments of Urban Crime's
-   timeline that cover them) is appended past the Mac's timeline with its times moved; everything of the
-   Mac's stays as it is.  NULL if the two banks are not as known. */
 static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsigned char *u, size_t un, uint32_t at,
                                  size_t *on)
 {
@@ -503,7 +428,6 @@ static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsign
     uint32_t mend = rd32(mlast + 4);
     if (!ncp || ncp > 64 || rd32(ufirst) > mend)
         return NULL;
-    /* Frames to move by: past the Mac's end with a second to spare, a multiple of 3 (a whole number of ms). */
     uint32_t frames = (uint32_t)(((uint64_t)(mend + 1000 - rd32(ufirst)) * 3 + 99) / 100);
     frames += (3 - frames % 3) % 3;
     uint32_t off_ms = frames / 3 * 100;
@@ -531,7 +455,6 @@ static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsign
         b.seg[k] = M.seg0 + 0x18 * k;
     b.nseg = M.nseg;
 
-    /* The clips, at `at`; their name slots listed after the one of the clip before them, as Urban Crime does. */
     uint32_t cpos = M.clips + 12 * at, before = 0xffffffffu;
     for (uint32_t k = 0; k < b.nslot; k++)
         if (b.slot[k] == cpos - 12)
@@ -550,7 +473,6 @@ static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsign
     uint32_t root = rd32(b.d + 0x20);
     wr32(b.d + root + 0x34, M.nclip + UC_MT_N);
 
-    /* The segments, after the Mac's (their data offsets are set when the data is appended). */
     uint32_t segs = rd32(b.d + root + 0x30), spos = rd32(b.d + segs + 4) + 0x18 * M.nseg;
     bres_insert(&b, spos, NULL, 0x18 * ncp);
     for (uint32_t k = 0; k < ncp; k++) {
@@ -560,9 +482,8 @@ static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsign
         b.seg[b.nseg++] = spos + 0x18 * k;
     }
     wr32(b.d + segs, M.nseg + ncp);
-    wr32(b.d + b.seg[M.nseg - 1] + 4, rd32(ufirst) + off_ms);     /* the Mac's last segment reaches the first new one */
+    wr32(b.d + b.seg[M.nseg - 1] + 4, rd32(ufirst) + off_ms);
 
-    /* The names, at the end of the strings (just before the root). */
     unsigned char *sb = calloc(1, slen + 4);
     if (!sb)
         goto fail;
@@ -582,13 +503,11 @@ static unsigned char *merge_bank(const unsigned char *m, size_t mn, const unsign
     root = rd32(b.d + 0x20);
     wr32(b.d + root + 0x20, rd32(ufirst + 0x18 * (ncp - 1) + 4) + off_ms);
 
-    /* The slot list grows by the 14 names. */
     bres_insert(&b, 0x3c + 4 * nslot, NULL, 4 * UC_MT_N);
     for (uint32_t k = 0; k < b.nslot; k++)
         wr32(b.d + 0x3c + 4 * k, b.slot[k]);
     wr32(b.d + 0x10, b.nslot);
 
-    /* The key data, appended. */
     for (uint32_t k = 0; k < ncp; k++) {
         const unsigned char *s = ufirst + 0x18 * k;
         memcpy(b.d + b.n, u + rd32(s + 12), rd32(s + 16));
@@ -608,11 +527,9 @@ fail:
     return NULL;
 }
 
-/* Builds the bank, descriptor list and sets in cache\uc from the Mac's pack (the folder of `any`, a file in
-   it) and the add-on; 1 if all three are written.  Run once. */
 static int build_anims(const char *any)
 {
-    static int state;                        /* 0 not tried, 1 built, -1 left out */
+    static int state;
     if (state)
         return state > 0;
     state = -1;
@@ -624,7 +541,6 @@ static int build_anims(const char *any)
     if (!sl)
         return 0;
     *sl = 0;
-    /* [0] the bank, [1] the descriptors, [2] the sets: d Urban Crime's, m the Mac's. */
     unsigned char *d[3] = { 0 }, *m[3] = { 0 }, *out[3] = { 0 };
     size_t dn[3] = { 0 }, mn[3] = { 0 }, on[3] = { 0 };
     int ok = 0;
@@ -652,7 +568,6 @@ static int build_anims(const char *any)
         gmv_log("[crusher] the animation files are not the Mac's and Urban Crime's as known; the Crusher enters as the Pickup does\n");
         goto done;
     }
-    /* Descriptors: Urban Crime's for each of the Mac's numbers must be the Mac's, its clip moved past the truck's. */
     const unsigned char *md = m[1] + 4, *ud = d[1] + 4;
     int32_t mt_clip = (int32_t)rd32(ud + UC_MT_AT * UC_DESC_SZ);
     for (int i = 0; i < UC_DESC_MAC; i++) {
@@ -663,7 +578,6 @@ static int build_anims(const char *any)
             goto done;
         }
     }
-    /* Sets: Urban Crime's other 44, without its two extra numbers, must be the Mac's. */
     for (int k = 0; k < UC_SETS_MAC; k++) {
         const unsigned char *a = m[2] + 4 + k * set_mac, *b = d[2] + 4 + (k < UC_MT_SET ? k : k + 1) * set_uc;
         for (int s = 0, t = 0; s < UC_SLOTS; s++, t++) {
@@ -695,10 +609,6 @@ static int build_anims(const char *any)
         int32_t v = (int32_t)rd32(b + 4 * t);
         wr32(e + 4 * s, (uint32_t)(s && v >= 0 ? mac_anim_of(v) : v));
     }
-    /* A descriptor's motion kind (+9) says how the clip moves the person: 6 held at the vehicle (getting
-       in or out), 7 free, 8 thrown out, 9 jumping off a moving vehicle.  Urban Crime gave the truck's
-       jump-off clip 6, so the person leapt in the picture while the game kept them (and their shadow)
-       at the truck.  Each truck clip takes the kind of the Pickup's clip in the same set entry. */
     const unsigned char *pk = m[2] + 4 + UC_PICKUP_SET * set_mac;
     int kinds = 0;
     for (int s = 1; s < UC_SLOTS; s++) {
@@ -761,7 +671,7 @@ static int build_metatypes(const char *src, const char *dst)
     if (rd32(crusher + fc.v54) != rd32(upick + fu.v54) || rd32(crusher + fc.b14) != rd32(upick + fu.b14) ||
         memcmp(crusher + fc.arr, upick + fu.arr, 4 * fc.narr))
         gmv_log("[crusher] note: the Crusher's numbered fields differ from Urban Crime's Pickup; the Mac Pickup's are used\n");
-    size_t so = 4;                                       /* the free slot: its offset, size word first */
+    size_t so = 4;
     for (uint32_t k = 0; k < UC_SLOT && so + 4 <= mn; k++)
         so += 4 + rd32(m + so);
     if (so + 8 > mn || rd32(m + so) != 4 || rd32(m + so + 4) != 0xffffffffu) {
@@ -775,7 +685,7 @@ static int build_metatypes(const char *src, const char *dst)
     memcpy(e, crusher, cn);
     memcpy(e + cn, m + so + 8, mn - so - 8);
     wr32(e + fc.b14, rd32(mpick + fm.b14));
-    wr32(e + fc.v54, rd32(mpick + fm.v54));              /* the name shown: the Pickup's, as in Urban Crime */
+    wr32(e + fc.v54, rd32(mpick + fm.v54));
     memcpy(e + fc.arr, mpick + fm.arr, 4 * fm.narr);
     uint32_t anims = build_anims(src) ? UC_SETS_MAC : rd32(mpick + fm.v44);
     gmv_trace("[crusher] type %u: enter animations %u -> %u (%s), engine sounds %u\n", UC_SLOT, rd32(e + fc.v44),
@@ -833,17 +743,6 @@ done:
     return ok;
 }
 
-static const char *base_name(const char *p)
-{
-    const char *b = p;
-    for (; *p; p++)
-        if (*p == '/' || *p == '\\')
-            b = p + 1;
-    return b;
-}
-
-/* Writes the cab's texture to `out`: the Mac's interior texture from the pack beside `path`, without the
-   pack's hidden first four bytes, since a name the pack does not know is opened as a plain file. */
 static int build_interior(const char *path, const char *out)
 {
     char src[MAX_PATH * 2];
@@ -863,7 +762,7 @@ static int build_interior(const char *path, const char *out)
     return ok;
 }
 
-/* Called by the fopen shim for every open: the path to open instead, written to buf, or NULL. */
+/* 0x53c530 0x50efd0 0x225f2 +0x24 */
 const char *gmv_uc_redirect(const char *path, char *buf, size_t n)
 {
     if (!uc_ready || !path || !strstr(path, "_packMac"))

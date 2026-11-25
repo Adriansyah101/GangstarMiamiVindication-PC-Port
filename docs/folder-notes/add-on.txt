@@ -14,8 +14,9 @@ Never share a .pak: it contains the game's files.
 
 To use one:
   1. Put the .pak in this folder, under exactly that name.
-  2. Start the game. Both are on by default; OPTIONS, GAMEPATCH, FIXES in the game, or
-     savegame\GangstarMV.ini, turns one off.
+  2. Start the game. Both are on by default. RESTORED ADD-ON CONTENT under OPTIONS, GAMEPATCH,
+     FIXES in the game turns both off; UC_CRUSHER or RADIO_SONGS in savegame\GangstarMV.ini
+     turns one off.
 
 To make one, you need Python 3 and the source folder of this release:
   tools\uc_crusher_pack.py   packs a folder of the files into a .pak

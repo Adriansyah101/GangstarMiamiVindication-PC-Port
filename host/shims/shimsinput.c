@@ -1,12 +1,3 @@
-/* shimsinput.c -- the game's keyboard and mouse, from SDL3's events.
-
-   The game takes QUIT/keyboard through SDL events (joysticks it polls, shimsjoy.c), but MOUSE/TOUCH through Cocoa: its
-   EAGLView (an NSView subclass) implements -mouseDown:/-mouseUp:/-mouseDragged:/-mouseMoved:,
-   which Cocoa would invoke with an NSEvent.  There is no Cocoa event loop here, so we synthesise
-   them: SDL_PumpEvents (which the game calls every frame) pumps SDL's events and then forwards the
-   activity to the EAGLView via objc_msgSend, passing a fake NSEvent whose -locationInWindow returns the
-   point in Cocoa window coordinates (origin bottom-left, so SDL's y is flipped). */
-
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -20,50 +11,30 @@
 
 typedef void *(*msg_t)(void *self, const char *sel, ...);
 
-extern void *gmv_objc_last_eaglview;            /* shimsobjc.c */
-extern void *gmv_objc_last_gamewindow;          /* shimsobjc.c */
-extern void *gmv_objc_last_gamedelegate;        /* shimsobjc.c */
+extern void *gmv_objc_last_eaglview;
+extern void *gmv_objc_last_gamewindow;
+extern void *gmv_objc_last_gamedelegate;
 
-/* A game's state trace sets it when a screen waiting for a tap is on top; gmv_input_pump injects a centre tap
-   there (GMV_CLICK_S3) so timing never matters. */
 int gmv_input_wants_tap;
 
-/* CUTSCENE_KEYS: the keys whose press a cutscene took (their release is kept from the game too). */
 static unsigned char g_cs_keys[SDL_SCANCODE_COUNT];
-static int g_alt_enter;                 /* Alt+Enter pressed: switch full screen at the next pump */
+static int g_alt_enter;
 
-static int g_client_w = 1024, g_client_h = 768; /* for the Y flip + auto-click centre */
-static int g_key_pending;                       /* +1 = became key, -1 = resigned, 0 = nothing */
-static int g_key_inited;                         /* forced the initial "became key" once */
+static int g_client_w = 1024, g_client_h = 768;
+static int g_key_pending;
+static int g_key_inited;
 
-/* A small ring of pending mouse actions, drained in gmv_input_pump.
-   kind: 1=Ldown 2=Lup 3=move/Ldrag 4=Rdown 5=Rup 6=Rdrag 8=scroll (d = scroll deltaY). */
 struct minput { int kind; float x, y, d; };
 #define MAXIN 128
 static struct minput g_q[MAXIN];
 static int g_head, g_tail;
-static int g_button_down;                        /* left button held  */
+static int g_button_down;
 
-/* Mouse-look (the camera control) -- hands-free, like a normal PC game.  The Mac build turns the
-   camera from the RELATIVE mouse motion: the per-frame engine input poll (low 0x3f4a) calls
-   CGGetLastMouseDelta(&dx,&dy) EVERY frame and drives the camera from that delta.  (The EAGLView
-   -mouseMoved: path feeds a SEPARATE touch/pointer queue at 0x59b700 -- the menu's on-screen pointer
-   -- NOT the camera.)
+/* 0x3f4a CGGetLastMouseDelta 0x59b700 */
+static int   g_look_dx, g_look_dy;
+static int   g_game_cursor_hidden;
+static int   g_focus;
 
-   The game hides the OS cursor once at startup and keeps it hidden the whole session (it draws its
-   own pointer), so cursor visibility does NOT distinguish gameplay from menu.  The game's own pointer
-   does (gmv_game_pointer_shown): while it shows, the mouse works as a normal one, with the system's
-   speed; while it does not, the mouse is in SDL's relative mode, whose deltas are independent of the
-   cursor position (even past the screen edge).  The motion goes to the engine in both, and SDL keeps
-   a position in relative mode too, so a click always has a place.  While focused the cursor stays
-   inside the picture, so clicks land in-game and the menu pointer never sticks at an edge; SDL lets it
-   go when the window loses the focus. */
-static int   g_look_dx, g_look_dy;   /* accumulated relative look delta (CG convention, y down) */
-static int   g_game_cursor_hidden;   /* the game's cursor-visibility intent (NSCursor hide/unhide) */
-static int   g_focus;                /* our window is the active/focused window */
-
-/* Confine the OS cursor to the game's picture in the window.  The picture is the whole client area, or
-   the scaled picture between the black bars (gmv_gl_view_rect). */
 static void look_clip(void)
 {
     SDL_Window *w = gmv_gl_window();
@@ -74,10 +45,6 @@ static void look_clip(void)
     SDL_SetWindowMouseRect(w, &r);
 }
 
-/* The game's cursor-visibility intent, set from the NSCursor hide/unhide shims (shimsfnd.c) and the
-   CGDisplayHide/ShowCursor shims.  Tracked so CGCursorIsVisible can report it truthfully (which
-   -[EAGLView hideCursore:] branches on); it does NOT gate the camera (the game keeps it hidden all
-   session, so it is not a gameplay/menu signal). */
 void gmv_input_set_cursor_hidden(int hidden)
 {
     hidden = hidden ? 1 : 0;
@@ -94,10 +61,9 @@ int gmv_input_is_cursor_hidden(void)
     return g_game_cursor_hidden;
 }
 
-/* Accumulate one relative mouse motion sample as camera look delta. */
 static void look_add_raw(int dx, int dy)
 {
-    g_look_dx += dx;         /* CG screen convention: y DOWN, same as SDL's, so no flip */
+    g_look_dx += dx;
     g_look_dy += dy;
     static int tr = -1;
     if (tr < 0) { const char *e = gmv_dbgenv("GMV_INPUT_TRACE"); tr = (gmv_env_on(e)) ? 1 : 0; }
@@ -105,8 +71,6 @@ static void look_add_raw(int dx, int dy)
         gmv_log("[input] raw look delta=(%d,%d) accum=(%d,%d)\n", dx, dy, g_look_dx, g_look_dy); }
 }
 
-/* Consumed by shimscg.c's CGGetLastMouseDelta: the relative mouse motion since the last call.
-   Called on the game/main thread -- the same thread that pumps the events -- so no locking needed. */
 void gmv_input_take_mouse_delta(int *dx, int *dy)
 {
     if (dx) *dx = g_look_dx;
@@ -114,8 +78,8 @@ void gmv_input_take_mouse_delta(int *dx, int *dy)
     g_look_dx = g_look_dy = 0;
 }
 
-static float g_ptr_x = 512.0f, g_ptr_y = 384.0f; /* the pointer's last place, game view units (PAD_MENU) */
-static int g_pad_moved;                         /* the pad moved the pointer last, not the mouse */
+static float g_ptr_x = 512.0f, g_ptr_y = 384.0f;
+static int g_pad_moved;
 
 static void q_push(int kind, float x, float y)
 {
@@ -125,7 +89,7 @@ static void q_push(int kind, float x, float y)
         g_ptr_y = y;
     }
     if (n == g_tail)
-        return;                                 /* full: drop oldest-first by not pushing */
+        return;
     g_q[g_head].kind = kind;
     g_q[g_head].x = x;
     g_q[g_head].y = y;
@@ -133,7 +97,6 @@ static void q_push(int kind, float x, float y)
     g_head = n;
 }
 
-/* Queue a scroll-wheel event (deltaY in "notches", +1 per wheel step away from the user). */
 static void q_push_scroll(float x, float y, float dy)
 {
     int n = (g_head + 1) % MAXIN;
@@ -157,14 +120,7 @@ void gmv_input_view_changed(void)
     look_clip();
 }
 
-/* The view frame the game sees (shimsfnd.c fnd_rect_full answers -[NSView frame] with it). */
-
-/* A client-area point -> the game's Cocoa window point.  First into the picture's own pixels (a point
-   on a black bar goes to the nearest edge).  The game's -[EAGLView transformMousePoint:] (0x19a4d0)
-   then turns a view point p into picture pixels as x = p.x * backingW / frame.w and
-   y_down = (frame.h - p.y) * backingH / frame.h, and the frame here is always 1024x768 (on the Mac it
-   is the window's size).  So hand it the point in that frame's units, bottom-left origin; then the
-   game gets the right pixel at any resolution (at 640x480 it used to stop at 400,180). */
+/* transformMousePoint 0x19a4d0 */
 static void to_game(int x, int y, float *gx, float *gy)
 {
     int vx = 0, vy = 0, vw = g_client_w, vh = g_client_h, sw = g_client_w, sh = g_client_h;
@@ -186,15 +142,8 @@ static void q_push_at(int kind, int x, int y)
     q_push(kind, gx, gy);
 }
 
-/* --- Keyboard -------------------------------------------------------------------------------
-   The game takes keyboard through SDL (not Cocoa): its per-frame event drainer (0x18a9e) loops
-   SDL_PeepEvents(&ev, 1, SDL_GETEVENT, 0x300, 0x301) and, for each returned event, reads the
-   type at ev+0 (0x300 KEYDOWN => pressed, else released) and the SDL *keycode* at ev+0x10
-   (keysym.sym) which it looks up in its own key map (member this+0x1038) to set a key-state byte.
-   So we take SDL3's key events, translate them to the keycode of the game's older SDL, queue them
-   here, and hand them back through SDL_PeepEvents.  Faithful 1:1 key translation -- no
-   game-specific rebinding (that would be a post-v1.0 extra; see the pure-port scope). */
-struct kinput { unsigned type; int sym, scancode; };   /* type: 0x300 down / 0x301 up */
+/* 0x18a9e SDL_PeepEvents 0x300 0x301 ev+0x10 */
+struct kinput { unsigned type; int sym, scancode; };   /* 0x300 0x301 */
 #define MAXKIN 64
 static struct kinput g_kq[MAXKIN];
 static int g_khead, g_ktail;
@@ -203,32 +152,25 @@ static void kq_push(unsigned type, int sym, int sc)
 {
     int n = (g_khead + 1) % MAXKIN;
     if (n == g_ktail)
-        return;                                 /* full: drop rather than overwrite */
+        return;
     g_kq[g_khead].type = type;
     g_kq[g_khead].sym = sym;
     g_kq[g_khead].scancode = sc;
     g_khead = n;
 }
 
-/* Esc going down (1) or up (0) for the game, as from the keyboard: the game's own pause in play (the throttle's
-   pause on minimize). */
 void gmv_input_escape(int down)
 {
     kq_push(down ? 0x300u : 0x301u, 0x1b, 41);
 }
 
-/* A key of SDL3 -> SDL 1.3 keycode (keysym.sym) and USB HID scancode.  Letters and digits go by their
-   label, as the Mac's SDL gave them, with the shift state left out: their ASCII keycode, and the scancode
-   of the US key with that label.  Navigation / modifier / function keys map to the SDLK_* form
-   (scancode | (1<<30)); left and right modifiers count as the same key.  Returns 0 (SDLK_UNKNOWN) for keys
-   we don't translate. */
 #define GMV_SDLK_SCAN(s)  ((int)((unsigned)(s) | (1u << 30)))
 
 static int gmv_key_to_sdl(SDL_Scancode code, int *out_scancode)
 {
     int sym = 0, sc = 0;
     SDL_Keycode k = SDL_GetKeyFromScancode(code, SDL_KMOD_NONE, true);
-    if (!(SDL_GetModState() & SDL_KMOD_NUM)) {  /* without NumLock the keypad is the arrows and Delete */
+    if (!(SDL_GetModState() & SDL_KMOD_NUM)) {
         code = code == SDL_SCANCODE_KP_4 ? SDL_SCANCODE_LEFT : code == SDL_SCANCODE_KP_6 ? SDL_SCANCODE_RIGHT
              : code == SDL_SCANCODE_KP_8 ? SDL_SCANCODE_UP : code == SDL_SCANCODE_KP_2 ? SDL_SCANCODE_DOWN
              : code == SDL_SCANCODE_KP_PERIOD ? SDL_SCANCODE_DELETE : code;
@@ -273,11 +215,7 @@ static int gmv_key_to_sdl(SDL_Scancode code, int *out_scancode)
     return sym;
 }
 
-/* TISGetInputSourceProperty.  The game's only use is 0x19f0b0, which asks whether the layout's id is
-   com.apple.keylayout.French; the 4 input handlers then bind Z/Q to forward/left and A to what Q does
-   (0x18ac4e).  Keys reach the game by their label here (gmv_key_to_sdl) as through the Mac's SDL, so this
-   answer is all an AZERTY keyboard needs.  Any AZERTY counts, found by where its keys are: the Mac's test
-   left out Belgian.  NULL compares unequal, the game's usual keys. */
+/* TISGetInputSourceProperty 0x19f0b0 0x18ac4e */
 static int kbd_is_azerty(void)
 {
     static int seen = -1;
@@ -302,24 +240,23 @@ void *gmv_tis_input_source_property(void *source, void *key)
     return french;
 }
 
-/* Fill one queued keyboard event into the game's SDL_Event buffer (see shims.h).  The game reads
-   type@0 and keysym.sym@0x10; we also fill state@8 and keysym.scancode@0xc for faithfulness. */
+/* SDL_Event keysym.scancode@0xc keysym.sym@0x10 */
 int gmv_input_get_sdl_event(void *buf, unsigned minType, unsigned maxType)
 {
     if (!buf)
         return 0;
-    if (!(minType <= 0x301u && maxType >= 0x300u))   /* range must overlap keyboard events */
+    if (!(minType <= 0x301u && maxType >= 0x300u))
         return 0;
     if (g_ktail == g_khead)
-        return 0;                               /* nothing queued */
+        return 0;
     struct kinput *e = &g_kq[g_ktail];
     g_ktail = (g_ktail + 1) % MAXKIN;
     unsigned char *p = (unsigned char *)buf;
-    memset(p, 0, 28);                           /* SDL_KeyboardEvent is 28 bytes through keysym */
-    *(unsigned *)(p + 0x00) = e->type;                        /* type: 0x300 / 0x301 */
-    p[0x08] = (unsigned char)(e->type == 0x300u ? 1 : 0);     /* state: PRESSED / RELEASED */
-    *(int *)(p + 0x0c) = e->scancode;                         /* keysym.scancode */
-    *(int *)(p + 0x10) = e->sym;                              /* keysym.sym (the game reads this) */
+    memset(p, 0, 28);
+    *(unsigned *)(p + 0x00) = e->type;                        /* 0x300 0x301 */
+    p[0x08] = (unsigned char)(e->type == 0x300u ? 1 : 0);
+    *(int *)(p + 0x0c) = e->scancode;
+    *(int *)(p + 0x10) = e->sym;
     {
         static int ktr = -1;
         if (ktr < 0) { const char *en = gmv_dbgenv("GMV_INPUT_TRACE"); ktr = (gmv_env_on(en)) ? 1 : 0; }
@@ -329,9 +266,8 @@ int gmv_input_get_sdl_event(void *buf, unsigned minType, unsigned maxType)
     return 1;
 }
 
-/* PAD_HINTS: when the keyboard or the mouse buttons were last used. */
 static unsigned g_kbm_tick;
-static unsigned g_presses;              /* keys and mouse buttons gone down, modifiers and Tab left out */
+static unsigned g_presses;
 
 unsigned gmv_input_last_key(void) { return g_kbm_tick; }
 unsigned gmv_input_tick(void) { return (unsigned)SDL_GetTicks(); }
@@ -343,8 +279,6 @@ int gmv_input_scancode_held(int scancode)
     return scancode >= 0 && scancode < n && keys[scancode];
 }
 
-/* GMV_SHOW_CURSOR=1 keeps the system's arrow visible even when the game hid its own cursor
-   (debugging aid); by default we hide it to avoid the double-cursor during play. */
 static int show_os_cursor(void)
 {
     static int v = -1;
@@ -352,8 +286,6 @@ static int show_os_cursor(void)
     return v;
 }
 
-/* Hide the system's arrow over the window whenever the game has hidden its own cursor, so the user never
-   sees two cursors at once.  On the title bar / borders (windowed) the system draws its arrow as usual. */
 static void cursor_sync(void)
 {
     static int off;
@@ -367,7 +299,6 @@ static void cursor_sync(void)
     }
 }
 
-/* The mouse is the camera while the game shows no pointer, a pointer while it does. */
 static void look_mode_sync(void)
 {
     static int relative;
@@ -381,29 +312,24 @@ static void look_mode_sync(void)
     gmv_trace("[input] the mouse is the %s\n", want ? "camera" : "pointer");
 }
 
-static int g_move_pending, g_move_x, g_move_y;  /* the last move not queued yet */
+static int g_move_pending, g_move_x, g_move_y;
 
-/* Moves come far more often than frames in relative mode, and the game needs the last one only. */
 static void move_flush(void)
 {
     if (g_move_pending) {
         g_move_pending = 0;
-        /* input_dispatch picks -mouseDragged: when the left button is down, else -mouseMoved:. */
         q_push_at(3, g_move_x, g_move_y);
     }
 }
 
 static void input_key_down(const SDL_KeyboardEvent *e)
 {
-    if (e->repeat || e->scancode >= SDL_SCANCODE_COUNT) /* the game is edge/state based: the first press only */
+    if (e->repeat || e->scancode >= SDL_SCANCODE_COUNT)
         return;
     int quiet = e->scancode == SDL_SCANCODE_TAB || e->scancode == SDL_SCANCODE_CAPSLOCK ||
                 (e->scancode >= SDL_SCANCODE_LCTRL && e->scancode <= SDL_SCANCODE_RGUI);
     if (!quiet)
         g_presses++;
-    /* Alt+Enter: full screen <-> window, done in gmv_input_pump after the queue is drained (the mode
-       switch resizes this window).  The Enter is kept from the game, its release too, so it does not
-       also press a menu button. */
     if ((e->scancode == SDL_SCANCODE_RETURN || e->scancode == SDL_SCANCODE_KP_ENTER) && (e->mod & SDL_KMOD_ALT)) {
         g_alt_enter = 1;
         g_cs_keys[e->scancode] = 1;
@@ -412,7 +338,7 @@ static void input_key_down(const SDL_KeyboardEvent *e)
     g_kbm_tick = gmv_input_tick() | 1;
     int sc = 0, sym = gmv_key_to_sdl(e->scancode, &sc);
     if (sym && gmv_game_key((unsigned)sym)) {
-        g_cs_keys[e->scancode] = 1;             /* CUTSCENE_KEYS took it: its release stays ours too */
+        g_cs_keys[e->scancode] = 1;
         sym = 0;
     }
     if (sym)
@@ -445,9 +371,7 @@ static void input_button(const SDL_MouseButtonEvent *e)
         g_button_down = e->down;
         q_push_at(e->down ? 1 : 2, x, y);
     } else if (e->button == SDL_BUTTON_RIGHT) {
-        /* The game's view implements -rightMouseDown: (IMP 0x199800) -> sendMouseEvent:sendedButton:1
-           isDown:1, i.e. the engine's auto-target / lock-on action used in on-foot and drive-by combat
-           (left click is sendedButton:0).  Deliver it like the left button (same Y-flip). */
+        /* -rightMouseDown IMP 0x199800 */
         q_push_at(e->down ? 4 : 5, x, y);
     }
 }
@@ -469,16 +393,11 @@ static void input_event(const SDL_Event *e)
         static int last_mx = -1, last_my = -1;
         int mx = (int)e->motion.x, my = (int)e->motion.y;
         look_add_raw((int)e->motion.xrel, (int)e->motion.yrel);
-        /* The system also reports the mouse when it has not moved, as windows change; that must not
-           take the pointer back from the pad (PAD_MENU). */
         if (g_pad_moved && mx == last_mx && my == last_my)
             break;
         g_pad_moved = 0;
         last_mx = mx;
         last_my = my;
-        /* Forward the moves for the front-end menu's on-screen cursor (the yellow pointer), which
-           tracks -mouseMoved: (absolute position) and selects the button under it -- independent of
-           the camera's relative-delta path above. */
         g_move_pending = 1;
         g_move_x = mx;
         g_move_y = my;
@@ -498,12 +417,11 @@ static void input_event(const SDL_Event *e)
         break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         gmv_input_set_client_size(e->window.data1, e->window.data2);
-        look_clip();                            /* the picture may lie elsewhere now */
+        look_clip();
         break;
     case SDL_EVENT_QUIT:
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-        /* Alt+F4 or the window's close button.  The Mac's close (-windowWillClose: 0x19af50) sends
-           terminate:, which ends the process without saving; the same here (fnd_NSApp_terminate). */
+        /* 0x19af50 */
         gmv_log("[input] window closed (Alt+F4 or the close button): quitting\n");
         log_close();
         _Exit(0);
@@ -512,10 +430,6 @@ static void input_event(const SDL_Event *e)
     }
 }
 
-/* While the player drags the window's border, Windows keeps this thread inside SDL_PumpEvents until
-   the mouse is let go, so the game draws nothing and the new part of the window would stay black.  SDL
-   sends expose events from inside that loop, and a watch sees them at once.  Only during the pump: the
-   screen FBO holds a whole frame there, and SDL also sends them from calls the game makes mid-frame. */
 static volatile int g_pumping;
 
 static bool SDLCALL redraw_watch(void *userdata, SDL_Event *e)
@@ -526,8 +440,6 @@ static bool SDLCALL redraw_watch(void *userdata, SDL_Event *e)
     return true;
 }
 
-/* The events since the last call.  With skip (the intro movie): a skip key or a click sets it and is kept
-   from the game. */
 void gmv_input_drain(int *skip)
 {
     static int watching;
@@ -555,15 +467,8 @@ void gmv_input_drain(int *skip)
     move_flush();
 }
 
-/* Deliver the captured mouse actions to the game's EAGLView.  Called on the main thread (from
-   SDL_PumpEvents), so running game code here is fine.  noinline + force_align so the realignment
-   actually happens at a real call boundary (an inlined force-aligned fn loses its realignment). */
 __attribute__((noinline, force_align_arg_pointer))
-/* The game gates mouse input on the window being "key": -[GameWindow windowDidBecomeKey:] sets a
-   byte flag (this address) to 1, -windowDidResignKey: to 0, and -sendMouseEvent: drops the event
-   unless it is 1.  macOS calls those via the Cocoa event loop on activation; we have none, so we
-   write the flag directly to mirror the window's active state. (Fixed address in the game's
-   __DATA, from the instruction `mov byte [pic+0x4ef670], 1` at 0x19b03c.) */
+/* mov byte [pic+0x4ef670],1 0x19b03c */
 #define GMV_KEYWINDOW_FLAG ((volatile unsigned char *)(uintptr_t)GMV_KEYWINDOW_FLAG_ADDR)
 
 static void input_dispatch(void)
@@ -572,7 +477,7 @@ static void input_dispatch(void)
 
     if (!g_key_inited && gmv_objc_last_gamewindow) {
         g_key_inited = 1;
-        g_key_pending = 1;                      /* our single window starts active */
+        g_key_pending = 1;
     }
     if (g_key_pending) {
         if (GMV_KEYWINDOW_FLAG_ADDR)
@@ -606,10 +511,6 @@ static void input_dispatch(void)
                   e->kind == 6 ? "rightMouseDragged:" :
                   (g_button_down ? "mouseDragged:" : "mouseMoved:");
         }
-        /* Only deliver a selector the view actually implements: an EAGLView has -mouseDown:/-mouseUp:/
-           -mouseDragged:/-mouseMoved: but NOT -rightMouse*:/-scrollWheel:, and our objc runtime stops
-           the process on an unhandled message.  So right-mouse/scroll become harmless no-ops here
-           rather than a force-close, and work only if some view does implement them. */
         if (!gmv_objc_responds(view, sel)) {
             static int warned_kind[9];
             if (itrace && e->kind < 9 && !warned_kind[e->kind]) {
@@ -618,17 +519,13 @@ static void input_dispatch(void)
             }
             continue;
         }
-        if (itrace && e->kind != 3 && e->kind != 6)   /* log taps/scroll; skip the noisy moves/drags */
+        if (itrace && e->kind != 3 && e->kind != 6)
             gmv_log("[input] %-18s cocoa=(%.0f,%.0f) d=%.2f view=%p keyWin=%u\n",
                     sel, e->x, e->y, e->d, view, GMV_KEYWINDOW_FLAG_ADDR ? (unsigned)*GMV_KEYWINDOW_FLAG : 0u);
         msg(view, sel, ev);
     }
 }
 
-/* PAD_MENU: while the game shows its menu pointer, the pad works it like a mouse.  The left stick or
-   the D-pad moves it (speed grows with the push's square, up to PM_SPEED view units a second), A clicks
-   (down while held, so a drag works too) and B is an Esc press.  The pad's own events still reach the
-   game as before; the menus act only on Esc and pointer events. */
 #define PM_SPEED 900.0f
 #define PM_BTN_A 1
 #define PM_BTN_B 2
@@ -666,8 +563,8 @@ static void pad_pointer(void)
     if (hat & 8) x = -1.0f;
     m = x * x + y * y;
     if (m > 0.0f) {
-        float k = (m > 1.0f ? 1.0f / sqrtf(m) : sqrtf(m)) * PM_SPEED * dt;   /* |v| = push² */
-        float nx = g_ptr_x + x * k, ny = g_ptr_y - y * k;                 /* the view is y up */
+        float k = (m > 1.0f ? 1.0f / sqrtf(m) : sqrtf(m)) * PM_SPEED * dt;
+        float nx = g_ptr_x + x * k, ny = g_ptr_y - y * k;
         nx = nx < 0.0f ? 0.0f : nx > GMV_VIEW_FRAME_W - 1.0f ? GMV_VIEW_FRAME_W - 1.0f : nx;
         ny = ny < 1.0f ? 1.0f : ny > GMV_VIEW_FRAME_H ? GMV_VIEW_FRAME_H : ny;
         if (nx != g_ptr_x || ny != g_ptr_y) {
@@ -691,18 +588,10 @@ static void pad_pointer(void)
     prev = b;
 }
 
-/* Pump SDL's events (keeps the window responsive), then deliver the captured mouse activity.
-   Called from SDL_PumpEvents each frame.  GMV_TEST_CLICK=<frame> injects one synthetic click at the
-   window centre at that frame (for testing without a real mouse). */
 __attribute__((force_align_arg_pointer))
 void gmv_input_pump(void)
 {
-    /* One-shot (GMV_WATCH=1): arm a hw write-watchpoint on the MainMenu fe-screen STATE field
-       [0xa9dc34+0x18]=0xa9dc4c, which goes 2 (active) -> 0 (switched away) within a frame of the
-       menu loading.  Arm it LATE -- the moment the rating splash becomes top (gmv_input_wants_tap, set by
-       state_trace the previous frame) -- so the ~100 captured writes are the menu-entry ones, not
-       early-init noise.  Needs GMV_STATE_TRACE=1 (sets gmv_input_wants_tap) and GMV_CLICK_S3=1 (dismisses
-       the splash so the menu actually loads).  GMV_WATCH_ADDR=<hex> overrides the watched field. */
+    /* MainMenu [0xa9dc34+0x18] 0xa9dc4c */
 #if GMV_DEV
     static int watch_armed, watch_mode = -1;
     if (watch_mode < 0) {
@@ -732,7 +621,7 @@ void gmv_input_pump(void)
         click_at = e ? atol(e) : -1;
     }
     if (click_at >= 0) {
-        float cx = GMV_VIEW_FRAME_W / 2.0f, cy = GMV_VIEW_FRAME_H / 2.0f;   /* view-frame units */
+        float cx = GMV_VIEW_FRAME_W / 2.0f, cy = GMV_VIEW_FRAME_H / 2.0f;
         if ((long)frame == click_at) {
             gmv_log("[input] TEST click down at centre (%.0f,%.0f)\n", cx, cy);
             g_button_down = 1;
@@ -743,7 +632,7 @@ void gmv_input_pump(void)
             q_push(2, cx, cy);
         }
     }
-    {   /* GMV_TEST_FATAL: each way of stopping, about 10 s into the game */
+    {
         static int fatal_kind = -1;
         if (fatal_kind < 0) {
             const char *e = gmv_dbgenv("GMV_TEST_FATAL");
@@ -752,7 +641,7 @@ void gmv_input_pump(void)
         if (fatal_kind && frame == 600) {
             void gmv_missing_import(uint32_t index, uint32_t ret);
             gmv_log("[input] TEST_FATAL=%d\n", fatal_kind);
-            static volatile uintptr_t bad = 4;      /* volatile: the compiler must not see the address */
+            static volatile uintptr_t bad = 4;
             if (fatal_kind == 1)
                 *(volatile int *)bad = 1;
             else if (fatal_kind == 2)
@@ -764,24 +653,21 @@ void gmv_input_pump(void)
         }
     }
     frame++;
-    {   /* Direct pump-rate counter (independent of state_trace's logging) to resolve whether the
-           SDL pump itself stalls vs just its logging. Compare to "presented frame N". */
+    {
         static int lg = -2;
         if (lg == -2) { const char *e = gmv_dbgenv("GMV_STATE_TRACE"); lg = (gmv_env_on(e)) ? 1 : 0; }
         if (lg && frame % 120 == 0)
             gmv_log("[input] PUMP call #%u\n", frame);
     }
 
-    /* State-triggered tap (GMV_CLICK_S3=1): the rating-splash state3 waits for a tap to set
-       [state3+0xc]=1 (dismiss).  Frame timing is unreliable (pump rate diverges from presents),
-       so inject a centre down/up the moment state3 becomes the top state, regardless of frame. */
+    /* [state3+0xc] */
     static int s3_mode = -2, s3_phase;
     if (s3_mode == -2) {
         const char *e = gmv_dbgenv("GMV_CLICK_S3");
         s3_mode = (gmv_env_on(e)) ? 0 : -1;
     }
     if (s3_mode == 0) {
-        float cx = GMV_VIEW_FRAME_W / 2.0f, cy = GMV_VIEW_FRAME_H / 2.0f;   /* view-frame units */
+        float cx = GMV_VIEW_FRAME_W / 2.0f, cy = GMV_VIEW_FRAME_H / 2.0f;
         if (s3_phase == 0 && gmv_input_wants_tap) {
             gmv_log("[input] S3 auto-click DOWN at centre (%.0f,%.0f)\n", cx, cy);
             g_button_down = 1;
@@ -799,7 +685,7 @@ void gmv_input_pump(void)
 #endif
 
     gmv_game_input_pump();
-    pad_pointer();                              /* PAD_MENU */
+    pad_pointer();
     input_dispatch();
     gmv_game_input_tick();
 }

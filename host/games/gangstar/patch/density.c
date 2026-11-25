@@ -1,5 +1,5 @@
-/* density.c -- TRAFFIC_DENSITY, PEDESTRIAN_DENSITY and PARKED_CAR_DENSITY */
 #include "compat.h"
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,64 +12,19 @@
 
 #define SV_FN        0x00080272u
 
-/* ---- TRAFFIC_DENSITY / PEDESTRIAN_DENSITY / PARKED_CAR_DENSITY: more (or fewer) of each in the city
-   (enhancements, 1 = as on the Mac, forced to 1 by ORIGINAL_MAC_EXPERIENCE) ----
-   The world's counts are kept by spawn point kind: the spawner 0x082504 adds 1 to counts[kind] at
-   0x0828f8 and gives the object that kind (vfunc 0x4c, Vehicle +0x2a8), which takes it off again
-   when the object goes.  Kind 3 points put a car on a road (0x07fcea checks the lane) and give it a
-   driver and its drive (0x10dc3e, 0x022238): the moving traffic.  Kind 17 points put a car down
-   without that step: the parked cars.  Kind 8 points put down NPCs (vtable 0x64ef88, the Character
-   methods): the pedestrians.  The check 0x080272 takes, for these kinds, the point's own cap (+0x74 by
-   day, +0x78 at night, when it is not negative; the points have none by day and 2 or 3 at night) or a
-   built-in 18 / 10 / 14 (imm32 at 0x0802ec, 0x080309, 0x080326), then the performance profile's +0x1c
-   / +0x24 / +0x20 if lower (40 / 20 / 40 on the Mac), then all three kinds together (and kind 16)
-   under 48 (imm8 at 0x0803f3).  A point waits a random d0..d1 ms between spawns (its record +8, +0xc:
-   0x6426e0, 0x642760, 0x642820, by the table 0x6888c0).
-   Each density multiplies its kind's built-in cap and divides its wait once, and multiplies the point's
-   own caps and the profile's for the length of each check.  The total of 48 grows by what the built-in
-   caps grew, up to 127 (the most its imm8 holds).  More objects also fill the Box2D broadphase
-   (16384 proxies), so its CreateProxy guard from DRAW_DISTANCE goes in as well.
-   The spawner makes nothing: it takes an object of one of its group's types from a pool of 256
-   (0x689180; the takers 0x081bc1, 0x081e6b, 0x082854, 0x083242, 0x083939, 0x08415e) and gives up
-   when none is there.  An object that goes (0x020ed0, more than 14000 from centre B in 0x1a8f6a) is
-   put back (0x08195c).  The pool is built once per level (0x0819e8 from 0x1ad591, cleared by
-   0x07f9c4): one object of each type the spawn groups name, 14 of type 4, 11 of type 61, 3 of types
-   60, 90, 91, 190 and 191.  That is what held the counts at the Mac's whatever the caps.  So the
-   densities also move the pool to PD_POOL_N slots and, after the build, add copies of each car and
-   motorbike (the larger of the traffic and parked densities) and each NPC (the pedestrian density).
-   The caps alone barely help: at 4x the counts stayed where the Mac's are, every check allowed and
-   few spawns made.  A point spawns only at its locations that lie outside one circle and inside a
-   second, both 14000 across and centred ahead of the camera (0x0805e2, again in 0x07fcea; the table
-   0x642660 {radius A, radius B, -> centre A, -> centre B} by the point's band +0x48).  0x082c12, each
-   frame from 0x1a2396, puts the centres at the camera plus its look direction times 3039 / 3900 for
-   the vehicles (0x688cc0 / 0x688cf0, copied to 0x689120 / 0x689130) and 1000 / 1700 for the people
-   (0x688ce0 / 0x688d10): a strip 8.6 m (vehicles) or 7 m (people) deep, about 140 m out.  So each
-   density above 1 also moves centre A back towards the camera, which deepens the strip inwards by the
-   same factor (at 4x: 144..179 m ahead for vehicles, 129..157 m for people; the fog starts far beyond
-   either).  Each check (gmv_can_spawn, ahead of the point's own search) sets its own kind's.  Centre B
-   stays: 0x1a8f6a takes an object away by its distance from centre B, so moving B outwards had the
-   new objects taken away as soon as they were made.  That check is also why the Mac churns: it takes
-   away at the very radius the strip lies on, so the slightest turn of the camera takes away what was
-   just made.  The densities take away at PD_KEEP times the radius instead (its ucomiss at 0x1a93aa
-   pointed at pd_keep2).
-   During a race the city goes back to the Mac's numbers and comes back afterwards.  The race is the
-   object at *(*0x689e98 + 8) (as the script commands get it, 0xf2ed0); its state +0x14 is 1 for the
-   countdown (RaceStart, 0xb16bc), 2 while racing (0xb16cc), 3 once over, and 0 again when
-   RaceWaitEnded or the RaceStart's abort stops it (0xb1740).  pd_follow_race, from each spawn check
-   and each frame's centre update, rewrites the caps, waits, total and despawn distance when that
-   changes. */
+/* 0x082504 0x0828f8 0x4c +0x2a8 0x07fcea 0x64ef88 */
 #define PD_MAX       4.0
 #define PD_TOTAL_IMM 0x000803f3u
-#define PD_CENTRE_SITE 0x001a2396u   /* call 0x082c12, the spawn centres' update */
+#define PD_CENTRE_SITE 0x001a2396u   /* call 0x082c12 */
 #define PD_CENTRE_FN   0x00082c12u
-static const uint32_t pd_centres[3][2] = {   /* {centre A, centre B} */
+static const uint32_t pd_centres[3][2] = {
     {0x00688cc0u, 0x00688cf0u}, {0x00689120u, 0x00689130u}, {0x00688ce0u, 0x00688d10u},
 };
-static float pd_centre_a[3][2];              /* each centre A as the game put it, x and y */
-#define PD_KEEP_SITE 0x001a93adu   /* disp32 of 0x1a8f6a's ucomiss against 14000^2 (0x5f6ea0), PIC base 0x1a8f7b */
+static float pd_centre_a[3][2];
+#define PD_KEEP_SITE 0x001a93adu   /* 0x1a8f6a 0x5f6ea0 PIC 0x1a8f7b */
 #define PD_KEEP_BASE 0x001a8f7bu
 #define PD_KEEP_OLD  0x005f6ea0u
-#define PD_KEEP      1.2           /* how much farther from centre B than the spawns an object goes */
+#define PD_KEEP      1.2
 static float pd_keep2;
 
 const pd_kinds_t pd_kinds[3] = {
@@ -77,12 +32,11 @@ const pd_kinds_t pd_kinds[3] = {
     {"GMV_PEDESTRIAN_DENSITY", 8, 14, 0x20, 0x00080326u, 0x00642820u, 500, 1000},
     {"GMV_PARKED_CAR_DENSITY", 17, 10, 0x24, 0x00080309u, 0x00642760u, 400, 800},
 };
-double pd_scale[3] = {1, 1, 1};      /* in force now: the ini's, or 1 during a race */
-double pd_user[3] = {1, 1, 1};       /* the ini's */
+double pd_scale[3] = {1, 1, 1};
+double pd_user[3] = {1, 1, 1};
 int pd_on, pd_racing;
-#define PD_RACE_MGR  0x00689e98u   /* the race's owner (0xf2ed0); the race is at +8 */
+#define PD_RACE_MGR  0x00689e98u   /* 0xf2ed0 +8 */
 
-/* A word of the game's memory, 0 if it cannot be read. */
 static uint32_t pd_rd(uint32_t a)
 {
     return (a > 0x1000 && !IsBadReadPtr((void *)(uintptr_t)a, 4)) ? *(const uint32_t *)(uintptr_t)a : 0;
@@ -95,20 +49,13 @@ static int pd_race_on(void)
     return st == 1 || st == 2;
 }
 
-/* The caps, waits and total for pd_scale; the total as written */
 int pd_write(void)
 {
     int total = 48;
     for (int i = 0; i < 3; i++) {
-        double s = pd_scale[i];
-        int cap = (int)(pd_kinds[i].cap * s + 0.5);
+        int cap = (int)(pd_kinds[i].cap * pd_scale[i] + 0.5);
         total += cap - pd_kinds[i].cap;
-        uint32_t d[2] = { pd_kinds[i].d0, pd_kinds[i].d1 };
-        if (s > 0)
-            for (int j = 0; j < 2; j++)
-                d[j] = (uint32_t)(d[j] / s + 0.5) < 1 ? 1 : (uint32_t)(d[j] / s + 0.5);
-        if (!patch_bytes(pd_kinds[i].cap_imm, (const unsigned char *)&cap, 4) ||
-            !patch_bytes(pd_kinds[i].rec + 8, (const unsigned char *)d, 8))
+        if (!patch_bytes(pd_kinds[i].cap_imm, (const unsigned char *)&cap, 4))
             return -1;
     }
     unsigned char t = (unsigned char)(total < 0 ? 0 : total > 127 ? 127 : total);
@@ -116,7 +63,7 @@ int pd_write(void)
     int more = 0;
     for (int i = 0; i < 3; i++)
         more |= pd_scale[i] > 1;
-    double keep = pd_racing || !more ? 1 : PD_KEEP;   /* the Mac's when no density is above it */
+    double keep = pd_racing || !more ? 1 : PD_KEEP;
     pd_keep2 = (float)(14000 * keep * 14000 * keep);
     return t;
 }
@@ -137,10 +84,10 @@ static void pd_follow_race(void)
 
 static int pd_cap(int v, int k)
 {
-    return v < 0 ? v : (int)(v * pd_scale[k] + 0.5);
+    int n = (int)(v * pd_scale[k] + 0.5), most = (int)(pd_kinds[k].cap * pd_scale[k] + 0.5);
+    return v < 0 ? v : n < most ? n : most;
 }
 
-/* Centre A back towards the camera, s times as far from centre B as the game put it (never nearer) */
 static void pd_set_band(double s)
 {
     if (s < 1)
@@ -169,7 +116,6 @@ static void gmv_spawn_centres(uint32_t arg)
     pd_set_band(s);
 }
 
-/* The spawner, for SPAWN_FADE (fades in what it took from the pool) */
 int sf_hooked;
 __attribute__((cdecl, force_align_arg_pointer, noinline))
 int gmv_spawn_make(uint32_t sp, uint32_t loc)
@@ -182,34 +128,29 @@ int gmv_spawn_make(uint32_t sp, uint32_t loc)
     return r;
 }
 
-#define PD_BUILD_SITE 0x001ad591u   /* call 0x0819e8, the pool's build at level load */
+#define PD_BUILD_SITE 0x001ad591u   /* call 0x0819e8 */
 #define PD_BUILD_FN   0x000819e8u
-#define PD_NEW_FN     0x000220d4u   /* the object factory (world, type) */
-#define PD_TYPE_FN    0x00026e1eu   /* an object's type */
+#define PD_NEW_FN     0x000220d4u
+#define PD_TYPE_FN    0x00026e1eu
 #define PD_FREE_FN    0x00090430u
-#define PD_CLEAR_SIZE 0x0007fb31u   /* imm32 0x400, the clear's memset of the pool */
-static const uint32_t pd_pool_refs[10][2] = {   /* {disp32 to the pool, its PIC base} */
+#define PD_CLEAR_SIZE 0x0007fb31u   /* 0x400 */
+static const uint32_t pd_pool_refs[10][2] = {
     {0x0007f9d5u, 0x0007f9d2u}, {0x0007fb26u, 0x0007f9d2u}, {0x0008199au, 0x00081969u},
     {0x00081b0bu, 0x000819f9u}, {0x00081bc3u, 0x00081bb0u}, {0x00081e6du, 0x00081c49u},
     {0x00082856u, 0x00082515u}, {0x00083244u, 0x00083017u}, {0x0008393bu, 0x00083017u},
     {0x00084160u, 0x0008407eu},
 };
-static const uint32_t pd_pool_bounds[8] = {     /* imm32 0x100 of each walk over the pool */
+static const uint32_t pd_pool_bounds[8] = {     /* 0x100 */
     0x0007f9dau, 0x000819dau, 0x00081bd6u, 0x00081e86u, 0x00082866u, 0x00083256u, 0x00083956u, 0x00084176u,
 };
 uint32_t pd_pool[PD_POOL_N];
 int pd_pool_on;
 
-double pd_built[3];                  /* the densities the pool was built for (0 before the first build) */
-static uint32_t pd_extra[PD_POOL_N];        /* the copies we added, in the pool or out in the city */
+double pd_built[3];
+static uint32_t pd_extra[PD_POOL_N];
 int pd_extra_n;
-static int pd_trim;                         /* ORIGINAL_MAC_EXPERIENCE: those out in the city go as they come back */
+static int pd_trim;
 
-/* A copy the Mac's pool has no slot for is let go: out of every slot, asleep as the pool keeps it, and not freed.
-   The Mac frees nothing of its pool before a load, so its objects may keep pointers to one that went home; a
-   running game must not lose the memory under them (suspected in a fault seen replaying a mission after
-   the switch).  So each round of the switch costs one set of copies until the game ends; a load does not get them
-   back either, as nothing after one can tell a stale one from a good one. */
 #if GMV_DEV
 #define PD_LEFT_N 8192
 static uint32_t pd_left[PD_LEFT_N];
@@ -226,8 +167,6 @@ static void pd_let_go(uint32_t o)
 #endif
 }
 
-/* How many copies of each of the build's objects: cars and motorbikes serve the traffic and the
-   parked cars, NPCs the pedestrians */
 static double pd_pool_scale(uint32_t vt)
 {
     double s = vt == 0x0064ef88u ? pd_built[1]
@@ -236,7 +175,6 @@ static double pd_pool_scale(uint32_t vt)
     return s < 1 ? 1 : s;
 }
 
-/* The densities in force, and with the options tab those of the file, so the pool has room for them */
 static void pd_built_read(void)
 {
     for (int i = 0; i < 3; i++) {
@@ -247,8 +185,6 @@ static void pd_built_read(void)
     }
 }
 
-/* The copies wanted of each type the build made (made[t] of them, have[t] copies already), into free
-   slots; how many went in. */
 static int pd_pool_add_more(const int *made, const int *have, const uint32_t *vt, int *full)
 {
     uint32_t world = pd_rd(SV_WORLD);
@@ -259,7 +195,7 @@ static int pd_pool_add_more(const int *made, const int *have, const uint32_t *vt
                 slot++;
             if (slot == PD_POOL_N || pd_extra_n == PD_POOL_N)
                 break;
-            /* as the build does it: poolable, its +0x1c freed, put to sleep (vfunc 0xb4) */
+            /* +0x1c 0xb4 */
             uint32_t o = ((uint32_t (*)(uint32_t, int))(uintptr_t)PD_NEW_FN)(world, t);
             if (!o)
                 break;
@@ -287,7 +223,7 @@ static void gmv_pool_build(void)
 {
     static uint32_t before[PD_POOL_N];
     pd_built_read();
-    pd_extra_n = 0;                             /* the build's clear has freed them */
+    pd_extra_n = 0;
     memcpy(before, pd_pool, sizeof pd_pool);
     ((void (*)(void))(uintptr_t)PD_BUILD_FN)();
     int made[256] = {0}, n = 0, added = 0;
@@ -313,7 +249,6 @@ int pd_is_extra(uint32_t o)
     return 0;
 }
 
-/* Whether the world's lists or a pool hold this object, read by its address alone. */
 int pd_object_known(uint32_t o)
 {
     static const uint32_t lists[3] = {0x418, 0x424, 0x430};
@@ -333,8 +268,7 @@ int pd_object_known(uint32_t o)
     return 0;
 }
 
-/* ORIGINAL_MAC_EXPERIENCE going on: a car remembers its radio station at +0xc8 (0x10f0c0, read back at
-   0x10a613), and the game's own pick and logo know of five. */
+/* +0xc8 0x10f0c0 0x10a613 */
 void cr_cars_off_sixth(void)
 {
     static const uint32_t lists[3] = {0x418, 0x424, 0x430};
@@ -353,9 +287,6 @@ void cr_cars_off_sixth(void)
     }
 }
 
-/* The copies for the densities in a running game (the build's work, as ORIGINAL_MAC_EXPERIENCE goes off or a
-   density goes up in the menu; the pool builds only once per level):
-   what the build made is what is in the pool and what is out in the city and goes back to it. */
 void pd_pool_top_up(void)
 {
     static const uint32_t lists[3] = {0x418, 0x424, 0x430};
@@ -364,7 +295,7 @@ void pd_pool_top_up(void)
     pd_built_read();
     pd_trim = 0;
     if (!world || !pd_pool_on)
-        return;                                 /* (no world yet: the build sees to them) */
+        return;
     for (int l = 0; l <= 3; l++) {
         uint32_t o = l == 3 ? 0 : *(const uint32_t *)(uintptr_t)(world + lists[l] + 4);
         for (int i = 0; i < (l == 3 ? PD_POOL_N : 8192); i++) {
@@ -390,8 +321,6 @@ void pd_pool_top_up(void)
             "already)%s\n", added, pd_extra_n - added, full ? "; FULL" : "");
 }
 
-/* Back to the Mac's pool: our copies let go, the rest in their order.  A copy out in the city goes when it comes
-   back (gmv_pool_tick). */
 void pd_unmove_pool(void)
 {
     uint32_t *old = (uint32_t *)(uintptr_t)PD_POOL_OLD;
@@ -414,23 +343,25 @@ void pd_unmove_pool(void)
 }
 
 #if GMV_DEV
-/* A copy we let go that the game still walks: what that fault would be, had it been freed. */
 void pd_ws_left(uint32_t ch)
 {
     for (int i = 0; i < pd_left_n; i++)
         if (pd_left[i] == ch) {
             gmv_log("[pool] copy %08x was let go but is walking: vtable %08x, +4 %08x, the world's or a pool's %d\n",
                     ch, pd_rd(ch), pd_rd(ch + 4), pd_object_known(ch));
-            pd_left[i] = pd_left[--pd_left_n];          /* once for each */
+            pd_left[i] = pd_left[--pd_left_n];
             return;
         }
 }
 
-/* A walker whose memory went while the ray ran: where the game still knows it from, just before the fault
-   this leads to.  The [pool] lines above it say if it was one of our copies. */
 void pd_ws_report(uint32_t ch, uint32_t vt_was)
 {
     static const uint32_t lists[3] = {0x418, 0x424, 0x430};
+    static int on = -1;
+    if (on < 0)
+        on = gmv_env_on(gmv_dbgenv("GMV_POOL_PROBE"));
+    if (!on)
+        return;
     MEMORY_BASIC_INFORMATION mbi;
     if (VirtualQuery((const void *)(uintptr_t)(ch + 0x514), &mbi, sizeof mbi) && mbi.State == MEM_COMMIT)
         return;
@@ -452,12 +383,12 @@ void pd_ws_report(uint32_t ch, uint32_t vt_was)
 }
 #endif
 
-/* Once per present.  Our copies that were out in the city as the pool went back are let go as they return to
-   it; a new load has freed them all. */
 int pd_world_gen, pd_trim_gen;
+static int pd_tick_n = -1;
 
 void gmv_pool_tick(void)
 {
+    pd_tick_n = -1;
     if (pd_trim) {
         uint32_t *old = (uint32_t *)(uintptr_t)PD_POOL_OLD;
         if (pd_trim_gen != pd_world_gen)
@@ -472,9 +403,6 @@ void gmv_pool_tick(void)
         pd_trim = pd_extra_n > 0;
     }
 #if GMV_DEV
-    /* How many cars and people the city has, read only: no hook, so it says the same with or without
-       ORIGINAL_MAC_EXPERIENCE (the Mac's, by a spawn survey: traffic 15-17, people and drivers
-       31-33, parked 10-11). */
     static int peak[3];
     static DWORD next;
     static const int kind[3] = {3, 8, 17};
@@ -511,7 +439,6 @@ static int pd_move_pool(void)
     if (*(const uint32_t *)(uintptr_t)PD_CLEAR_SIZE != 0x400 || !sm_is_call(PD_BUILD_SITE, PD_BUILD_FN))
         return 0;
     uint32_t n = PD_POOL_N, size = sizeof pd_pool;
-    /* in a running game it holds the objects by now; they move with it */
     memcpy(pd_pool, (const void *)(uintptr_t)PD_POOL_OLD, 0x100 * sizeof *pd_pool);
     memset((void *)(uintptr_t)PD_POOL_OLD, 0, 0x100 * sizeof *pd_pool);
     for (int i = 0; i < 10; i++) {
@@ -522,8 +449,7 @@ static int pd_move_pool(void)
     for (int i = 0; i < 8; i++)
         patch_bytes(pd_pool_bounds[i], (const unsigned char *)&n, 4);
     patch_bytes(PD_CLEAR_SIZE, (const unsigned char *)&size, 4);
-    int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_pool_build - (PD_BUILD_SITE + 5));
-    return patch_bytes(PD_BUILD_SITE + 1, (const unsigned char *)&r, 4);
+    return patch_call(PD_BUILD_SITE, (void *)gmv_pool_build);
 }
 
 int pd_centres_on;
@@ -538,6 +464,14 @@ int gmv_can_spawn(uint32_t sp)
             k = i;
     if (pd_centres_on)
         pd_set_band(k >= 0 ? pd_scale[k] : 1);
+    if (pd_on && k >= 0) {
+        uint32_t w = *(const uint32_t *)(uintptr_t)SV_WORLD;
+        const int *c = w ? *(const int *const *)(uintptr_t)(w + 0x414) : NULL;
+        int n = c ? c[3] + c[8] + c[17] : -1;
+        if (pd_tick_n >= 0 && n > pd_tick_n)
+            return 0;
+        pd_tick_n = n;
+    }
     int *prof = (int *)(uintptr_t)pd_rd(0x0063dfbcu);
     if (pd_on && k >= 0 && prof) {
         int *own = (int *)(uintptr_t)(sp + 0x74), day = own[0], night = own[1];
@@ -548,6 +482,309 @@ int gmv_can_spawn(uint32_t sp)
     } else
         r = ((int (*)(uint32_t))(uintptr_t)SV_FN)(sp);
     return r;
+}
+
+#define TJ_STEP_SITE  0x001a1f80u
+#define TJ_CARS       0x0068a788u
+#define TJ_CAR        0x00656068u
+#define TJ_MOTO       0x00656228u
+#define TJ_FIRST      0x00020fd2u
+#define TJ_KEEP_SITE  0x001a1baau
+#define TJ_KEEP_FN    0x001a8f6au
+#define TJ_GONE_SITE  0x001a93e8u
+#define TJ_WORLD      0x00949a54u
+#define TJ_CLEAR_SITE 0x0007fe99u
+#define TJ_CLEAR_FN   0x0007fbeau
+#define TJ_REVERSE    0x00108758u
+#define TJ_STEER      0x00108780u
+#define TJ_ACCEL      0x00108708u
+#define TJ_SCRIPTED   0x20000000u
+#define TJ_N          64
+#define TJ_WAIT       3.5f
+#define TJ_BACK       1.2f
+#define TJ_GIVE_UP    9.0f
+#define TJ_FAR        3000.0f
+#define TJ_AWAY       400.0f
+#define TJ_AHEAD      1500.0f
+#define TJ_SIDE       350.0f
+#define TJ_SLOW       0.25f
+#define TJ_CLEAR      1200.0f
+#define TJ_CRAWL      25.0f
+#define TJ_SAME       0.7f
+#define TJ_GIVE       1.75f
+#define TJ_HOLD       1.0f
+#define TJ_HELI       0x006568c8u
+#define TJ_SPOT_FN    0x0007fceau
+#define TJ_HIGH       15000.0f
+static const uint32_t tj_spot_sites[2] = {0x00082b8cu, 0x00082bbeu};
+
+typedef struct {
+    uint32_t veh;
+    unsigned seen;
+    int dir, gone;
+    float t, next, back, at[2];
+} tj_car;
+static tj_car tj[TJ_N];
+static unsigned tj_tick;
+static int tj_gone_n;
+static struct {
+    uint32_t veh;
+    unsigned seen;
+    float v, hold;
+} tj_run[4];
+static struct {
+    uint32_t veh;
+    unsigned until;
+    int back;
+    float m[2];
+} tj_way[8];
+
+static uint32_t tj_rd(uint32_t a)
+{
+    return *(const uint32_t *)(uintptr_t)a;
+}
+
+static int tj_heli(void)
+{
+    uint32_t me = tj_rd(MR_PLAYER), v = me ? tj_rd(me + 4 + 0x558) : 0;
+    return v && tj_rd(v) == TJ_HELI && pd_scale[0] > 0;
+}
+
+static int tj_traffic(uint32_t veh)
+{
+    uint32_t vt = tj_rd(veh), ch, me = tj_rd(MR_PLAYER);
+    if ((vt != TJ_CAR && vt != TJ_MOTO) || tj_rd(veh + 0x2a8) != 3 || !(ch = tj_rd(veh + 0x280)))
+        return 0;
+    return tj_rd(ch + 0x558) == veh && !(tj_rd(ch + 0x584) & 4) && (!me || ch != me + 4);
+}
+
+static int tj_front(uint32_t veh, const float *p, int *dir)
+{
+    uint32_t me = tj_rd(MR_PLAYER), mine = me ? tj_rd(me + 4 + 0x558) : 0;
+    uint32_t v = tj_rd(TJ_CARS), e = tj_rd(TJ_CARS + 4), hit = 0;
+    float f[3], q[3], best = TJ_AHEAD;
+    int why = 0;
+    obj_vec(tj_rd(tj_rd(veh) + 0x68), veh, f);
+    for (int k = me && !mine ? -1 : 0; v + 4 * k < e; k++) {
+        uint32_t o = k < 0 ? me + 4 : tj_rd(v + 4 * k);
+        if (o == veh)
+            continue;
+        uc_pos(o, q);
+        float dx = q[0] - p[0], dy = q[1] - p[1], along = dx * f[0] + dy * f[1], side = dx * f[1] - dy * f[0];
+        if (along > 0 && along < best && side * side < TJ_SIDE * TJ_SIDE)
+            best = along, why = k < 0 || o == mine ? 2 : 1, *dir = side >= 0, hit = o;
+    }
+    if (why == 1 && tj_rd(hit + 0x280)) {
+        obj_vec(tj_rd(tj_rd(hit) + 0x68), hit, q);
+        if (q[0] * f[0] + q[1] * f[1] > TJ_SAME)
+            why = 0;
+    }
+    return why;
+}
+
+static void tj_step(uint32_t veh, float dt)
+{
+    if (!tj_traffic(veh))
+        return;
+    const float *b = (const float *)(uintptr_t)tj_rd(veh + 0x250);
+    float v2 = b ? b[0x10] * b[0x10] + b[0x11] * b[0x11] : 0, p[3];
+    tj_car *c = NULL, *spare = NULL;
+    for (int i = 0; i < TJ_N && !c; i++)
+        if (tj[i].veh == veh)
+            c = &tj[i];
+        else if (!spare && (!tj[i].veh || tj_tick - tj[i].seen > 60))
+            spare = &tj[i];
+    if (!c && (v2 >= TJ_SLOW || !spare || (tj_tick + (veh >> 4)) % 16))
+        return;
+    uc_pos(veh, p);
+    int dir = (int)(veh >> 5 & 1), why;
+    if (!c) {
+        int push = (tj_rd(veh + 0x180) & 1) && *(const float *)(uintptr_t)(veh + 0x18c) > 0;
+        if ((why = tj_front(veh, p, &dir)) == 2 || (!why && !push))
+            return;
+        c = spare;
+        tj_gone_n -= c->gone;
+        memset(c, 0, sizeof *c);
+        c->veh = veh, c->dir = dir, c->next = TJ_WAIT, c->at[0] = p[0], c->at[1] = p[1];
+    }
+    float ax = p[0] - c->at[0], ay = p[1] - c->at[1];
+    if (ax * ax + ay * ay > TJ_AWAY * TJ_AWAY) {
+        tj_gone_n -= c->gone;
+        memset(c, 0, sizeof *c);
+        return;
+    }
+    c->seen = tj_tick;
+    c->t += dt;
+    if (c->back > 0) {
+        c->back -= dt;
+        ((void (*)(uint32_t, float))(uintptr_t)TJ_REVERSE)(veh, 1.0f);
+        ((void (*)(uint32_t, int, float))(uintptr_t)TJ_STEER)(veh, c->dir, 1.0f);
+        if (c->back <= 0)
+            c->next = c->t + TJ_WAIT;
+    } else if (c->t >= c->next) {
+        if ((why = tj_front(veh, p, &dir)) == 2)
+            c->t = 0, c->next = TJ_WAIT;
+        else
+            c->back = TJ_BACK, c->dir = why ? dir : c->dir;
+    }
+    uint32_t me = tj_rd(MR_PLAYER);
+    if (!c->gone && me && c->t > TJ_GIVE_UP) {
+        float q[3];
+        uc_pos(me + 4, q);
+        q[0] -= p[0], q[1] -= p[1];
+        if (q[0] * q[0] + q[1] * q[1] > TJ_FAR * TJ_FAR)
+            c->gone = 1, tj_gone_n++;
+    }
+}
+
+static int tj_chased(uint32_t veh)
+{
+    uint32_t vt = tj_rd(veh), ch = tj_rd(veh + 0x280), me = tj_rd(MR_PLAYER);
+    if ((vt != TJ_CAR && vt != TJ_MOTO) || !ch || !me || !(tj_rd(veh + 0x180) & TJ_SCRIPTED))
+        return 0;
+    return tj_rd(ch + 0x558) == veh && (tj_rd(ch + 0x584) & 4) && ch != me + 4 && tj_rd(ch + 0x64c) != me + 4;
+}
+
+static void tj_chase(uint32_t veh, float dt)
+{
+    float *b = (float *)(uintptr_t)tj_rd(veh + 0x250), f[3], p[3], g[3];
+    int r = -1, spare = -1;
+    for (int i = 0; i < 4 && r < 0; i++)
+        if (tj_run[i].veh == veh)
+            r = i;
+        else if (spare < 0 && (!tj_run[i].veh || tj_tick - tj_run[i].seen > 60))
+            spare = i;
+    if (!b || (r < 0 && (r = spare) < 0))
+        return;
+    obj_vec(tj_rd(tj_rd(veh) + 0x68), veh, f);
+    float fv = b[0x10] * f[0] + b[0x11] * f[1];
+    if (tj_run[r].veh != veh)
+        tj_run[r].veh = veh, tj_run[r].v = fv, tj_run[r].hold = 0;
+    tj_run[r].seen = tj_tick;
+    uint32_t hit = 0, v = tj_rd(TJ_CARS), e = tj_rd(TJ_CARS + 4);
+    for (uint32_t c = tj_rd((uint32_t)(uintptr_t)b + 0x70); c && !hit; c = tj_rd(c + 0xc))
+        if (tj_rd(tj_rd(c + 4) + 8) && !(tj_rd(tj_rd(c + 4) + 4) & 1))
+            for (uint32_t o = v; o < e && !hit; o += 4)
+                if (tj_rd(tj_rd(o) + 0x250) == tj_rd(c) && tj_traffic(tj_rd(o)))
+                    hit = tj_rd(o);
+    if (!hit || (tj_rd(veh + 0x180) & 0xa))
+        tj_run[r].v = fv, tj_run[r].hold = hit ? tj_run[r].hold : 0;
+    else if (fv < tj_run[r].v && tj_run[r].hold < TJ_HOLD) {
+        b[0x10] += f[0] * (tj_run[r].v - fv), b[0x11] += f[1] * (tj_run[r].v - fv);
+        tj_run[r].hold += dt;
+    }
+    if (!hit)
+        return;
+    int y = -1, live = 0;
+    for (int i = 0; i < 8 && !live; i++) {
+        int on = (int)(tj_way[i].until - tj_tick) > 0;
+        if (on && tj_way[i].veh == hit)
+            y = i, live = 1;
+        else if (!on && y < 0)
+            y = i;
+    }
+    if (y < 0)
+        return;
+    tj_way[y].until = tj_tick + (unsigned)(TJ_GIVE / dt);
+    if (live)
+        return;
+    uc_pos(veh, p);
+    uc_pos(hit, g);
+    float a0 = f[1], a1 = -f[0];
+    if (f[0] * (g[1] - p[1]) - f[1] * (g[0] - p[0]) >= 0)
+        a0 = -a0, a1 = -a1;
+    obj_vec(tj_rd(tj_rd(hit) + 0x68), hit, g);
+    tj_way[y].veh = hit, tj_way[y].back = a0 * g[0] + a1 * g[1] < 0;
+    tj_way[y].m[0] = a0 + (tj_way[y].back ? -g[0] : g[0]), tj_way[y].m[1] = a1 + (tj_way[y].back ? -g[1] : g[1]);
+}
+
+static int tj_give_way(uint32_t veh)
+{
+    for (int i = 0; i < 8; i++)
+        if (tj_way[i].veh == veh && (int)(tj_way[i].until - tj_tick) > 0) {
+            float g[3], *m = tj_way[i].m;
+            if (!tj_traffic(veh))
+                return 0;
+            obj_vec(tj_rd(tj_rd(veh) + 0x68), veh, g);
+            float cr = (m[0] * g[1] - m[1] * g[0]) / sqrtf(m[0] * m[0] + m[1] * m[1] + 1e-6f);
+            ((void (*)(uint32_t, float))(uintptr_t)(tj_way[i].back ? TJ_REVERSE : TJ_ACCEL))(veh, 1.0f);
+            ((void (*)(uint32_t, int, float))(uintptr_t)TJ_STEER)(veh, cr >= 0, fabsf(cr));
+            return 1;
+        }
+    return 0;
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
+static void gmv_tj_step(uint32_t veh, float dt)
+{
+    if (veh == tj_rd(tj_rd(TJ_CARS)))
+        tj_tick++;
+    if (!pd_racing && tj_chased(veh))
+        tj_chase(veh, dt);
+    else if (!tj_give_way(veh) && pd_scale[0] > 1)
+        tj_step(veh, dt);
+    ((void (*)(uint32_t, float))(uintptr_t)tj_rd(tj_rd(veh) + 0x174))(veh, dt);
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
+static uint32_t gmv_tj_keep(uint32_t self, uint32_t obj)
+{
+    for (int i = 0; i < TJ_N && tj_gone_n; i++)
+        if (tj[i].veh == obj && tj[i].gone) {
+            uint32_t r = ((uint32_t (*)(uint32_t, uint32_t))(uintptr_t)code_call_target(TJ_GONE_SITE))(tj_rd(TJ_WORLD), obj);
+            if (r != obj)
+                memset(&tj[i], 0, sizeof tj[i]), tj_gone_n--;
+            return r;
+        }
+    uint32_t vt = tj_rd(obj);
+    float *b = (float *)(uintptr_t)pd_centres[0][1] + 2, was = *b, p[3];
+    int on = (vt == TJ_CAR || vt == TJ_MOTO) && tj_heli();
+    if (on)
+        uc_pos(obj, p), on = fabsf(was - p[2]) < TJ_HIGH;
+    if (on)
+        *b = p[2];
+    uint32_t r = ((uint32_t (*)(uint32_t, uint32_t))(uintptr_t)TJ_KEEP_FN)(self, obj);
+    *b = was;
+    return r;
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
+static int gmv_tj_spot(uint32_t sp, uint32_t loc)
+{
+    int kind = *(const int *)(uintptr_t)(sp + 0x28), on = (kind == 3 || kind == 8) && tj_heli();
+    float lz = *(const float *)(uintptr_t)(loc + 0x10), *c[4] = {0}, was[4] = {0};
+    if (on && kind == 8)
+        return 0;
+    on = on && fabsf(((const float *)(uintptr_t)pd_centres[0][0])[2] - lz) < TJ_HIGH;
+    for (int i = 0; on && i < 4; i++)
+        c[i] = (float *)(uintptr_t)pd_centres[i / 2][i % 2] + 2, was[i] = *c[i], *c[i] = lz;
+    int r = ((int (*)(uint32_t, uint32_t))(uintptr_t)TJ_SPOT_FN)(sp, loc) & 0xff;
+    for (int i = 0; on && i < 4; i++)
+        *c[i] = was[i];
+    return r;
+}
+
+__attribute__((cdecl, force_align_arg_pointer))
+static int gmv_tj_clear(uint32_t sp, uint32_t loc)
+{
+    int r = ((int (*)(uint32_t, uint32_t))(uintptr_t)TJ_CLEAR_FN)(sp, loc) & 0xff;
+    uint32_t w = tj_rd(SV_WORLD);
+    if (r || pd_scale[0] <= 1 || *(const int *)(uintptr_t)(sp + 0x28) != 3 || !w)
+        return r;
+    const float *l = (const float *)(uintptr_t)(loc + 8);
+    float q[3];
+    for (uint32_t o = ((uint32_t (*)(uint32_t, int))(uintptr_t)TJ_FIRST)(w, 0); o; o = tj_rd(o + 0xc)) {
+        uint32_t vt = tj_rd(o);
+        const float *b = (const float *)(uintptr_t)tj_rd(o + 0x250);
+        if ((vt != TJ_CAR && vt != TJ_MOTO) || !tj_rd(o + 0x280) || !b ||
+            b[0x10] * b[0x10] + b[0x11] * b[0x11] >= TJ_CRAWL)
+            continue;
+        uc_pos(o, q);
+        q[0] -= l[0], q[1] -= l[1];
+        if (q[0] * q[0] + q[1] * q[1] < TJ_CLEAR * TJ_CLEAR)
+            return 1;
+    }
+    return 0;
 }
 
 static void apply_population_density(void)
@@ -579,13 +816,12 @@ static void apply_population_density(void)
         gmv_log("[gamepatch] population density write failed (%lu)\n", GetLastError());
         return;
     }
-    int deeper = tables_live();                 /* the options tab can raise them later */
+    int deeper = tables_live();
     for (int i = 0; i < 3; i++)
         deeper |= pd_scale[i] > 1;
-    if (deeper && sm_is_call(PD_CENTRE_SITE, PD_CENTRE_FN)) {
-        int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_spawn_centres - (PD_CENTRE_SITE + 5));
-        pd_centres_on = patch_bytes(PD_CENTRE_SITE + 1, (const unsigned char *)&r, 4);
-    } else if (deeper)
+    if (deeper && sm_is_call(PD_CENTRE_SITE, PD_CENTRE_FN))
+        pd_centres_on = patch_call(PD_CENTRE_SITE, (void *)gmv_spawn_centres);
+    else if (deeper)
         gmv_log("[gamepatch] spawn centres' update not the expected bytes; the spawn strip stays as deep as the Mac's\n");
     int keep = 0;
     if (deeper && *(const uint32_t *)(uintptr_t)PD_KEEP_SITE + PD_KEEP_BASE == PD_KEEP_OLD &&
@@ -598,10 +834,8 @@ static void apply_population_density(void)
         gmv_log("[gamepatch] spawn pool code not the expected bytes; no more cars or people than the Mac's pool holds\n");
     if (!dd_on)
         for (int i = 0; i < 2; i++)
-            if (sm_is_call(dd_proxy_sites[i], DD_PROXY_FN)) {
-                int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_create_proxy - (dd_proxy_sites[i] + 5));
-                patch_bytes(dd_proxy_sites[i] + 1, (const unsigned char *)&r, 4);
-            }
+            if (sm_is_call(dd_proxy_sites[i], DD_PROXY_FN))
+                patch_call(dd_proxy_sites[i], (void *)gmv_create_proxy);
     pd_on = 1;
     gmv_log("[gamepatch] population density: traffic %.2gx (cap 18 -> %d), pedestrians %.2gx (14 -> %d), "
             "parked cars %.2gx (10 -> %d), all together 48 -> %d%s%s%s; the Mac's during races\n",
@@ -610,7 +844,6 @@ static void apply_population_density(void)
             pd_pool_on ? "; spawn pool moved to make room" : "", keep ? "; taken away farther out to match" : "");
 }
 
-/* The spawn check's hook, for the densities. */
 void apply_spawn_hook(void)
 {
     apply_population_density();
@@ -620,6 +853,26 @@ void apply_spawn_hook(void)
         gmv_log("[gamepatch] spawn check call not the expected bytes; population densities not applied\n");
         return;
     }
-    int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_can_spawn - (SV_SITE + 5));
-    patch_bytes(SV_SITE + 1, (const unsigned char *)&r, 4);
+    patch_call(SV_SITE, (void *)gmv_can_spawn);
+    static const unsigned char step_orig[6] = { 0xff, 0x91, 0x74, 0x01, 0x00, 0x00 };
+    unsigned char step[6] = { 0xe8 };
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)gmv_tj_step - (TJ_STEP_SITE + 5));
+    memcpy(step + 1, &rel, 4);
+    step[5] = 0x90;
+    const void *at = (const void *)(uintptr_t)TJ_STEP_SITE;
+    if ((memcmp(at, step_orig, sizeof step) && memcmp(at, step, sizeof step)) ||
+        (!sm_is_call(TJ_KEEP_SITE, TJ_KEEP_FN) && !sm_is_call(TJ_KEEP_SITE, (uint32_t)(uintptr_t)gmv_tj_keep)) ||
+        (!sm_is_call(TJ_CLEAR_SITE, TJ_CLEAR_FN) && !sm_is_call(TJ_CLEAR_SITE, (uint32_t)(uintptr_t)gmv_tj_clear))) {
+        gmv_log("[gamepatch] vehicle step, despawn or spawn clearance call not the expected bytes; stuck traffic is "
+                "left to the game\n");
+        return;
+    }
+    patch_bytes(TJ_STEP_SITE, step, sizeof step);
+    patch_call(TJ_KEEP_SITE, (void *)gmv_tj_keep);
+    patch_call(TJ_CLEAR_SITE, (void *)gmv_tj_clear);
+    for (int i = 0; i < 2; i++)
+        if (sm_is_call(tj_spot_sites[i], TJ_SPOT_FN))
+            patch_call(tj_spot_sites[i], (void *)gmv_tj_spot);
+        else
+            gmv_log("[gamepatch] spawn spot check call not the expected bytes; no traffic below a helicopter\n");
 }

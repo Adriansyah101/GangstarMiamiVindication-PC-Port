@@ -1,4 +1,3 @@
-/* radio_logo.c -- RADIO_LOGO_FIX: the HUD radio logo after getting into a car, and its trace */
 #include "compat.h"
 #include <stdint.h>
 #include <string.h>
@@ -9,21 +8,10 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- diagnostic: radio station vs the HUD logo (GMV_RADIO_TRACE=1) ----
-
-   Symptom: entering a car with the HUD showing one station while another station's song
-   plays.  The music manager (mm, built by 0x60e2c) keeps the current station in [mm+0x21c]:
-   0x60190 turns the radio on (vehicle entry 0x10a57c passes the car's station, [car+0x120] the
-   first time, [car+0xc8] after that; it returns at once if the radio is already on), 0x6000c
-   switches station (stop, tune sfx 0x121, then [mm+0x21c] = station), and 0x5f3e8 picks the next
-   item of a station from the RadioStationController at mm+0x254 (shuffle bags, the game's own RNG
-   0x45ce10).  The HUD logo is set only by 0x17357e (widget [+0x14] = station, show that logo),
-   called from Radio::show 0x930bc and the refresh 0x9323a, both with [mm+0x21c].  This logs the
-   station table once with sound names, each start, switch and pick, and each logo change, so one
-   occurrence shows which side disagrees.  Pure diagnostic; installed only when GMV_RADIO_TRACE is set. */
-#define RADIO_START_FN  0x00060190u   /* (mm, station or -1): radio on                       */
-#define RADIO_SHOW_RET  0x000931beu   /* return address of the logo call in Radio::show      */
-#define RADIO_BANK_PP   0x0063e56cu   /* -> global -> sound bank; name(id) = [[bank]+4][id*8] */
+/* 0x60e2c [mm+0x21c] 0x60190 0x10a57c [car+0x120] */
+#define RADIO_START_FN  0x00060190u
+#define RADIO_SHOW_RET  0x000931beu
+#define RADIO_BANK_PP   0x0063e56cu
 
 static const uint32_t radio_pick_sites[]  = { 0x000601cdu, 0x000605bau };
 static const uint32_t radio_tune_sites[]  = { 0x0006014bu, 0x00060186u };
@@ -32,7 +20,7 @@ static const uint32_t radio_start_sites[] = { 0x00036d1fu, 0x0010a5f5u, 0x0010a6
 static const uint32_t radio_logo_sites[]  = { 0x000931b9u, 0x000932feu };
 static const char *const radio_logo_names[5] = { "104FM", "303FM", "42FM", "101.1FM", "99FM" };
 
-static int g_radio_logo = -1;   /* station the HUD logo last showed */
+static int g_radio_logo = -1;
 
 static uint32_t radio_rd(uint32_t a)
 {
@@ -53,8 +41,7 @@ static const char *radio_logo_name(int station)
     return (station >= 0 && station < 5) ? radio_logo_names[station] : station == GMV_CR_STATION ? "CUSTOM" : "-";
 }
 
-/* RadioStationController (mm+0x254): +0x1c count, +0x18 RadioStation*[]; each station is
-   {nA, A[], nB, B[], x} as RadioStation::Read 0x95610 reads it. */
+/* RadioStationController mm+0x254 +0x1c +0x18 nB 0x95610 */
 static void radio_dump_stations(const unsigned char *mm)
 {
     uint32_t ctl = (uint32_t)(uintptr_t)(mm + 0x254);
@@ -109,7 +96,7 @@ static void gmv_radio_start(unsigned char *mm, int station)
     int old = *(int *)(mm + 0x21c);
     uint32_t flags = *(uint32_t *)(mm + 0x220);
     ((void (*)(void *, int))(uintptr_t)RADIO_START_FN)(mm, station);
-    if (GMV_DEV)                    /* the trace is never installed in a release; radio_logo_set knows the address */
+    if (GMV_DEV)
         gmv_log("[radio] start(%d): flags 0x%x -> 0x%x, station %d -> %d, slot %d%s caller=%p\n", station,
             flags, *(uint32_t *)(mm + 0x220), old, *(int *)(mm + 0x21c), *(int *)(mm + 0x218),
             (flags & 0x11) ? " (radio already on: ignored)" : "", __builtin_return_address(0));
@@ -127,21 +114,16 @@ static void gmv_radio_logo(void *widget, int station)
     g_radio_logo = station;
 }
 
-/* Point every `call fn` in sites[] at hook; checks them all first, so it patches all or none. */
 static int radio_redirect(const uint32_t *sites, size_t n, uint32_t fn, void *hook)
 {
     for (size_t i = 0; i < n; i++) {
-        const unsigned char *p = (const unsigned char *)(uintptr_t)sites[i];
-        int32_t rel;
-        memcpy(&rel, p + 1, 4);
-        if (p[0] != 0xe8 || sites[i] + 5 + (uint32_t)rel != fn) {
+        if (!sm_is_call(sites[i], fn)) {
             gmv_log("[gamepatch] 0x%08x is not the expected call to 0x%08x; radio trace skipped\n", sites[i], fn);
             return 0;
         }
     }
     for (size_t i = 0; i < n; i++) {
-        int32_t rel = (int32_t)((uint32_t)(uintptr_t)hook - (sites[i] + 5));
-        if (!patch_bytes(sites[i] + 1, (const unsigned char *)&rel, 4)) {
+        if (!patch_call(sites[i], hook)) {
             gmv_log("[gamepatch] write at 0x%08x failed (%lu); radio trace partly installed\n",
                     sites[i] + 1, GetLastError());
             return 0;
@@ -165,44 +147,17 @@ void apply_radio_trace(void)
 #undef RADIO_N
 }
 
-/* ---- the HUD radio logo after getting into a car (original game, changed by the port) ----
-
-   Getting into a car switches the HUD first, and the radio refresh 0x9323a sets the logo from
-   [mm+0x21c] then.  Only afterwards does the car code 0x10a57c start the radio with the car's own
-   station (0x60190; [car+0x120] the first time, [car+0xc8] after that), and nothing refreshes the
-   logo again.  So the HUD shows the station that played last (104FM before the radio has ever been
-   on) while the car's station plays.  GMV_RADIO_TRACE caught it: logo 0, then start(4) playing
-   m_radio_rock_08.  The Mac runs the same code.
-
-   The two moments are apart by the whole get-in animation: the player's enter-vehicle step
-   0xf89fe refreshes the logo (through 0x28564 and again inline at 0xf8ab7) as the player starts
-   getting in, and the car's radio starts once they are seated, so the wrong logo was on screen
-   for about a second even with the first version of this fix.
-
-   Fix, two parts:
-   1. The last call of 0xf89fe, 0xf6032(character, 1, 0) at 0xf8aef, goes to gmv_radio_enter.
-      Before making it, for the player only (0x617b2(character+4)), it works out the station the
-      car is about to start, the way 0x10a57c and 0x60190 will: nothing if the byte at 0x647ed0 is
-      clear (0x10a57c then starts no radio) or [mm+0x220] has 0x11 (0x60190 then returns at once);
-      otherwise [car+0x183] bit 0 ? [car+0xc8] : [car+0x120], with -1 meaning [mm+0x21c].  The car
-      is [character+0x55c], the vehicle 0xf89fe hands the HUD.  It shows that logo the way 0x9323a
-      does: unless [mm+0x220] has 0x20, and only once the HUD has its radio widget
-      ([app+0x218] > 0x34, widget [[app+0x214]+0xd0]), 0x17357e(widget, station).  This is the
-      same game tick as the game's refresh, so the old logo is never drawn.
-   2. The two car-entry calls go to gmv_radio_entry, which makes the call and then shows the logo
-      of the station that actually started, in case part 1 guessed wrong or did not run.
-   Default on; GMV_RADIO_LOGO_FIX=0 or ORIGINAL_MAC_EXPERIENCE=1 keeps the original. */
-#define RADIO_ON_FLAG    0x00647ed0u   /* byte: 0x10a57c starts the car radio only when set       */
-#define RADIO_IS_PLAYER  0x000617b2u   /* (character+4) -> 1 if that character is the player      */
-#define RADIO_ENTER_SITE 0x000f8aefu   /* last call of the enter-vehicle step 0xf89fe              */
-#define RADIO_ENTER_FN   0x000f6032u   /* what it calls: (character, 1, 0)                        */
+/* 0x9323a [mm+0x21c] 0x10a57c 0xf89fe 0x28564 0xf8ab7 */
+#define RADIO_ON_FLAG    0x00647ed0u   /* 0x10a57c */
+#define RADIO_IS_PLAYER  0x000617b2u
+#define RADIO_ENTER_SITE 0x000f8aefu   /* 0xf89fe */
+#define RADIO_ENTER_FN   0x000f6032u
 
 static const uint32_t radio_entry_sites[] = { 0x0010a5f5u, 0x0010a65au };
-static uint32_t g_radio_entry_next;  /* what those calls reached before: 0x60190, or the trace hook */
-static int g_radio_predicted = -1;   /* station part 1 showed for the car being entered */
+static uint32_t g_radio_entry_next;  /* 0x60190 */
+static int g_radio_predicted = -1;
 
-/* Show station's logo the way the refresh 0x9323a does.  Returns the logo shown before, or -2 if
-   the HUD has no radio logo to set yet. */
+/* 0x9323a */
 static int radio_logo_show(const unsigned char *mm, int station)
 {
     unsigned char *app = ((unsigned char *(*)(void))(uintptr_t)RADIO_APP_FN)();
@@ -222,8 +177,7 @@ __attribute__((cdecl, force_align_arg_pointer))
 static int gmv_radio_enter(unsigned char *ch, int a, int b)
 {
     unsigned char *car = *(unsigned char **)(ch + 0x55c);
-    unsigned char **mmp = *(unsigned char ***)(uintptr_t)RADIO_MM_PP;
-    unsigned char *mm = mmp ? *mmp : NULL;
+    unsigned char *mm = radio_mm();
     if (car && mm && *(const unsigned char *)(uintptr_t)RADIO_ON_FLAG &&
         !(*(uint32_t *)(mm + 0x220) & 0x11) && ((int (*)(void *))(uintptr_t)RADIO_IS_PLAYER)(ch + 4)) {
         int station = (car[0x183] & 1) ? *(int *)(car + 0xc8) : *(int *)(car + 0x120);
@@ -254,8 +208,6 @@ static void gmv_radio_entry(unsigned char *mm, int station)
     g_radio_predicted = -1;
 }
 
-/* 1 = the car-entry calls go to gmv_radio_entry and the enter step's to gmv_radio_enter, 0 = where
-   they went before; -1 if a site is none of those, -2 if a write failed. */
 int radio_logo_set(int on)
 {
     const uint32_t entry = (uint32_t)(uintptr_t)gmv_radio_entry, enter = (uint32_t)(uintptr_t)gmv_radio_enter;
@@ -274,12 +226,10 @@ int radio_logo_set(int on)
     }
     g_radio_entry_next = next;
     for (size_t i = 0; i < sizeof radio_entry_sites / sizeof *radio_entry_sites; i++) {
-        int32_t rel = (int32_t)((on ? entry : next) - (radio_entry_sites[i] + 5));
-        if (!patch_bytes(radio_entry_sites[i] + 1, (const unsigned char *)&rel, 4))
+        if (!patch_call(radio_entry_sites[i], (const void *)(uintptr_t)(on ? entry : next)))
             return -2;
     }
-    int32_t qrel = (int32_t)((on ? enter : RADIO_ENTER_FN) - (RADIO_ENTER_SITE + 5));
-    if (!patch_bytes(RADIO_ENTER_SITE + 1, (const unsigned char *)&qrel, 4))
+    if (!patch_call(RADIO_ENTER_SITE, (const void *)(uintptr_t)(on ? enter : RADIO_ENTER_FN)))
         return -2;
     g_radio_predicted = -1;
     return on;
@@ -287,8 +237,7 @@ int radio_logo_set(int on)
 
 void apply_radio_logo_fix(void)
 {
-    const char *e = gmv_getenv("GMV_RADIO_LOGO_FIX");
-    if (e && *e == '0')
+    if (gmv_env_off(gmv_getenv("GMV_RADIO_LOGO_FIX")))
         return;
     int r = radio_logo_set(1);
     if (r == -1)

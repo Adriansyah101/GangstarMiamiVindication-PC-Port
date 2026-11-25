@@ -1,5 +1,4 @@
-# CONTINUE's black fade covers the whole window, its top row and left column too, with the Mac's 4x anti-aliasing
-# (FADE_EDGE_FIX: without it a line of picture shows along those two edges)
+# FADE_EDGE_FIX: CONTINUE's black fade covers the top row and left column with MSAA 4
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

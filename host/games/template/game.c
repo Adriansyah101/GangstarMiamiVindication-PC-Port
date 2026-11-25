@@ -1,5 +1,3 @@
-/* game.c -- a game with no patches, the starting point of a new one: every hook of game.h, doing nothing.
-   Also what keeps core\ and shims\ honest: build.ps1 -Game template links them with no Gangstar source. */
 #include <stdint.h>
 #include <stddef.h>
 #include <GL/gl.h>
@@ -31,6 +29,7 @@ const gmv_settings_table gmv_game_settings = {
     section_help, sizeof section_help / sizeof *section_help,
     preset, sizeof preset / sizeof *preset,
     "[config] ORIGINAL_MAC_EXPERIENCE=1\n",
+    NULL, 0,
     NULL, 0,
 };
 
@@ -69,7 +68,6 @@ const void *gmv_game_gl_buffer_bytes(unsigned name, uintptr_t off) { (void)name;
 void gmv_game_perf_report(double seconds) { (void)seconds; }
 void gmv_game_perf_counts(unsigned *made, unsigned *gone, int *bounds) { *made = *gone = 0; *bounds = 0; }
 
-/* Plain draws, with the shim's TEXFIX around them. */
 void gmv_game_draw_arrays(void *real, unsigned mode, int first, int count, void *caller)
 {
     (void)caller;

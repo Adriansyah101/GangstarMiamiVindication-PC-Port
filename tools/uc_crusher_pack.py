@@ -16,7 +16,6 @@ import sys
 
 MAGIC, VERSION = b"GMVP", 1
 
-
 def mask_bytes(start, n):
     out = bytearray(n)
     for i in range(n):
@@ -27,19 +26,16 @@ def mask_bytes(start, n):
         out[i] = x & 0xFF
     return out
 
-
 def xor_from(buf, start):
     m = mask_bytes(start, len(buf) - start)
     for i in range(start, len(buf)):
         buf[i] ^= m[i - start]
-
 
 def fnv1a(data):
     h = 2166136261
     for b in data:
         h = ((h ^ b) * 16777619) & 0xFFFFFFFF
     return h
-
 
 def pack(folder, out):
     names = sorted(n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
@@ -57,7 +53,6 @@ def pack(folder, out):
     xor_from(buf, 8)
     open(out, "wb").write(buf)
     print("packed %d files (%d bytes) into %s" % (len(names), len(buf), out))
-
 
 def unpack(pak, folder):
     buf = bytearray(open(pak, "rb").read())
@@ -80,7 +75,6 @@ def unpack(pak, folder):
         open(os.path.join(folder, name), "wb").write(buf[o:o + sz])
         o += sz
     print("unpacked %d files into %s" % (cnt, folder))
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 4 or sys.argv[1] not in ("pack", "unpack"):

@@ -1,5 +1,3 @@
-/* fault.c -- what a fault in the game means, on any system.  veh.c (Windows) and fault_linux.c get the fault from
-   the system and come here with its registers. */
 #include <stdint.h>
 #include <string.h>
 
@@ -10,13 +8,12 @@
 #include "platform.h"
 #include "veh.h"
 
-/* Self-test window inside __PAGEZERO: never game code, never mappable. */
 #define SELFTEST_ADDR 0x800
 
 static uint32_t low_start, low_end;
 static volatile uint32_t selftest_hits;
-static volatile uint32_t cur_init = 0xFFFFFFFFu, cur_init_addr;  /* set while a static initializer runs */
-static volatile int in_main;                                    /* set while main() runs */
+static volatile uint32_t cur_init = 0xFFFFFFFFu, cur_init_addr;
+static volatile int in_main;
 static volatile uint32_t main_entry;
 
 void veh_note_init(uint32_t index, uint32_t addr)
@@ -94,30 +91,26 @@ void fault_report(const gmv_regs *r, int access, uint32_t addr)
         if (gmv_module_of(eip, modname, sizeof modname, &base))
             gmv_log("        eip module: %s (base 0x%08x)\n", modname, base);
     }
-    {   /* mini-backtrace: stack words that land in the game image or host code */
+    {
         const uint32_t *sp = (const uint32_t *)(uintptr_t)r->esp;
         if (gmv_readable(sp, 64 * sizeof(uint32_t)))
             for (int k = 0; k < 64; k++)
                 if (sp[k] >= 0x1000 && sp[k] < GMV_TEXT_HI)
                     gmv_log("        [esp+%02x] -> game 0x%08x\n", k * 4, sp[k]);
     }
-    {   /* ebp-chain backtrace: some game frames are huge (0x300+ bytes of locals), so the raw esp
-           scan above only reaches locals, not the real return addresses.  Walk saved frame pointers
-           ([ebp]=caller ebp, [ebp+4]=return address) to recover the actual call chain -- which names
-           the subsystem that faulted (and whether an input handler is on the stack). */
+    {   /* 0x300 */
         const uint32_t *fp = (const uint32_t *)(uintptr_t)r->ebp;
         for (int depth = 0; depth < 24 && fp && gmv_readable(fp, 8); depth++) {
             uint32_t ret = fp[1], prev = fp[0];
             if (ret >= 0x1000)
                 gmv_log("        #%-2d ret 0x%08x (%s)\n", depth, ret, fault_where(ret));
-            if (prev <= (uint32_t)(uintptr_t)fp)   /* ebp must ascend; stop on a loop or garbage */
+            if (prev <= (uint32_t)(uintptr_t)fp)   /* ebp */
                 break;
             fp = (const uint32_t *)(uintptr_t)prev;
         }
     }
 #if GMV_DEV
-    {   /* deeper scan: return addresses (a call just before) in the game, the host or any module,
-           for faults inside code whose ebp is not a frame pointer (the GL driver) */
+    {   /* ebp GL */
         const unsigned char *sp = (const unsigned char *)(uintptr_t)r->esp;
         int shown = 0;
         for (int k = 0; k < 4096 && shown < 32; k++) {
@@ -167,4 +160,3 @@ int veh_selftest(void)
     int r = fn();
     return r == 0x5A17 && selftest_hits == before + 1 ? 0 : -1;
 }
-

@@ -1,5 +1,4 @@
-# BACKGROUND_THROTTLE in the city: behind the taskbar (30 drawn frames a second, the game runs on), then minimized
-# (10, no swap, Esc pauses the game); back in front the pause menu waits and the full rate is back
+# BACKGROUND_THROTTLE in the city: behind the taskbar (30 fps), minimized (10, no swap, Esc pauses), full rate back in front
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
@@ -13,7 +12,7 @@ save Gangstar2.sav
 wait 8
 key SPACE
 wait 12
-minimize 4               # in the main menu: nothing to pause
+minimize 4
 wait 2
 click 0.13 0.39
 wait 35

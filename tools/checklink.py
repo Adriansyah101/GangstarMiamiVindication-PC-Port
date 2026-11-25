@@ -1,11 +1,3 @@
-"""Cross-check a GMVL link table against the Mach-O it was generated from.
-
-Nothing here executes game code; it only reads both files and reports what the host would
-leave unhandled: symbol-pointer slots nobody fills, relocs that overlap or land in zerofill,
-binds outside __DATA, and what the weak-bind stream would have changed.
-
-usage: python -I checklink.py <macho> <gmv_link.bin>
-"""
 import collections
 import os
 import struct
@@ -14,7 +6,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machoinfo import parse, symbols, INDIRECT_SYMBOL_LOCAL, INDIRECT_SYMBOL_ABS  # noqa: E402
 from genlink import uleb, sleb  # noqa: E402
-
 
 def read_link(path):
     with open(path, "rb") as f:
@@ -38,9 +29,7 @@ def read_link(path):
         binds.append((slot, addend, ordinal, flags, name))
     return ver, relocs, binds, sets, len(b) - o
 
-
 def weak_binds(buf, segs):
-    """Decode the weak-bind stream: (slot, name) entries plus strong-definition markers."""
     i, name, addr, out, strong = 0, "", 0, [], []
     while i < len(buf):
         b = buf[i]
@@ -52,7 +41,7 @@ def weak_binds(buf, segs):
             end = buf.index(b"\0", i)
             name = buf[i:end].decode("latin-1")
             i = end + 1
-            if imm & 8:                 # BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION
+            if imm & 8:
                 strong.append(name)
         elif op == 0x50:
             pass
@@ -84,7 +73,6 @@ def weak_binds(buf, segs):
             raise SystemExit("bad weak bind opcode 0x%02x at %d" % (b, i - 1))
     return out, strong
 
-
 def main():
     macho, link = sys.argv[1], sys.argv[2]
     with open(macho, "rb") as f:
@@ -111,7 +99,6 @@ def main():
     lo = segs[1]["vmaddr"]
     hi = max(s["vmaddr"] + s["vmsize"] for s in segs if s["name"] != "__LINKEDIT")
 
-    # ---- relocs ----------------------------------------------------------------------
     rs = sorted(relocs)
     overlap = [(a, b) for a, b in zip(rs, rs[1:]) if b - a < 4]
     bad_place = collections.Counter()
@@ -135,7 +122,6 @@ def main():
     for a, b in overlap[:10]:
         print("   overlap 0x%06x / 0x%06x" % (a, b))
 
-    # ---- binds -----------------------------------------------------------------------
     slot_set = collections.Counter(b[0] for b in binds)
     dup = [s for s, n in slot_set.items() if n > 1]
     not_data = [b for b in binds if where(b[0])[0] not in ("__DATA", "__OBJC")]
@@ -155,7 +141,6 @@ def main():
     print("binds that are also relocs (would be double-patched): %d" % len(both))
     problems += len(both)
 
-    # ---- sets (self / weak binds resolved to the game's own definitions) --------------
     set_bad = collections.Counter()
     bound_slots = {b[0] for b in binds}
     for slot, v in sets:
@@ -172,7 +157,6 @@ def main():
     print("sets by section:", dict(by_sect), "problems:", dict(set_bad) or "none")
     problems += sum(set_bad.values())
 
-    # ---- every symbol pointer / stub slot ---------------------------------------------
     syms = symbols(data, info)
     dy = info["dysymtab"]
     ind = struct.unpack_from("<%dI" % dy["nindirectsyms"], data, dy["indirectsymoff"])
@@ -189,7 +173,6 @@ def main():
             a = s["addr"] + j * stride
             idx = ind[s["reserved1"] + j]
             if kind == 8:
-                # stub: jmp *[slot]; the slot itself must be filled by someone
                 tgt = u32(a + 2)
                 ok = (a + 2) in relset and tgt is not None and (tgt in bound or tgt in relset or tgt in setslots)
                 cover["stub ok" if ok else "stub BAD"] += 1
@@ -227,7 +210,6 @@ def main():
         print("   0x%06x %-16s now=0x%08x sym=0x%08x %s" % (a, sname, v or 0, sv, name[:90]))
     problems += len(uncovered)
 
-    # ---- weak binding ----------------------------------------------------------------
     d = info["dyld_info"]
     wb, strong = weak_binds(data[d["weak_off"]:d["weak_off"] + d["weak_size"]], segs)
     wslots = collections.Counter()
@@ -239,7 +221,6 @@ def main():
     for n in strong[:20]:
         print("   strong def:", n)
 
-    # ---- program vars and init funcs --------------------------------------------------
     for name in ("__program_vars", "__mod_init_func"):
         s = next(s for _, s in sects if s["name"] == name)
         miss = [a for a in range(s["addr"], s["addr"] + s["size"], 4) if a not in relset and (u32(a) or 0) >= lo]
@@ -249,7 +230,6 @@ def main():
     print("entry eip 0x%06x is %s" % (info["entry"], where(info["entry"])[1]["name"]))
     print("PROBLEMS: %d" % problems)
     return 1 if problems else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

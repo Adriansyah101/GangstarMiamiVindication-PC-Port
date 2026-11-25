@@ -14,12 +14,12 @@ wait 12
 click 0.13 0.39
 wait 35
 shot start
-holdscan 2C              # labelled W on AZERTY, Z's place on QWERTY: no move
+holdscan 2C
 wait 3
 releasescan 2C
 shot labelled-w
 still start labelled-w
-holdscan 11              # labelled Z on AZERTY, W's place on QWERTY: forward
+holdscan 11
 wait 3
 releasescan 11
 shot labelled-z

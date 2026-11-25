@@ -250,6 +250,11 @@ built once at the start: the options tab, the SERVICES menu's replay tab (hidden
 additions. Those are the tab's lines and the Custom Radio rows (below the stage, the game's rows where the
 file has them).
 
+Rows that set several keys (`OM_JOIN` in [`host/games/gangstar/patch/tab.c`](../host/games/gangstar/patch/tab.c))
+write each of their keys and show CUSTOM while the keys hold a mix the row has no choice for. V1.0.1 joined such
+rows: FIXES went from 25 rows on 5 pages to 13 on 3, GRAPHICS from 16 to 14 and MENU from 7 to 5. `STOPLOCK_FIX`,
+`LOAD_SLEEP_SKIP` and `LOAD_BUDGET` left the menu and are set in the file only. No key was renamed.
+
 `UC_CRUSHER` and `RADIO_SONGS` follow the switch and their menu lines at once, because with the add-on
 there, their files are read at every start, whatever the keys say and under the preset too. (So that
 neither ever needs a new start. A game started under the preset then behaves as
@@ -331,16 +336,21 @@ at all). The Mac version never had it. It runs at the same point as the AO, afte
 it, inside the same state save (`bl_*` in [`host/shims/gl/`](../host/shims/gl/)):
 
 1. Resolve the screen's colour and depth to textures.
-2. Run a bright pass at half resolution, with a soft knee above `BLOOM_THRESHOLD` (default 0.75,
-   0-0.95). Each tap is weighted down by its brightness, so single bright pixels do not flicker.
-   On the world the brightness is the brightest channel, so saturated neon glows as much as white.
-   On the sky it is the dimmest channel, so the sun and its glow bloom but a sunset or a blue sky
-   does not wash out to white. A pixel counts as sky when it is at the far end of the depth range
+2. Run a bright pass at half resolution. The cut is 0.74 + 0.26 x `BLOOM_THRESHOLD` (default 0.75,
+   0-0.95), 0.17 lower at night by the game's clock, with a soft knee 0.65 of the remaining headroom
+   wide on each side. Each tap is weighted down by its brightness, so single bright pixels do not
+   flicker. On the world the brightness is the luminance (Rec. 709 weights) plus 0.35 of the spread
+   between the strongest and the weakest channel, at most the strongest channel: grey walls and
+   pavement are judged by their luminance, and a saturated neon sign or tail light, dark by
+   luminance alone, still gets through. On the sky it is the dimmest channel, so the sun and
+   its glow bloom but a sunset or a blue sky does not wash out to white. A pixel counts as sky when it is at the far end of the depth range
    most draws used, or beyond it.
 3. Spread the glow over six levels: dual-filter downsamples, then tent upsamples, each added onto
-   the level above.
+   the level above at 1.08 times, so the widest levels weigh a little more.
 4. Screen-blend the sum into the frame (1 - (1 - frame)(1 - glow)) at `BLOOM_INTENSITY` (default 1.0),
-   with a dither against banding.
+   with a dither against banding. Where the sum passes 1 in a channel, it is divided by its largest
+   channel and moved at most a fifth of the way toward white instead of being cut per channel, so a
+   strong orange glow stays orange, not yellow or white.
 
 The game draws in 8-bit colour, so the glow comes from how bright a pixel is on screen, not from
 light values. With only the brightest channel, a sunset sky turned near-white, which is why the
@@ -1217,6 +1227,160 @@ its source file's header comment.
       lines a second; in release builds too. Default 0 (off).
     - **Privacy:** `-ffile-prefix-map` now covers every build, the plain one included, and the release exes were
       scanned in 8-bit and UTF-16 for local paths and names.
+39. **Smoother edges: `ALPHA_TO_COVERAGE` and `POST_AA` (enhancements).** With `MSAA` on, the world's alpha-tested
+    cut-outs (leaves, fences, railings) kept one hard edge per pixel: the alpha test passes or fails all of a pixel's
+    samples together, and the engine never turns on `GL_SAMPLE_ALPHA_TO_COVERAGE` (0x809e). At `MSAA=0` nothing was
+    smoothed.
+    - `ALPHA_TO_COVERAGE` (`draw_hooks.c`, `a2c_begin` / `a2c_end`): 0x809e is on for one draw when `MSAA` is 2 or
+      more, the game's alpha test is on, unit 0 is textured, blend is off, depth writes are on, the screen FBO is
+      bound and the projection is a perspective one. The alpha test stays, so a cut-out keeps its shape; only its edge
+      pixels get partial coverage. The HUD fails the perspective test.
+    - `POST_AA` (`post_aa.c`): FXAA 3.11 written from its description, one full-screen pass at the end of `ao_run`,
+      after bloom and before the HUD, with alpha masked. It reads bloom's resolved scene copy when there is one
+      (`post_color()`), else a blit of its own. `1` = always, `auto` = only while `MSAA=0`, `0` = off. `paa_init()`
+      runs in `ao_run`'s gate, before any shader call; a first build called `ActiveTexture` before the entry points
+      were loaded when FXAA was the only effect on.
+    - A draw-call probe (dev, `GMV_DRAW_PROBE=1`) found that the engine already filters its state calls and gives each
+      object its own matrix, so no draw merging was added.
+    - Off under the preset.
+40. **`TIME_OF_DAY` and `RANDOM_TIME_OF_DAY` (enhancements).** The game's clock is one object at 0x68a100: the period
+    at +4 (morning, day, sunset, night), the clock in ms at +8, a paused flag at +0x1c. Its update 0x141ff4 runs it at
+    120 times real time (a 12-minute day), and 0x142892 works out the period, colours, fog, sky, sun and moon from the
+    clock every tick. setTime is 0x14172c (tod, hour, minute). The clock is not in `Gangstar2.sav`, so neither key
+    changes a save.
+    - TIME OF DAY tab: SERVICES slot 5 (`btnMenu5`, shown through the hook at 0x165297) opens a second ServiceMissions
+      page registered as `ServiceTime`, with MISSION REPLAY's header widget moved to the map's middle. Its arrows set
+      the hour one back or forward and the minutes to 0 with 0x14172c, then run the update once with dt 0, so the
+      world changes with the menu open. Hidden during a mission or a replay.
+    - Random start: only CONTINUE's load call (0x1692bd) goes to `gmv_tod_load`, which picks a period at even odds and
+      a minute in it with its own generator, so the game's `rand()` sequence is not moved. NEW GAME, respawns and
+      replays are left alone.
+    - Both keys read 1 when blank or missing (`absent` in `settings.c`, `fill_absent` in `core/config.c`), so an older
+      ini gets them. Off under the preset.
+41. **Static collision lost with `DRAW_DISTANCE` above 1 (port fault in item 13's fix).** While the city loads after
+    CONTINUE the camera sits at (0,0,0) for two frames. Item 13's `gmv_update_cells` took any (0,0,0) last position at
+    +0x1a4 for a new grid and moved it, which also skipped that update's drop pass. The cells round the centre stayed
+    marked as loaded while 0x134fc0 dropped their queued collision, so houses, fences, hedges and trees there could be
+    walked or driven through for the rest of the session. `oc_grids` (`origin_collision.c`) now keeps each grid's last
+    camera position, and (0,0,0) counts as a new grid only for a grid not seen before or last updated elsewhere. No
+    work a tick is added; `DRAW_DISTANCE=1` and the preset are as before. A dev probe (`GMV_COLLISION_PROBE=1`) lists
+    the static objects near the camera that have no body.
+42. **`VirtualQuery` in `ms_rd` and in the walk-ray report (host cost).** `ms_rd` (`game_read.c`) checked every read
+    with a `VirtualQuery` call, and `pd_ws_report` (`density.c`) ran after each walk ray in plain and dev builds;
+    together they took 8-13 % of the main thread. `ms_rd` now reads addresses inside the game image (0x11000 to
+    0xc68000, all mapped readable) directly, and the report waits for `GMV_POOL_PROBE=1`. The values read are the
+    same, so the preset is unchanged. The lower frame rate reported on some laptops was the hybrid GPU's choice, not
+    the code: the exe exports no `NvOptimusEnablement`, so Windows may run it on either GPU, and NVIDIA's GL driver
+    costs several times more CPU per draw than the AMD built-in GPU's.
+43. **AI drivers weave on straight roads (`AI_STEERING_FIX`, original bug).** "Drive to point" 0x6ea88 steers in
+    proportion to the 3D angle between the vehicle's forward axis and the point. A point above or below the car keeps
+    that angle from reaching zero, and the side swaps each time the car crosses the line to it, so the wheel turned
+    one way and then the other several times a second. Clive's van in ON A LION HUNT, whose path points stand about 2
+    m above it, weaved through the chase at 60 and at 150 ticks/s. At 0x6ecc1 the load of `setSteer` (vtable +0x11c)
+    becomes a call through `ast_entry` to `gmv_ai_steer`, which takes the side and the angle on the ground plane with
+    the game's own gain and then calls the vehicle's `setSteer`. Off under the preset; on when blank or missing. Dev
+    aids: `GMV_STEER_PROBE=1`, `GMV_TEST_CHASE=1`.
+44. **Clive treads water over his yacht's seat (`BOAT_SEAT_FIX`, original bug).** Watched to its end, the cutscene in
+    ON A LION HUNT runs Clive off the dock and swims him to the yacht. `ObjectMoveTo` then seats him (0xcf25d, `call
+    0x72914`), but his behaviour tree is still in its swimming state, and on the next tick it plays the swimmers' idle
+    over the seated pose. Skipping the cutscene puts him on the yacht at once, so the tree never swims. At 0xcf25d the
+    call goes to `gmv_boat_seat`: for a character in deep water by the game's own test it clears his run target and
+    steps his behaviour tree once, then seats him, so the seated pose is the last one played. Off under the preset; on
+    when blank or missing. Dev aids: `GMV_BOAT_PROBE=1`, `GMV_TEST_BOAT=1`.
+45. **GL state kept by the host, and the shadow and car-reflection marks batched (host cost on NVIDIA).** With
+    NVIDIA's threaded optimization each `glGet` waits for the driver thread to catch up, and `ds_mark`, `car_mark` and
+    `sea_mark` switched framebuffers, pushed attributes and looked up uniforms for every caster.
+    - The host tracks the state the effects used to ask for: scissor, stencil, cull, polygon fill, colour mask, depth
+      func and clear values in `g_glt`; texture sizes by name (`gmv_gl_tex_size`); the modelview and projection stacks
+      (`ao_matrix()`, from the matrix intercepts in `sun_moon_glow.c`). The marks set and restore their own state
+      instead of `glPushAttrib`. The effects make no GL queries in play.
+    - `ds_mark` and `car_mark` queue each draw through `mark_take` (`draw_hooks.c`), which copies client arrays and
+      indices into a staging buffer a frame and keeps the game's VBOs by name. `ds_flush` and `vr_flush` replay the
+      queues in one pass a frame at the top of `ds_pass` and `vr_pass`.
+    - `vr_flush` sets `glDepthMask(GL_TRUE)` before its clear: inside `ao_run` depth writes are off, and without it
+      the old depth stayed and every car reflection failed its depth test.
+    - It also sets `glColorMask` to all four channels. `ds_pass` and `ssr_pass` run before `vr_pass` and leave alpha
+      writes off, so in a frame with shadows or sea reflections the marks had no alpha, the pass dropped every car
+      pixel, and the old alpha outlived the clear as stray marks. Johnny's car had no reflection in the driving and
+      close-up shots of the MIAMI BOUND! cutscene.
+    - `vr_pass` reads near and far from the projection by the sign of `P[11]`. The game's projection looks down +z
+      (`P[11]` = 1), and the old formula, written for GL's -z, swapped them: near about 90000 and far 50, so rays
+      ended after 100 units and most pixels fell back to the sphere map.
+    - The sphere-map fallback uses the classic sphere map about the view axis, `d.xy / (2 sqrt(2 + 2f))` with f the
+      forward part of the reflected direction, in place of `d.xy / 2`. The old lookup sent a ray and its mirror
+      through the view plane to the same texel, which folded the picture into a mirrored seam where the rays turn
+      towards the camera. The map pinches at straight back, so rays within about 66 degrees of it fade out, fully
+      within 18; the Fresnel term is low there anyway.
+    - `ssr_pass` reads near and far the same way. With the old formula the sea's `reach` was 100 units, so its march
+      found almost nothing and the reflection came from the vanishing-point lookup alone.
+    - `ao_run` (`bloom.c`) loads the shared GL entry points (`ao_procs`) before its first `glActiveTexture`. Sea marks do not load
+      them, so a frame where the sea was the only effect (ambient occlusion and bloom off, no car or shadow mark yet)
+      called address 0 and crashed.
+    - Same picture. On NVIDIA a busy city runs about half as fast again; the AMD built-in GPU gains less. No change
+      under the preset, which has none of these effects.
+46. **Spawn pacing, stuck traffic and the chased car (`density.c`, with the density keys).**
+    - Caps and pacing: the spawn check 0x080272 takes the point's own cap or the built-in 18 / 10 / 14, the profile's
+      limit, and a total under 48. The port's caps are now exactly the Mac's times the setting, the record's waits are
+      no longer divided by it, and a scaled kind spawns at most once a tick. One spawn costs about 4 ms, and a refill
+      used to put up to 9 into one tick.
+    - Stuck traffic (original: the game has no stuck recovery; it shows at higher densities): the vehicle step at
+      0x1a1f80 goes through `gmv_tj_step`. With `TRAFFIC_DENSITY` above 1 a traffic car (spawn kind 3, no chase flag)
+      blocked for 3.5 s in a box 15 m ahead reverses and steers for 1.2 s; one stuck for 9 s and more than 30 m from
+      the player is removed through the despawn at 0x1a1baa (`gmv_tj_keep`). A blocker driving the same way does not
+      count, so queues are left alone. A traffic spawn is refused within 12 m of a stopped or crawling car
+      (`gmv_tj_clear` at 0x7fe99).
+    - The chased car: a vehicle whose driver has the chase flag (+0x584 & 4) and a script-set speed (+0x180 &
+      0x20000000), and whose target is not the player. While it touches traffic and is not braking or reversing, its
+      forward speed is put back to the speed before the contact for up to 1 s, and the traffic car it hit drives on
+      (or backs up) for 1.75 s, steering away from its path. Not during races.
+    - Traffic below a helicopter: the spawn centres follow the camera in 3D. A spot must lie within 3 m in height of
+      the vehicles' centre A (0x688cc0, the test at 0x7fdb2 in 0x7fcea), and the despawn at 0x1a93aa takes the 3D
+      distance to centre B (0x688cf0), so from a helicopter no traffic spawned and the cars below were taken away.
+      While the player flies one (vtable 0x6568c8) with `TRAFFIC_DENSITY` above 0, `gmv_tj_spot` (the calls at
+      0x82b8c and 0x82bbe) gives the vehicle centres a traffic spot's height, and `gmv_tj_keep` gives centre B a car's
+      height, both only within 150 m, so the distances are 2D. Pedestrian spots are refused while flying.
+    - Off under the preset: the densities are 1 and the hooks are out.
+47. **Checkpoint markers kept out of the bloom (`BLOOM`, enhancement).** At night the cyan checkpoint domes are bright
+    additive draws, so the bloom's bright pass and, with `BLOOM=2`, the glow layer spread them over the road and the
+    traffic ahead. Their `gloweffects` texture is shared with car and police lights, so the texture cannot tell them
+    apart; the scene node can. Every 3D additive draw comes through the transparent pass 0xb96a8, which calls
+    `node->render` at 0xb9a2f; a node's name is at +0xc and its parent at +0xd8.
+    - The 12 bytes at 0xb9a26 become a call to `gmv_transparent_render` (`fog_distance.c`), which sets `g_cp_draw`
+      while a node, or one of up to 3 ancestors, is named `checkpoint_` followed by `race`, `mission`, `drive`,
+      `store`, `elevator` or `arrow`. Money and briefcase pickups keep their glow.
+    - Such a draw leaves the glow layer alone (`bloom_glow.c`) and marks its pixels with stencil bit 0x20
+      (`bg_cp_mark`; 0x80 is the sea's, 0x40 the car bodies'). `bl_pass` (`bloom.c`) blits that stencil with the scene
+      copy and blacks out the marked pixels before the bright pass. The marker itself is drawn as before; lights seen
+      through it lose their bright-pass bloom there.
+    - Installed only with `BLOOM` above 0 or the GAMEPATCH tab live; out under the preset.
+48. **Bloom colours and threshold (`BLOOM`, enhancement).** The bloom laid a haze over the whole picture in the
+    colours of the scene. The bright pass judged the world by its brightest channel, and its knee was half the
+    threshold wide, so at the menu's HIGH (`BLOOM_THRESHOLD=0.5`) it started at 0.25: daylit walls and pavement, the
+    blue sea, green grass and, at night, the bluish pavement all passed in part. The composite cut the glow per
+    channel at 1, which turned a strong orange glow yellow.
+    - `bl_fs_pre` (`bloom.c`) takes, on the world, the luminance (0.2126, 0.7152, 0.0722) plus 0.35 of the spread
+      between the strongest and the weakest channel, at most the strongest channel; the sky keeps its dimmest channel.
+      Grey walls and pavement are judged near their luminance, and a saturated neon sign or tail light still passes.
+    - The cut is 0.74 + 0.26 x `BLOOM_THRESHOLD`, 0.17 lower at night (`bg_night()`, the same curve as
+      `BLOOM_WINDOWS`), and the knee is 0.65 of 1 minus the cut on each side. At HIGH that is 0.87 by day and 0.70 at
+      night, so the knee starts at 0.79 and 0.51; at 0.95 the cut stays below 1.
+    - `bl_fs_up`: each upsample adds the coarser level at 1.08, so the widest level weighs about 1.5 times what it
+      did. In the final pass, where the largest channel m passes 1, the glow becomes c / m moved 0.2 - 0.2 / m of the
+      way toward white, in place of `min(c, 1)`. The screen is 8-bit, so anything left above 1 is cut per channel,
+      which is what turned orange yellow.
+    - `BG_LIGHT_GAIN` (`bloom_glow.c`) is 2.45, up from 2, so the light sprites glow more at `BLOOM=2`. The windows'
+      gain is divided by it, so they are as before.
+    - The game's clock is now read whenever `BLOOM` is above 0 (`bloom_clock_on`, formerly `bloom_windows_on`, which
+      asked for `BLOOM=2` with windows). The checkpoint stencil (item 47) is unchanged; the preset has no bloom.
+    - Lit shop fronts at night are dimmer on screen than sunlit pavement, so a single cut could not keep the one and
+      drop the other; hence the night offset. Night pavement is bluish: with the channel spread it reaches 0.44 at
+      p99, against 0.64 at p90 for the shop fronts, and the night knee starts between the two.
+
+49. **Helicopter rotor wear above 60 ticks/s (`PHYSICS_SYNC`, port fault).** `ContactListener::Persist` (0x48bb0)
+    calls the rotor check 0x129594 at 0x48ca9 once per Box2D step, and each contact inside the rotor disc costs the
+    helicopter 1 health, so one step per tick wore it down faster than the Mac's 1/60 s steps. `gmv_rotor_persist`
+    (`sync_physics.c`) lets that call through on at most one step per 1/60 s of physics time; it is installed and
+    removed with the physics sync, so the preset keeps the Mac's.
 
 ## Diagnostics
 

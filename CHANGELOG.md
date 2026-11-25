@@ -1,55 +1,57 @@
 # Changelog
 
-Everything the port does, by the part of it that does it. The game itself is not included and is never changed on disk:
-every item below happens in memory, at run time.
+Everything the port does, by the part of it that does it. The game itself is not included and is never changed on
+disk: every item below happens in memory, at run time.
 
 The port has three parts:
 
 - **The loader** (`host/core`) loads the Mac game and runs it. It knows nothing about any particular game.
 - **The macOS wrapper** (`host/shims`) stands in for the macOS libraries the game expects. It knows nothing about any
   particular game either.
-- **The game layer** (`host/games/gangstar`) holds the fixes, enhancements and add-ons for Gangstar: Miami Vindication.
+- **The game layer** (`host/games/gangstar`) holds the fixes, enhancements and add-ons for Gangstar: Miami
+  Vindication.
 
-Around them are the build and the tools. Every setting named here is a key in `savegame\GangstarMV.ini`.
+Around them are the build and the tools. Every setting named here is a key in `savegame/GangstarMV.ini`.
 [`FIXES.txt`](FIXES.txt) explains each one in plain words, and [`docs/NOTES.md`](docs/NOTES.md) has the technical
 detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 
 ## The loader
 
-- **Runs the Mac game as it is.** There is no CPU emulation, since the game is already x86 code. The game's i386 Mach-O
-  binary is loaded at its own addresses, which the program reserves before anything else can take them.
-- **The low range.** The game's first code page overlaps the exe's own header, so that code runs from a copy. Every jump
-  into and out of it is patched (4360 patches), and each patch is checked byte for byte at load. The patch table comes from
-  `tools/genlow.py` and works only with the binary it was made from.
+- **Runs the Mac game as it is.** There is no CPU emulation, since the game is already x86 code. The game's i386
+  Mach-O binary is loaded at its own addresses, which the program reserves before anything else can take them.
+- **The low range.** The game's first code page overlaps the exe's own header, so that code runs from a copy. Every
+  jump into and out of it is patched (4360 patches), and each patch is checked byte for byte at load. The patch table
+  comes from `tools/genlow.py` and works only with the binary it was made from.
 - **Every import bound.** Each of the game's 4243 import slots (528 distinct imports) is filled. A slot goes to a shim
   where one exists. A missing function becomes a stub that reports its name, and missing data becomes a stand-in that
   faults on use, so a gap shows up in the log instead of corrupting memory.
-- **Start-up.** The game's 451 static initializers run one by one, followed by `main()`. If one of them faults, the log
-  names it.
+- **Start-up.** The game's 451 static initializers run one by one, followed by `main()`. If one of them faults, the
+  log names it.
 - **Fault handling.** Every run is guarded, so a crash is reported instead of the game silently disappearing:
   - When the game or the port cannot go on, a message box says why and points to the log. This covers a window or
     OpenGL that cannot be started.
-  - After a crash, `cache\GangstarMV.dmp` records the state of the port's threads: a minidump on Windows, a core file
+  - After a crash, `cache/GangstarMV.dmp` records the state of the port's threads: a minidump on Windows, a core file
     on Linux. The log's hidden folders and environment values are blanked in it.
-- **Settings file.** On the first run, `savegame\GangstarMV.ini` is written with every key and a description of each.
+- **Settings file.** On the first run, `savegame/GangstarMV.ini` is written with every key and a description of each.
   Deleting it restores the defaults. A key that older versions used, or a dev-only key in a release build, is ignored
   and noted in the log.
   - The defaults turn the enhancements on: 60 fps, every graphics effect, draw distance 2, crowds at 3, the gameplay,
     control and menu changes, and the add-ons, which do nothing until their files are there.
   - A key left blank, or missing from the file, takes its built-in value, which for the enhancements is the Mac's.
-- **Portable data.** Saves and settings go in `savegame\` next to the exe, and the game's scratch files and the log go
-  in `cache\`.
+- **Portable data.** Saves and settings go in `savegame/` next to the exe, and the game's scratch files and the log go
+  in `cache/`.
 - **Finding the game.** The loader looks next to the exe, then one folder up. `--app <path>` points it anywhere else.
 - **The log** (`LOG`, on by default):
   - It records the version, the settings, the graphics card and driver, the display modes, the controllers, and the
     details of a crash.
-  - Your user folder, the exe's folder and the game's folder are written as `%USERPROFILE%`, `%EXE%` and `%APP%`.
+  - Your user folder, the exe's folder and the game's folder are written as `%USERPROFILE%` (`$HOME` on Linux),
+    `%EXE%` and `%APP%`.
   - A release log does not name your songs.
   - `LOG=0` turns the log and the crash dump off and deletes the old files.
 - **Windows and Linux.** The loader asks the system for only a few things, all through `core/platform.h`. One version
   of that file answers on Windows and another on Linux, and the address layout and patch table are the same on both.
 - **Any game.** The loader and the wrapper reach a game only through `core/game.h`. `games/template` is a game with no
-  patches, for starting another. A second Mac game's binary has been loaded with it and verified, but not run.
+  patches, for starting another.
 - **Profilers** (dev builds only). `LOAD_PROFILE` and `PERF_PROFILE` show where the time goes in a long tick, on both
   systems.
 
@@ -57,8 +59,8 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 
 ### Libraries
 
-- **Objective-C 1.0 runtime.** It covers message sending (`objc_msgSend`, struct returns and `super` calls), the game's
-  own eight classes, and the Cocoa class hierarchy that messages are resolved against.
+- **Objective-C 1.0 runtime.** It covers message sending (`objc_msgSend`, struct returns and `super` calls), the
+  game's own eight classes, and the Cocoa class hierarchy that messages are resolved against.
 - **Foundation and AppKit.** `NSApplicationMain` with its run loop, timers and delayed calls, plus:
   - strings, bundles and user defaults;
   - files, notifications and threads;
@@ -67,12 +69,13 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **libSystem.** The C library, pthreads, `mmap`, clocks and time, stdio, wide characters, `setjmp`/`longjmp`, the
   rune locale and the keyboard layout calls. `rand` keeps the Mac's range, so particles spread and random chances work
   as on the Mac.
-- **The C++ runtime.** `std::string` with the Mac's copy-on-write layout, `std::ostringstream`, red-black trees and lists.
-  2D batches get the names the game gives them. Without that, a white square showed under the pause menu's pointer.
+- **The C++ runtime.** `std::string` with the Mac's copy-on-write layout, `std::ostringstream`, red-black trees and
+  lists. 2D batches get the names the game gives them. Without that, a white square showed under the pause menu's
+  pointer.
 - **CoreGraphics, CoreFoundation and IOKit.** The monitor's real display modes, the mouse movement for the camera, and
   harmless stand-ins for the rest.
-- **Offline.** The network classes do nothing, so the game's online buttons report that there is no connection. The port
-  has no network code.
+- **Offline.** The network classes do nothing, so the game's online buttons report that there is no connection. The
+  port has no network code.
 - **Coverage.** 477 of the 528 imports are implemented. An audit found no way for this build of the game to reach the
   other 51.
 
@@ -84,14 +87,14 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **Keys.** Alt+Enter switches between full screen and a window. Alt+F4 quits, as closing the Mac window did.
 - **Resizing.** A window you resize or maximize is filled, keeping the picture's shape, with black bars where it
   differs. While you drag the border, the window shows the last frame at the new size.
-- **`DPI_AWARE`.** With Windows display scaling above 100%, the picture is drawn at the screen's real pixels instead of
-  being stretched and blurred.
+- **`DPI_AWARE`.** With Windows display scaling above 100%, the picture is drawn at the screen's real pixels instead
+  of being stretched and blurred.
 - **`MSAA`.** The Mac's 4x anti-aliasing, drawn into a screen framebuffer. 0, 2 and 8 are also accepted; `auto`, the
   default, is 4 on any GPU.
 - **`GPU_PROFILE`.** The settings left on `auto` follow the kind of GPU the game draws on. Direct3D 11 is asked, on a
   thread of its own at start-up, whether the GPU's memory is the processor's: a GPU built into the processor gets
-  `SHADOW_QUALITY` 1, a graphics card 2. `igpu` or `full` name the kind; `0` always takes the graphics card's values. A
-  value set by hand, in the file or the options (where `AUTO` shows what it gives), always wins.
+  `SHADOW_QUALITY` 1, a graphics card 2. `igpu` or `full` name the kind; `0` always takes the graphics card's values.
+  A value set by hand, in the file or the options (where `AUTO` shows what it gives), always wins.
 - **Kept frames.** `SWAP_COPY` keeps the last frame after each present, as the Mac does, which the game's fades rely
   on. `NO_FLICKER` presents only the frames the game actually drew.
 - **`TEXFIX`.** Fade rectangles drawn with a texture still on now come out black, as the Mac's driver drew them. This
@@ -100,25 +103,25 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   uncapped are available. The game's sleeps use a 1 ms timer.
   - **`PRECISE_WAIT`** (on by default and under `ORIGINAL_MAC_EXPERIENCE`, same ticks). The pacer waits on a
     high-resolution timer and spins only the last 0.1 ms of a tick, where it spun the last 1.5-2.5 ms.
-  - **`BACKGROUND_THROTTLE`** (on by default, off under `ORIGINAL_MAC_EXPERIENCE`). Behind other windows the game draws
-    at most `BACKGROUND_FPS` (30) frames a second and keeps running. Minimized, at most `MINIMIZED_FPS` (10), nothing is
-    presented, the 1 ms timer is given back to Windows and a game in progress is paused as with Esc.
+  - **`BACKGROUND_THROTTLE`** (on by default, off under `ORIGINAL_MAC_EXPERIENCE`). Behind other windows the game
+    draws at most `BACKGROUND_FPS` (30) frames a second and keeps running. Minimized, at most `MINIMIZED_FPS` (10),
+    nothing is presented, the 1 ms timer is given back to Windows and a game in progress is paused as with Esc.
   - **`SPIKE_MS`** (off by default). Each frame longer than this many milliseconds is logged with its number, its own
     work and the time of the swap, in release builds too.
 - **OpenGL.** The game's GL calls are bound on first use. Every GL function comes from one loader, built on
-  `SDL_GL_GetProcAddress`, on both systems. Bad answers from a driver are rejected, and on Windows the GL 1.1 functions
-  fall back to `opengl32.dll`.
+  `SDL_GL_GetProcAddress`, on both systems. Bad answers from a driver are rejected, and on Windows the GL 1.1
+  functions fall back to `opengl32.dll`.
 
 ### Sound
 
 - **The game's own mixer, through SDL3.** The game's audio callback is pulled in small slices and queued, about 93 ms
   ahead. Sound follows the default output device when it changes.
 - **Settings.** `NO_AUDIO` turns all sound off. `AUDIO_FRAMES` and `AUDIO_NB` size the queue.
-- **The intro movie.** `intro.mov` is decoded by Media Foundation on Windows and by the system's `ffmpeg` on Linux, with
-  its sound. `NO_INTRO` skips it, and `INTRO_FLIP` turns it right way up if a decoder shows it upside down.
+- **The intro movie.** `intro.mov` is decoded by Media Foundation on Windows and by the system's `ffmpeg` on Linux,
+  with its sound. `NO_INTRO` skips it, and `INTRO_FLIP` turns it right way up if a decoder shows it upside down.
 - **Song decoders** for the custom radio. The port decodes mp3, ogg, flac and wav itself (dr_mp3, dr_flac, dr_wav and
-  stb_vorbis), so songs sound the same on both systems. m4a, aac and wma use Media Foundation on Windows and `ffmpeg` on
-  Linux.
+  stb_vorbis), so songs sound the same on both systems. m4a, aac and wma use Media Foundation on Windows and `ffmpeg`
+  on Linux.
 
 ### Input
 
@@ -129,7 +132,8 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   - Camera look uses SDL's relative mouse movement, and the pointer stays inside the picture while the game has focus.
   - Menu clicks, drags and hovers go to the game's view as Mac mouse events, at the system's pointer speed.
   - `NO_MOUSELOOK`, `NO_RMB` and `SHOW_CURSOR` change how the mouse behaves.
-- **Controllers.** Xbox, PlayStation and other pads go through SDL3 and are presented to the game in the layout it expects.
+- **Controllers.** Xbox, PlayStation and other pads go through SDL3 and are presented to the game in the layout it
+  expects.
   - Radial dead zones are set by the kind of pad.
   - A pad SDL knows gets the standard layout.
   - The kind of pad you used last is noted for the button pictures and hints.
@@ -143,9 +147,9 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **`FILE_MISS_CACHE`.** A missing file inside the `.app` that the game looked for is remembered, so the many loose
   copies it looks for before its packs fail at once instead of asking the system again (up to ~160 a second while
   walking, ~70 µs each before). Files outside the `.app` are always looked for.
-- **`FILE_POOL`.** The pack files in the `.app` the game closes are kept open (up to 32) and given back, rewound, when it
-  opens them again, which it does many times a second while walking; the main thread's file time went from 2-8 to 0-1 ms
-  a second.
+- **`FILE_POOL`.** The pack files in the `.app` the game closes are kept open (up to 32) and given back, rewound, when
+  it opens them again, which it does many times a second while walking; the main thread's file time went from 2-8 to
+  0-1 ms a second.
 - **Linux.** `FAST_FTELL` is off there, since glibc already keeps the position; `FAST_FSEEK` only gives the files its
   64 KB read buffer, as glibc already seeks inside its buffer.
 
@@ -155,10 +159,12 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   - Windows names map onto pthreads, `clock_gettime`, `stat` and `mprotect`.
   - The Mac's own calls have Linux versions beside the Windows ones.
   - The game's condition variables and the stack alignment get the extra care Linux needs.
-- **What has run.** On Linux (WSL2, Debian 13) the game ran to the city, on foot and in cars, with every enhancement and
-  add-on.
-- **What is needed.** 32-bit SDL3 and GL. `ffmpeg` is used for the intro and the custom radio's m4a, aac and wma, and
-  FreeType for the pad pictures' letters. When the icon file is present, the window gets the game's icon.
+- **Tested environment.** On Linux (WSL2, Debian 13) the game ran to the city, on foot and in cars, with every
+  enhancement and add-on.
+- **Runtime dependencies.** 32-bit SDL3 and GL. `ffmpeg` is used for the intro and the custom radio's m4a, aac and
+  wma, and FreeType for the pad pictures' letters.
+- **Icon.** As on Windows, the game's icon is built into the program when `app.ico` is there at compile time; nothing
+  is loaded from a separate file at run time. The source holds no icon, so a program built from it has none.
 
 ## The game layer
 
@@ -166,6 +172,12 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 
 - **`GAMEPATCH_TAB`** (on by default). A GAMEPATCH tab below VIDEO in the game's options menu. Most settings can be
   changed there in game, by category. A change is saved at once, and most take effect at once.
+  - Rows that belong together are one row that writes all of its keys: ANTI-ALIASING (`MSAA`, `ALPHA_TO_COVERAGE`),
+    DYNAMIC SHADOWS (`DYNAMIC_SHADOWS`, `SHADOW_QUALITY`), GAMEPAD UI & ICONS, RESTORED ADD-ON CONTENT, ORIGINAL BUG
+    FIXES, HIDE DEAD ONLINE MENUS and CUTSCENE & POPUP KEYS. A row whose keys hold values it has no choice for shows
+    CUSTOM.
+  - `STOPLOCK_FIX`, `MISSION_SAVE_FIX`, `LOAD_SLEEP_SKIP` and `LOAD_BUDGET` are not on the tab. They stay on and are
+    set in the file only.
 - **`ORIGINAL_MAC_EXPERIENCE`.** Plays the game as the Mac did:
   - It keeps the port's fixes, the loading speed-ups and the Mac's anti-aliasing on. It turns every enhancement off,
     and the fixes of the original game's own bugs too.
@@ -174,22 +186,20 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   - Under it, the tab holds only this switch.
 - **The SOUND page** gets two rows under Music for the custom radio: a volume slider with a mute button, and an
   ON / OFF selector.
-- **The SERVICES menu** gets a MISSION REPLAY tab (see Gameplay).
+- **The SERVICES menu** gets a MISSION REPLAY tab and a TIME OF DAY tab (see Gameplay).
 
 ### Port fixes (problems from running the Mac game on Windows)
 
-- **`VTXFIX`.** Fixes a crash within a few steps of moving. The game's own safety check is added to the one path of its
-  vertex converter that lacked it.
+- **`VTXFIX`.** Fixes a crash within a few steps of moving. The game's own safety check is added to the one path of
+  its vertex converter that lacked it.
 - **`CRASH58_GUARD`.** Turns a crash about 13 minutes into play, an empty helper pointer on a streamed object, into a
   logged no-op.
-- **`STOPLOCK_FIX`.** A car's gas and brake no longer die after a full stop. The game's 200 ms settle lock now runs on
-  the real clock. The bug is in the original game: the lock reads the frame time instead of a clock, so it lets go
-  only on a frame shorter than the one at the stop. The Mac's uneven frame times gave one within a few frames, and so
-  did the early port builds that let the graphics driver set the pace. The port's even 60 Hz pacing never gives one, so
-  without this fix the car can stay dead. That is why it stays on under `ORIGINAL_MAC_EXPERIENCE`.
+- **`STOPLOCK_FIX`.** The game's 200 ms settle lock after a full stop runs on the real clock, so a car's gas and
+  brake no longer die. The bug is the original game's, but only the port's even frame pacing exposes it, so the fix
+  stays on under `ORIGINAL_MAC_EXPERIENCE`.
 - **`STATIC_VBO`.** Models that stay unchanged for a few frames are kept in the graphics card's memory, instead of
   being sent again on every draw. Draw time fell from 185 to 77 ms a second.
-- **From bringing the port up** (not switchable): the black window at start, the saved resolution read as 0x0, asset
+- **Initial bring-up fixes** (not switchable): the black window at start, the saved resolution read as 0x0, asset
   files that failed to open, the resolution picker crash, and the intro logo that never finished.
 
 ### Original-game bugs fixed (on by default, off under `ORIGINAL_MAC_EXPERIENCE`)
@@ -199,13 +209,14 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **`FADE_EDGE_FIX`.** Black fades cover the screen's top row and left column too.
 - **`RADIO_LOGO_FIX`.** The HUD radio logo shows the car's station from the moment you start getting in.
 - **`SWITCH_SAVE_FIX`.** A save made while playing as Betty no longer gives her things to Johnny.
-- **Origin collision.** Buildings near the map's centre have collision as soon as a level starts. This fix applies only
-  with `DRAW_DISTANCE` above 1.
-- **`MISSION_SAVE_FIX`** (unlike the others, it stays on under `ORIGINAL_MAC_EXPERIENCE`). The original
-  save writes only 7 of the 8 groups of mission flags, so Reginald's five missions read as not done after every load.
-  The save now keeps all 8, and the file still loads in the original game. It stays on under the preset so that a save
-  made there keeps them, and MISSION REPLAY still offers them once the preset is off. MISSION REPLAY's SIDE list now
-  includes Reginald's missions.
+- **`AI_STEERING_FIX`.** AI drivers aim at their next point by the heading on the ground, so they no longer weave on
+  straight roads when the point stands higher or lower than the car, as Clive's SWAT van did in ON A LION HUNT.
+- **`BOAT_SEAT_FIX`.** A swimmer the script seats in a vehicle stops swimming first, so Clive no longer treads water
+  over his yacht's seat when the cutscene of his escape is watched to its end.
+- **Origin collision.** With `DRAW_DISTANCE` above 1, buildings near the map's centre have collision as soon as a
+  level starts, after CONTINUE too.
+- **`MISSION_SAVE_FIX`** (stays on under `ORIGINAL_MAC_EXPERIENCE`). The save keeps all 8 groups of mission flags
+  instead of 7, so Reginald's five missions stay done after a load, and the file still loads in the original game.
 
 ### Loading (on by default and under `ORIGINAL_MAC_EXPERIENCE`)
 
@@ -214,15 +225,14 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   1500.
 - **`FAST_LOAD`.** The start-up "Loading" screen takes as many of its steps a frame as fit, instead of one every
   33 ms, so the title comes about 1.4 s sooner. What it loads is the same.
-- **Why they stay on under the preset.** They change no picture or rule, only when the loading work is done. Without
-  them, each scene change in the main menu stalled for 116-219 ms, followed by a few seconds of uneven frames, which
-  made the preset's 30 fps feel choppy. With them the stalls are 31-83 ms. How long a stall lasts depends on the
-  machine, not on the game.
+- **Why they stay on under the preset.** They change when the loading work is done, not the picture or the rules.
+  Without them each scene change in the main menu stalls, which makes the preset's 30 fps feel choppy.
 
 ### High frame rates
 
 - **`FRAME_MS`.** The frame rate, 25 to 400 fps; 60 by default, 30 as on the Mac.
-- **`PHYSICS_SYNC`.** Car and object physics step once per tick, so driving stays smooth at any tick rate.
+- **`PHYSICS_SYNC`.** Car and object physics step once per tick, so driving stays smooth at any tick rate. A
+  helicopter rotor touching a wall still wears at the Mac's rate.
 - **`CAMERA_SYNC`, `WALK_SYNC` and `AI_SYNC`.** Above 60 ticks a second, these keep the running camera sway as at 60,
   stop walking characters from flicking their facing, and stop runners from being taken as stuck. They do nothing at
   60.
@@ -230,42 +240,49 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 
 ### Speed (always on, same results)
 
-- **Collision and physics.** A faster Box2D broadphase query, faster proxy insert and remove, and a physics step that no
-  longer walks every body.
+- **Collision and physics.** A faster Box2D broadphase query, faster proxy insert and remove, and a physics step that
+  no longer walks every body.
 - **HUD and billboards.** The HUD's health and armour bars without a search of the whole UI on every update, and the
   billboard turn with its range tests first.
-- **Result.** In a busy scene with draw distance and crowds at 2, these took the test laptop from about 70 to about 113
-  frames a second.
-- **The enhancements' own cost** (keys in `[Advanced]`, on by default and under `ORIGINAL_MAC_EXPERIENCE`, same picture):
-  - `SHARED_RESOLVE`: the effects that read the screen's depth share one copy of it a frame instead of up to five, which
-    takes about 17 % off their GPU time.
-  - `FOG_SKIP_FAR`: with `FOG_MODE` 1 or 2, the draws wholly past the fog's end are not sent to the driver.
-  - `QUERY_FREE`: the effects keep the framebuffer and shader bindings, and what the game's vertex arrays point at,
-    themselves instead of asking GL for them tens of thousands of times a second (about 55,000 questions a second left
-    out in the city).
-- **`STREAM_VBO`** (`[Advanced]`, on by default and under `ORIGINAL_MAC_EXPERIENCE`, same picture). The game's vertices
-  that are in its own memory are copied into a buffer of the graphics card's before each draw, so the driver does not
-  have to find and copy them inside the draw call. In a busy city scene: about 5 % more frames a second on an NVIDIA
-  GPU, the same on an AMD built-in one, with less time in both drivers. Needs `QUERY_FREE` and OpenGL 4.4.
+- **Result.** In a busy scene with draw distance and crowds at 2, these took the test laptop from about 70 to about
+  113 frames a second.
+- **The enhancements' own cost** (keys in `[Advanced]`, on by default and under `ORIGINAL_MAC_EXPERIENCE`, same
+  picture). `SHARED_RESOLVE` gives the effects one depth copy a frame instead of up to five, `FOG_SKIP_FAR` skips
+  draws wholly past the fog's end, and `QUERY_FREE` keeps the bindings the effects need instead of asking GL. The
+  port also keeps its own GL state and batches the shadow and car-reflection draws into one pass a frame each, which
+  helps most on NVIDIA.
+- **Reading the game's memory.** The port's reads inside the game's own image, which is always mapped, no longer ask
+  the system about each address first.
+- **`STREAM_VBO`** (`[Advanced]`, on by default and under `ORIGINAL_MAC_EXPERIENCE`, same picture). The game's
+  vertices that are in its own memory are copied into a buffer of the graphics card's before each draw, so the driver
+  does not have to find and copy them inside the draw call. In a busy city scene: about 5 % more frames a second on an
+  NVIDIA GPU, the same on an AMD built-in one, with less time in both drivers. Needs `QUERY_FREE` and OpenGL 4.4.
 
 ### Graphics enhancements (on by default, off under `ORIGINAL_MAC_EXPERIENCE`)
 
 - **`ANISOTROPIC_FILTERING`** (2 to 16). Roads and walls stay sharp at a distance.
+- **`ALPHA_TO_COVERAGE`.** With `MSAA` on, the edges of the world's cut-out textures (leaves, fences, railings) are
+  smoothed by the multisampling too. The game's own cut-out test stays, so nothing gets thinner or thicker, and the
+  HUD is left alone.
+- **`POST_AA`.** FXAA over the 3D picture, after the other effects and before the HUD, so text and the minimap stay
+  sharp. `1` runs it always, `auto` only while `MSAA=0`. Its cost does not grow with `MSAA`.
 - **`AMBIENT_OCCLUSION`.** Soft contact shadows in corners and under cars, drawn under the HUD. Tuned by `AO_STRENGTH`
   and `AO_RADIUS`.
-- **`BLOOM`.** A glow around bright parts of the world. `BLOOM=2` also makes the light sprites and lit windows glow.
-  Tuned by `BLOOM_INTENSITY`, `BLOOM_THRESHOLD`, `BLOOM_LIGHTS` and `BLOOM_WINDOWS`.
+- **`BLOOM`.** Only the brightest parts of the world glow, in their own colour, and `BLOOM=2` adds the light sprites
+  and lit windows. Checkpoint markers stay out of the glow. Tuned by `BLOOM_INTENSITY`, `BLOOM_THRESHOLD`,
+  `BLOOM_LIGHTS` and `BLOOM_WINDOWS`.
 - **`WATER_REFLECTIONS`.** The sea reflects the city and the sky, from what is on screen. Tuned by
-  `REFLECTION_STRENGTH`.
+  `REFLECTION_STRENGTH`. The reflection reaches far enough for the posts, boats and quays close by to show firmly, and
+  the sea no longer crashes the game when it is the only effect on.
 - **`VEHICLE_REFLECTIONS`.** Shiny cars reflect the street, the buildings and the other cars, while matte cars stay
   matte. Tuned by `VEHICLE_REFLECTION_STRENGTH`. Where the screen-space ray finds nothing, as on roofs and trunks, the
-  screen itself is used as a sphere map, looked up by the reflected direction.
+  screen itself is used as a sphere map, looked up by the reflected direction, with no mirrored seam across the body.
+  A car keeps its reflection in frames that also draw the dynamic shadows or the sea reflections.
 - **`DYNAMIC_SHADOWS`.** Vehicles and people cast shadows that follow the sun and the moon. At dusk and dawn a soft
   shadow stays under them.
-  - **`SHADOW_QUALITY`** (also on the options' VIDEO tab, GRAPHICS, at once): `2` (HIGH, the default) is a 2048 x 2048
-    shadow map looked up 16 times a pixel; `1` (LOW) is 1024 x 1024 looked up 8 times, for graphics built into the
-    processor, with the same shadows and slightly softer, blockier edges. On the built-in AMD GPU the shadow and sea
-    pass took 0.84 ms a frame instead of 1.17.
+  - **`SHADOW_QUALITY`** (also on the GAMEPATCH tab, GRAPHICS, DYNAMIC SHADOWS, at once): `2` (HIGH) is a 2048 x 2048
+    shadow map looked up 16 times a pixel; `1` (LOW) is 1024 x 1024 looked up 8 times, with the same shadows and
+    slightly softer, blockier edges. `auto`, the default, takes the value `GPU_PROFILE` gives.
 - **`SUN_MOON`.** The iPhone version's sun and moon, with their glow, restored from the code and textures still in the
   Mac game.
   - `2` (IPHONE) draws the glow as the iPhone did.
@@ -287,8 +304,13 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
   - Arrows switch between story, side missions and races.
   - START plays a mission again. You keep the cash you earn, and everything else returns to how it was when the replay
     ends.
+- **`TIME_OF_DAY`.** A TIME OF DAY tab in the SERVICES menu sets the game's clock one whole hour back or forward. The
+  sky, fog, sun and moon, shadows, car lights and lit windows change at once. Hidden during a mission.
+- **`RANDOM_TIME_OF_DAY`.** CONTINUE starts the city in one of the four periods of the day at even odds. NEW GAME and
+  saves are left alone.
 - **`TRAFFIC_DENSITY`, `PEDESTRIAN_DENSITY` and `PARKED_CAR_DENSITY`** (0 to 4). Up to four times the Mac's cars and
-  people, applied at once from the menu.
+  people, applied at once from the menu and spawned one per tick. Stuck traffic backs up or is removed, a chased
+  mission car keeps its speed through traffic (not in races), and traffic keeps driving below a helicopter.
 - **`PLAYERSWITCH_INVENTORY`.** In free roam, Betty shares Johnny's cash and weapons.
 - **`LC_SWITCH`.** After the last mission, a marker at L.C.'s hotel lets you play as L.C. and back, as the game's own
   marker does for Betty.
@@ -296,10 +318,10 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 ### Controls (on by default, off under `ORIGINAL_MAC_EXPERIENCE`)
 
 - **`KEY_MOVE`.** Modern PC movement: W/A/S/D diagonals, smooth turns, and Alt to walk.
-- **`PAD_LAYOUT`.** A gamepad layout like GTA V's, on foot, in cars, flying and with the sniper. The CONTROLS page shows
-  it.
-- **`PAD_MENU`.** The pad works the menus: the stick or D-pad moves the pointer, A clicks and B goes back. A pad button
-  also skips the intro.
+- **`PAD_LAYOUT`.** A gamepad layout like GTA V's, on foot, in cars, flying and with the sniper. The CONTROLS page
+  shows it.
+- **`PAD_MENU`.** The pad works the menus: the stick or D-pad moves the pointer, A clicks and B goes back. A pad
+  button also skips the intro.
 - **`PAD_HINTS`.** Tutorial boxes name the pad's buttons while the pad is what you last used.
 - **`PAD_ICONS`.** The options menu's pad pictures show Xbox, DualShock 4 or DualSense buttons, for the pad you last
   used.
@@ -316,12 +338,12 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **`CUSTOM_RADIO`.** A sixth radio station that plays your own songs from the `custom radio` folder, shuffled.
   - It follows the game's MUSIC volume, scaled by `CUSTOM_RADIO_VOLUME`.
   - The HUD shows the game's PLAY LIST / MY MUSIC logo for it.
-- **`RADIO_SONGS`.** The nine extra songs of the iPhone version on the electro, hip-hop and rock stations, raised to the
-  Mac's loudness. They need `add-on\radio.pak`, made from your own copy of the iPhone version.
+- **`RADIO_SONGS`.** The nine extra songs of the iPhone version on the electro, hip-hop and rock stations, raised to
+  the Mac's loudness. They need `add-on/radio.pak`, made from your own copy of the iPhone version.
   - The rock station also plays the Java version's two rock songs, from your own copy of Gangstar:
     West Coast Hustle, brought to the Mac's format and loudness. Either set of songs may be missing from the pack.
 - **`UC_CRUSHER`.** Urban Crime's Crusher monster truck, parked by L.C.'s hotel after ON A LION HUNT. It is drivable,
-  with its own engine sound and exhaust smoke. It needs `add-on\crusher.pak`, made from your own copy of Urban Crime.
+  with its own engine sound and exhaust smoke. It needs `add-on/crusher.pak`, made from your own copy of Urban Crime.
 - **Live switching.** The add-ons switch on and off in game with no restart. No add-on or song is included.
 
 ## Builds
@@ -343,20 +365,12 @@ detail. What changed in each release is in [`PATCHNOTES.md`](PATCHNOTES.md).
 - **`tools/get_sdl3.ps1`** fetches the official 32-bit SDL3, pinned and checked by hash.
 - **`tools/get_linux_sysroot.py` and `tools/linux_check.ps1`** compile and link the Linux build from Windows, with
   clang.
-- **`tools/playtest/playtest.ps1`** runs scripted tests of the exe, with real input and screenshots, and reports PASS or
-  FAIL for each.
-  - The scenarios cover start-up, the city, the camera, every enhancement, full screen, resizing, pads, the Mac preset,
-    the custom radio, crashes and quitting.
-  - Each run gets its own folder, so your save and ini are never touched.
-  - **`tools/playtest/bench.ps1`** runs the `bench-city` scenario (a dev build in the busy city with every effect and
-    `PERF_PROFILE`) on one exe, optionally with extra settings or on one GPU, and sums up the frame times, the GPU time of
-    each effect and where the CPU's time goes. The `bench-ab` scenario turns `STREAM_VBO` on and off by turns in one run
-    (`GMV_STREAM_AB=1`), so that both are measured with the same traffic.
-  - The steps `minimize <s>` and `unfocus <s>` put the window down or behind one of the script's own for a while, and
-    `cpu` measures the game's share of a core, and `env` gives the game a dev switch (`bench-ab` sets its own); the scenarios `background`, `gpu-profile`, `gpu-manual` and `pace-cpu`
-    use them.
-  - With Windows display scaling above 100 % the screenshots were cut off (the script was not DPI aware, so it copied
-    the window's scaled size from an unscaled place); it now counts physical pixels throughout.
+- **`tools/playtest/playtest.ps1`** runs scripted tests of the exe on Windows, with real input and screenshots, and
+  reports PASS or FAIL for each. The scenarios cover start-up, the city, the camera, every enhancement, full screen,
+  resizing, pads, the Mac preset, the custom radio, a window in the background, crashes and quitting. Each run gets
+  its own folder, so your save and ini are never touched.
+- **`tools/playtest/bench.ps1`** runs a dev build in the busy city with every effect on and sums up the frame times,
+  the GPU time of each effect and where the CPU's time goes.
 - **`tools/uc_crusher_pack.py`, `tools/uc_crusher_tex.py` and `tools/radio_gain.py`** build the Crusher and radio
   add-ons from your own copies of the games.
 - **Analysis tools** for the Mach-O and Objective-C metadata: `machoinfo`, `objc1dump`, `initreach`, `disasm`,

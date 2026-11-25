@@ -1,0 +1,31 @@
+# Clive's boat escape of ON A LION HUNT (TEST_BOAT), FRAME_MS 6.6667, BOAT_SEAT_FIX=0: [boat] probe of Clive
+dev
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini FRAME_MS=6.6667
+ini BOAT_SEAT_FIX=0
+env GMV_TEST_BOAT=1
+env GMV_BOAT_PROBE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+waitlog ^\[boat\] cutscene from command 371 60
+waitlog ^\[boat\] command 395 type 47 60
+wait 2
+shot run
+waitlog ^\[boat\] .* seat, after 90
+wait 1
+shot seated
+waitlog ^\[boat\] command 403 type 8d 30
+wait 2
+shot leaving
+waitlog ^\[boat\] cutscene over at command 411 30
+wait 3
+shot after
+expectlog ^\[boat\] .* seat, before
+nolog ^\[gamepatch\] a swimmer the script seats in a vehicle stops swimming first

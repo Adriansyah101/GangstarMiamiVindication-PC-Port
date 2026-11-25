@@ -1,4 +1,3 @@
-/* patch_apply.c -- gmv_apply_gamepatch: what goes in at the start, and in and out with ORIGINAL_MAC_EXPERIENCE */
 #include "compat.h"
 #include <stdint.h>
 
@@ -8,10 +7,6 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- ORIGINAL_MAC_EXPERIENCE: every enhancement's hooks but the draw distance's, the crowd's and the
-   Crusher's, in the order they went in at the start.  What stays in under the preset: the fixes it keeps
-   and what the switch itself lives on (the options tab, the menu file's opener, the SERVICES menu's tab,
-   built once at the start). */
 void mac_features_in(void)
 {
     patch_undo *keep = patch_undo_now;
@@ -29,12 +24,14 @@ void mac_features_in(void)
     apply_sun_moon();
     apply_fog();
     apply_sky_horizon();
+    apply_checkpoint_glow();
     mr_save_hooks();
+    tod_start_hook();
     patch_undo_now = keep;
     mac_features_on = 1;
 }
 
-/* A disc off its parent and let go, as the skybox's destructor does (0xbefb5). */
+/* 0xbefb5 */
 static void sm_disc_remove(unsigned char **slot)
 {
     unsigned char *n = *slot;
@@ -50,8 +47,6 @@ static void sm_disc_remove(unsigned char **slot)
     *slot = NULL;
 }
 
-/* Out, with the setters done: the bytes the game shipped with.  Not during a replay, which needs its hooks
-   to the end: then from gmv_uc_tick. */
 void mac_features_out(void)
 {
     if (!mac_features_on)
@@ -72,7 +67,7 @@ void mac_features_out(void)
     }
     cr_page_mac();
     hide_main_menu_unhook();
-    ds_show_all();                              /* no vehicle update will do it once the hook is out */
+    ds_show_all();
     int n = mac_undo.n;
     patch_undo_all(&mac_undo);
     mac_features_on = 0;
@@ -102,12 +97,12 @@ void gmv_apply_gamepatch(void)
     apply_fade_trace();
     apply_cine_trace();
     gmv_apply_broadphase();
-    gmv_apply_b2solve();                 /* before gmv_b2step_probe, which wraps its call */
+    gmv_apply_b2solve();
     gmv_apply_hudbars();
     gmv_uifind_probe();
     gmv_b2step_probe();
     gmv_billboard_probe();
-    gmv_apply_bbfast();                  /* after the probe: GMV_BB_VERIFY wraps the calls it may have led */
+    gmv_apply_bbfast();
     gmv_vbostatic_install();
     apply_physics_sync();
     apply_cam_follow();
@@ -116,7 +111,9 @@ void gmv_apply_gamepatch(void)
     apply_veh_trace();
     apply_crash58_guard();
     apply_stoplock_fix();
-    apply_mission_save_fix();   /* on under ORIGINAL_MAC_EXPERIENCE too, so not in its group */
+    apply_ai_steer();
+    apply_boat_seat();
+    apply_mission_save_fix();
     apply_menu_fade_clicks();
     apply_fade_edge_fix();
     apply_load_sleep_skip();
@@ -124,18 +121,18 @@ void gmv_apply_gamepatch(void)
     apply_solo_car();
     apply_menu_loop();
     apply_radio_trace();
-    apply_radio_logo_fix();     /* after the trace: it chains to the trace hook when that is on */
+    apply_radio_logo_fix();
     apply_hide_more_games();
-    apply_fast_load();          /* on under ORIGINAL_MAC_EXPERIENCE too, so not in its group (the screen is over by the menu) */
+    apply_fast_load();
     patch_undo_now = &mac_undo;
-    apply_short_warning();      /* (the warning is over by the first menu: it does not go in again) */
+    apply_short_warning();
     patch_undo_now = NULL;
     apply_weapon_sprint();
     apply_minimap_shops();
     dd_hooks_in();
-    cr_file_wants();            /* the menu file's, with the switch either way */
+    cr_file_wants();
     if (!gmv_config_mac())
-        mac_features_in();      /* after the trace (the radio's hook chains to it) and the draw distance */
+        mac_features_in();
     crowd_hooks_in();
     apply_options_tab();
     apply_mission_replay();

@@ -1,10 +1,3 @@
-/* main.c -- the host for a macOS i386 game; layout.h names the game.
-
-   Stage 1: load and verify.  The game image is mapped at its own addresses, the low range
-   is copied and patched, every import is bound (to shims, or to stand-ins that report the
-   name if reached), and everything is cross-checked.  Game code is never executed.
-
-   usage: <game>.exe [--app <path to <game>.app>] */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +48,6 @@ static uint8_t *read_file(const char *path, uint32_t *size)
     return buf;
 }
 
-/* A <game>.app with the game in it: an empty one (the release's placeholder) does not count. */
 static int is_app(const char *p)
 {
     char exe[GMV_PATH_MAX + 64];
@@ -72,7 +64,7 @@ static int find_app(int argc, char **argv, const char *exe_dir, char *app, size_
         }
     static const char *const rel[] = {
         GMV_GAME_NAME ".app",
-        ".." GMV_SEP GMV_GAME_NAME ".app",                                          /* project root: gmv-win32\GangstarMV.app */
+        ".." GMV_SEP GMV_GAME_NAME ".app",
 #if GMV_DEV
         GMV_GAME_DEV_APP,
 #endif
@@ -86,13 +78,10 @@ static int find_app(int argc, char **argv, const char *exe_dir, char *app, size_
     return 0;
 }
 
-/* Say why it stops before the game's window. */
 static void tell_user(const char *msg)
 {
     gmv_alert(msg, 0);
 }
-
-/* ---- weak-bind consistency: with no slide, slots must already hold the game's own copy -- */
 
 typedef struct {
     const macho *m;
@@ -110,7 +99,7 @@ static int weak_cb(void *ctx, uint32_t slot, const char *name, int ordinal, int3
     }
     w->total++;
     uint32_t def = macho_lookup(w->m, name);
-    if (!def) {                         /* a weak reference into a dylib: bound normally */
+    if (!def) {
         w->external++;
         return 0;
     }
@@ -122,11 +111,7 @@ static int weak_cb(void *ctx, uint32_t slot, const char *name, int ordinal, int3
     return 0;
 }
 
-/* ---- main ----------------------------------------------------------------------------- */
-
-/* _main is stripped.  crt1's start builds argc/argv/envp/apple and then does
-       call _main ; mov [esp], eax ; call _exit
-   so the first call followed by that sequence names main. */
+/* _main [esp] eax _exit */
 static uint32_t find_main(const macho *m)
 {
     static const uint8_t prologue[] = {0x6A, 0x00, 0x89, 0xE5, 0x83, 0xE4, 0xF0};   /* push 0; mov ebp,esp; and esp,-16 */
@@ -139,7 +124,6 @@ static uint32_t find_main(const macho *m)
     return 0;
 }
 
-/* Which import a __symbol_stub entry (jmp [slot]) is bound to, after binding. */
 static const char *stub_import(const import_table *it, uint32_t stub)
 {
     if (stub < GMV_RESERVE_START || stub + 6 > GMV_MACHO_END)
@@ -156,8 +140,6 @@ static const char *stub_import(const import_table *it, uint32_t stub)
             return it->imp[i].name;
     return "?";
 }
-
-/* ---- protections ---------------------------------------------------------------------- */
 
 static int protect(uint32_t lo, uint32_t hi, int prot, const char *what)
 {
@@ -196,26 +178,24 @@ int gmv_main(int argc, char **argv)
     gmv_exe_dir(exe_dir, sizeof exe_dir);
     log_hide_path(exe_dir, "%EXE%");
     snprintf(path, sizeof path, "%s" GMV_SEP "cache", exe_dir);
-    gmv_mkdir(path);                        /* the game's scratch folder too (shimsappkit.c) */
+    gmv_mkdir(path);
     snprintf(path, sizeof path, "%s" GMV_SEP "cache" GMV_SEP GMV_GAME_NAME ".log", exe_dir);
     gmv_config_load(exe_dir);
     gmv_platform_early();
-    const char *lg = gmv_getenv("GMV_LOG");
-    int log_on = !(lg && *lg == '0');
+    int log_on = !gmv_env_off(gmv_getenv("GMV_LOG"));
     if (!log_on) {
         log_discard();
-        gmv_remove(path);                   /* no stale log from an earlier run either */
+        gmv_remove(path);
     } else
         log_open(path);
     snprintf(path, sizeof path, "%s" GMV_SEP "cache" GMV_SEP GMV_GAME_NAME ".dmp", exe_dir);
-    gmv_remove(path);                       /* an earlier crash's: the new log would not match it */
+    gmv_remove(path);
     if (log_on)
         gmv_dump_arm(path);
     gmv_shims_init();
     gmv_log(GMV_GAME_NAME " " GMV_PLATFORM_NAME " port %s\n\n", GMV_VERSION);
     gmv_platform_log_start();
 
-    /* ---- 1. address space ---- */
     gmv_platform_address_space(check);
     if (failures) {
         gmv_log("\nthe address-space layout is wrong; nothing else can be trusted\n");
@@ -224,7 +204,6 @@ int gmv_main(int argc, char **argv)
         return 1;
     }
 
-    /* ---- 2. game files ---- */
     if (!check(find_app(argc, argv, exe_dir, app, sizeof app), "found " GMV_GAME_NAME ".app")) {
         gmv_log("       put " GMV_GAME_NAME ".app next to the exe, or pass --app <path>\n");
         tell_user("The game was not found.\n\nPut your own copy of the Mac game's " GMV_GAME_NAME ".app folder next to "
@@ -234,7 +213,7 @@ int gmv_main(int argc, char **argv)
         return 1;
     }
     log_hide_path(app, "%APP%");
-    gmv_fnd_set_bundle_path(app);           /* so NSBundle paths point at the real .app */
+    gmv_fnd_set_bundle_path(app);
     uint32_t msize = 0, psize = 0;
     snprintf(path, sizeof path, "%s" GMV_SEP "Contents" GMV_SEP "MacOS" GMV_SEP GMV_GAME_NAME, app);
     uint8_t *mdata = read_file(path, &msize);
@@ -260,12 +239,10 @@ int gmv_main(int argc, char **argv)
     gmv_trace("       low range 0x%06x..0x%06x runs from 0x%06x, %u patches\n",
             t.low_start, t.low_end, GMV_LOWCOPY_BASE, t.npatch);
 
-    /* ---- 3. exception handler ---- */
     const macho_sect *text = macho_sect_named(&m, "__TEXT", "__text");
     check(veh_install(text->addr, t.low_end) == 0, "exception handler installed");
     check(veh_selftest() == 0, "exception handler redirects a faulting jump (host-only self-test)");
 
-    /* ---- 4. map and patch ---- */
     image_stats st;
     if (!check(image_copy(&m, &t, &st, err, sizeof err) == 0, "segments copied %s", err))
         return 1;
@@ -283,7 +260,6 @@ int gmv_main(int argc, char **argv)
           "weak binds already point at the game's own definitions (%u ok, %u bad, %u external, %u strong defs) %s",
           w.ok, w.bad, w.external, w.strong, err);
 
-    /* ---- 5. imports ---- */
     import_table it;
     if (!check(imports_collect(&m, &it, err, sizeof err) == 0, "bind streams decoded %s", err))
         return 1;
@@ -315,7 +291,6 @@ int gmv_main(int argc, char **argv)
     gmv_logfile("\n");
 #endif
 
-    /* ---- 6. what stage 2 starts from ---- */
     uint32_t main_addr = find_main(&m), exit_stub = 0;
     check(m.entry - text->addr < text->size, "entry point 0x%06x is in __text (runs at 0x%06x)",
           m.entry, image_code_addr(&t, m.entry));
@@ -340,7 +315,6 @@ int gmv_main(int argc, char **argv)
     }
     check(bad_init == 0, "%u static initializers all point at runnable game code", ninit);
 
-    /* ---- 7. final protections ---- */
     apply_protections(&m, &t);
 
     if (GMV_DEV)
@@ -359,11 +333,8 @@ int gmv_main(int argc, char **argv)
 #endif
     }
 
-    /* ---- 8. run game code.  Default (no flags, e.g. a double-click) = run the game.  Pass
-       --verify-only to stop after the load+verify above (the old default), --run-init [N] to run
-       only the first N static initializers. ---- */
     int want_init = 0, want_main = 0, verify_only = 0;
-    uint32_t init_limit = 0;                /* 0 = all */
+    uint32_t init_limit = 0;
     for (int i = 1; GMV_DEV && i < argc; i++) {
         if (!strcmp(argv[i], "--run-init")) {
             want_init = 1;
@@ -380,13 +351,12 @@ int gmv_main(int argc, char **argv)
         }
     }
     if (!want_init && !want_main && !verify_only)
-        want_main = 1;                      /* no mode given (double-click) -> launch the game */
+        want_main = 1;
     if (!failures && (want_init || want_main)) {
         char err2[256] = "";
         gmv_video_start();
         gmv_snd_init();
         gmv_joy_start();
-        /* main() needs every static initializer to have run first, so --run-main forces all. */
         uint32_t lim = want_main ? 0 : init_limit;
         if (run_initializers(&m, &t, lim, err2, sizeof err2) != 0) {
             gmv_log("stage 2d: run_initializers failed: %s\n", err2);

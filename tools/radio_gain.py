@@ -30,9 +30,7 @@ STEPS = (7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41
          24623, 27086, 29794, 32767)
 ADJ = (-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8)
 
-
 def data_chunk(d):
-    """(block align, data offset, data length) of a stereo IMA ADPCM wav."""
     if d[:4] != b"RIFF" or d[8:12] != b"WAVE":
         raise ValueError("not a wav")
     o, ch, align, fmt = 12, 0, 0, 0
@@ -48,16 +46,13 @@ def data_chunk(d):
         o += 8 + n + (n & 1)
     raise ValueError("no data chunk")
 
-
 def one_channel(src, base, words, c, gain, steps, adj):
-    """One channel of one block: its nibbles written in place in src, with the error totals."""
     head = base + 4 * c
     pred = struct.unpack_from("<h", src, head)[0]
     idx = min(src[head + 2], 88)
     out = pred * gain
     out = 32767 if out > 32767 else -32768 if out < -32768 else int(round(out))
     struct.pack_into("<h", src, head, out)
-    # the steps rise about 10% an index: the block starts where the louder signal's steps would be
     eidx = idx + int(round(math.log(gain) / math.log(1.1)))
     eidx = 0 if eidx < 0 else 88 if eidx > 88 else eidx
     src[head + 2] = eidx
@@ -71,7 +66,6 @@ def one_channel(src, base, words, c, gain, steps, adj):
             at = word + (s >> 1)
             b = src[at]
             v = b >> 4 if s & 1 else b & 15
-            # the original's next sample
             st = steps[idx]
             df = st >> 3
             if v & 4:
@@ -84,7 +78,6 @@ def one_channel(src, base, words, c, gain, steps, adj):
             pred = 32767 if pred > 32767 else -32768 if pred < -32768 else pred
             idx += adj[v]
             idx = 0 if idx < 0 else 88 if idx > 88 else idx
-            # scaled
             want = pred * gain
             if want > 32767:
                 want = 32767.0
@@ -92,7 +85,6 @@ def one_channel(src, base, words, c, gain, steps, adj):
             elif want < -32768:
                 want = -32768.0
                 clip += 1
-            # its nibble
             st = steps[eidx]
             delta = want - enc
             n = 0
@@ -124,7 +116,6 @@ def one_channel(src, base, words, c, gain, steps, adj):
             sig2 += want * want
     return err2, sig2, clip
 
-
 def one_song(args):
     in_dir, out_dir, name, gain = args
     with open(os.path.join(in_dir, name), "rb") as f:
@@ -146,7 +137,6 @@ def one_song(args):
     os.replace(tmp, os.path.join(out_dir, name))
     return name, 10 * math.log10(sig2 / err2) if err2 else 999.0, 100.0 * clip / samples
 
-
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -160,7 +150,6 @@ def main():
     with concurrent.futures.ProcessPoolExecutor() as ex:
         for name, snr, clipped in ex.map(one_song, jobs):
             print(f"{name:36s} +{db} dB  signal/noise {snr:5.1f} dB  at full scale {clipped:.3f}%")
-
 
 if __name__ == "__main__":
     main()

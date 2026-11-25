@@ -1,5 +1,3 @@
-# Fetches the official SDL3 build for the 32-bit host into host\third_party\SDL3 (headers, import library, DLL, licence).
-# One pinned version, checked by hash: a new SDL3 is a deliberate change here.
 $ErrorActionPreference = 'Stop'
 $version = '3.4.20'
 $sha256 = '5d321d3d2d499cfabad3023921e4b56bbec03558060f4e195ce626d200126442'

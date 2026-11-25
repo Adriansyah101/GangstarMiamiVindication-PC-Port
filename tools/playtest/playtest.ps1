@@ -1,58 +1,3 @@
-# Plays scripted tests of GangstarMV.exe and says PASS or FAIL for each, so a change can be tried without a person.
-#   tools\playtest\playtest.ps1                     every scenario in tools\playtest\scenarios but selftest-*
-#   tools\playtest\playtest.ps1 crash-*,boot        the ones named (wildcards work)
-#   tools\playtest\playtest.ps1 boot -Exe <path>    another exe, such as a release build (dev-only scenarios are skipped)
-#   tools\playtest\playtest.ps1 -List
-#
-# Each run gets a folder of its own, build\playtest\run, with a copy of the exe, so your build\savegame (save and ini) is
-# never touched: only the keys a scenario names are set there, the rest are the defaults. What a run leaves goes to
-# build\playtest\results\<time>\<scenario>: result.txt, the log, the screenshots and any crash dump.
-#
-# The window takes the focus and the mouse while it runs, and the input is real (SendInput), so that every path the game
-# reads works: raw mouse, key states. Keep your hands off the mouse and the keyboard. If the window loses the focus the
-# scenario stops at once with FOCUS LOST, and no more input is sent.
-#
-# Scenario files, one step a line, # starts a comment. Before the first other step:
-#   ini KEY=VALUE        | save <file>  (copies build\savegame\<file> and Gangstar2.preferences into the run)
-#   noprefs              (after save: without the preferences file, as on a first start)
-#   env KEY=VALUE        (an environment variable for the game, such as a dev build's GMV_* switch)
-#   noini                (no GangstarMV.ini: the game writes its own with the defaults; ini lines are then ignored)
-#   addon                (copies build\add-on into the run; a run has none otherwise)
-#   songs                (copies build\playtest\songs into the run's custom radio folder; fails if it is not there)
-#   dev                  (this scenario needs a dev build's keys or log lines)
-#   allow <regex>        (a log line this scenario expects to break the "no fault" rule)
-# Then:
-#   wait <s>             | waitlog <regex> [timeout s]    the log gets a matching line
-#   click <fx> <fy>      | rclick <fx> <fy> | move <fx> <fy>    fractions of the client area
-#   key <name> [ms]      | hold <name> | release <name>    A..Z 0..9 ENTER ESC SPACE TAB SHIFT CTRL ALT UP DOWN LEFT RIGHT F1..F12
-#   holdscan <hex> | releasescan <hex>    a key by its place on the keyboard, which the layout then names
-#   layout <id>          the game's window uses this keyboard layout, such as 0000040C (French); put back at the end
-#   look <dx> <dy> [n]   relative mouse motion, in n steps, for the camera
-#   drag <dx> <dy> [shot] the window's bottom-right corner moved this far, by the mouse; as the game keeps the cursor inside its
-#                        window, this starts Windows' sizing as the system menu does, and a person's drag ends in the same loop
-#   size <w> <h> [px]    the client area is this big, within px (default 0); fails if not. A `drag` can end a few pixels short
-#   maximize | restore   the window's own buttons, by the commands they send
-#   cpu <name> <s>       the game's CPU time over s seconds, printed as a share of one core
-#   minimize <s> [cpu]   | unfocus <s> [cpu]    minimized, or behind a small window of the script's, for s seconds; then
-#                        in front again (cpu: the game's CPU share meanwhile, from 2 s in)
-#   pad [state]          needs ini PAD_TEST=xbox|ds4|ds5|raw (a dev build's virtual pad): what it holds from now on, nothing
-#                        for all released: X A B Y LB RB LT RT BACK START LS RS PS TOUCHPAD UP DOWN LEFT RIGHT lx= ly= rx= ry=
-#   padfor <ms> <state>  holds that for so long, then all released
-#   shot <name> [full]   the window's picture, to <name>.png: 960 pixels wide, or full = at the window's own size
-#   moved <a> <b> [min]  | still <a> <b> [max]    two shots differ by at least / at most this much (default 12, of 255)
-#   edge <a> [max]       shot a (taken full) has no line along its top row or left column: neither is brighter than the
-#                        row or column two pixels in by more than max (default 3, of 255)
-#   leftmenu <menu> <b>  shot b no longer shows the main menu's buttons that shot menu shows; its scenes change by themselves,
-#                        so a `moved` in the menu proves nothing and the log has no line for reaching the city
-#   expectlog <regex>    | nolog <regex>
-#   expectfile <path>    | nofile <path>    relative to the run's folder
-#   inihas <regex>       a line of the run's savegame\GangstarMV.ini matches
-#   inisec <section> <key>...   each key's line in the run's GangstarMV.ini stands in that [section]
-#   expectbox <regex> [timeout s]    the error box appears with this text; it is closed
-#   expectexit <code> [timeout s]    the process ends with this exit code
-#   dumpclean            the crash dump holds none of: the user's name, the computer's, the user's folder, the project's
-# A step written dev: <step> or release: <step> runs only with that kind of build.
-# Every scenario fails on a [fault] or [MISSING] line, an error box or an exit it did not expect, or a window that hangs.
 param(
     [Parameter(Position = 0)][string[]]$Scenario = @('*'),
     [string]$Exe,
@@ -281,7 +226,7 @@ function Read-Log([string]$path) {
     try { $r = New-Object IO.StreamReader($fs); return ($r.ReadToEnd() -split "`r?`n") } finally { $fs.Dispose() }
 }
 
-class Stop : Exception { Stop([string]$m) : base($m) {} }     # the scenario cannot go on; what is known so far is its result
+class Stop : Exception { Stop([string]$m) : base($m) {} }
 
 $isDev = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($Exe)).Contains('TEST_FATAL')
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
@@ -294,7 +239,6 @@ foreach ($file in $chosen) {
     $lines = @(Get-Content $file.FullName | ForEach-Object { ($_ -replace '(^|\s)#.*$', '').Trim() } | Where-Object { $_ })
     if (-not $isDev -and ($lines -contains 'dev')) { $summary += [pscustomobject]@{ Scenario = $name; Result = 'SKIP'; Note = 'needs a dev build' }; continue }
 
-    # ---- a run folder of its own
     if (Test-Path $run) { Remove-Item $run -Recurse -Force }
     New-Item -ItemType Directory -Force (Join-Path $run 'savegame'), (Join-Path $run 'cache') | Out-Null
     $runExe = Join-Path $run 'GangstarMV.exe'
@@ -303,7 +247,7 @@ foreach ($file in $chosen) {
     if (-not (Test-Path $patch)) { $patch = Join-Path $build 'gmv_patch.bin' }
     Copy-Item $patch $run
     $sdlDll = Join-Path (Split-Path $Exe) 'SDL3.dll'
-    if (Test-Path $sdlDll) { Copy-Item $sdlDll $run }     # an exe from before SDL3 has none
+    if (Test-Path $sdlDll) { Copy-Item $sdlDll $run }
     $res = Join-Path $resultsRoot $name
     New-Item -ItemType Directory -Force $res | Out-Null
 
@@ -312,8 +256,8 @@ foreach ($file in $chosen) {
         $w = $l -split '\s+', 2
         switch ($w[0]) {
             'ini' { $ini += $w[1] }
-            'noini' { $noIni = $true }      # no GangstarMV.ini: the game writes its own, with the defaults
-            'env' { $envs += $w[1] }       # a dev build's GMV_* environment switch for this run
+            'noini' { $noIni = $true }
+            'env' { $envs += $w[1] }
             'dev' {}
             'allow' { $allow += $w[1] }
             'save' {
@@ -333,7 +277,6 @@ foreach ($file in $chosen) {
     }
     if (-not $noIni) { [IO.File]::WriteAllLines((Join-Path $run 'savegame\GangstarMV.ini'), [string[]]$ini) }
 
-    # ---- start
     Write-Host "--- $name"
     $psi = New-Object Diagnostics.ProcessStartInfo
     $psi.FileName = $runExe
@@ -350,7 +293,6 @@ foreach ($file in $chosen) {
     $fail = { param($m) [void]$failures.Add($m); Write-Host "  FAIL: $m" }
     $window = {
         if ($hwnd -eq [IntPtr]::Zero) {
-            # Quickly: the game settles its keys at its first question about the layout, soon after the window, and `layout` must get in first.
             for ($i = 0; $i -lt 1500 -and $hwnd -eq [IntPtr]::Zero; $i++) {
                 if ($p.HasExited) { throw [Stop]::new("the game ended before its window (exit $($p.ExitCode))") }
                 if ($i % 10 -eq 0) {
@@ -365,7 +307,6 @@ foreach ($file in $chosen) {
         }
         return $hwnd
     }
-    # Between steps: the game may have stopped by itself, and input must only ever reach its window.
     $watch = {
         param([switch]$Focus)
         if ($p.HasExited) { throw [Stop]::new("the game ended unexpectedly (exit $($p.ExitCode))") }
@@ -378,7 +319,6 @@ foreach ($file in $chosen) {
             if ([PT]::Hung($h)) { throw [Stop]::new("the window did not answer for $HangSeconds s") }
         }
         if ($Focus) {
-            # Taken once, at the first input; after that another window on top means someone wants the computer.
             if (-not $script:focused -and -not [PT]::TakeFocus($h)) { Start-Sleep -Milliseconds 300 }
             if (-not [PT]::HasFocus($h)) { throw [Stop]::new('FOCUS LOST: another window took the foreground; no more input was sent') }
             $script:focused = $true
@@ -388,7 +328,7 @@ foreach ($file in $chosen) {
 
     try {
         foreach ($s in $steps) {
-            if ($s -match '^(dev|release):\s*(.*)$') {      # a step for one kind of build only
+            if ($s -match '^(dev|release):\s*(.*)$') {
                 if (($Matches[1] -eq 'dev') -ne $isDev) { continue }
                 $s = $Matches[2]
             }
@@ -413,7 +353,6 @@ foreach ($file in $chosen) {
                 }
                 { $_ -in 'click', 'rclick', 'move' } {
                     $h = & $watch -Focus
-                    # First off the spot and back: a button only reacts to a pointer that moved onto it.
                     [PT]::Point($h, [double]$a[1] - 0.03, [double]$a[2] - 0.03); Start-Sleep -Milliseconds 150
                     [PT]::Point($h, [double]$a[1], [double]$a[2]); Start-Sleep -Milliseconds 200
                     if ($a[0] -ne 'move') {
@@ -453,11 +392,11 @@ foreach ($file in $chosen) {
                     $px = if ($a.Count -gt 3) { [int]$a[3] } else { 0 }
                     if ([Math]::Abs($cw - [int]$a[1]) -gt $px -or [Math]::Abs($ch - [int]$a[2]) -gt $px) { & $fail "the client area is ${cw}x${ch}, not $($a[1])x$($a[2])" }
                 }
-                { $_ -in 'minimize', 'unfocus' } {     # minimized, or behind the taskbar, for <s>; then back in front
+                { $_ -in 'minimize', 'unfocus' } {
                     $h = & $watch -Focus
                     $other = $null
                     if ($a[0] -eq 'minimize') { [PT]::SysCommand($h, 0xF020) }
-                    else {                          # a small window of ours in the corner takes the foreground
+                    else {
                         Add-Type -AssemblyName System.Windows.Forms
                         $other = New-Object System.Windows.Forms.Form
                         $other.Text = 'playtest'; $other.StartPosition = 'Manual'; $other.Left = 0; $other.Top = 0
@@ -483,7 +422,7 @@ foreach ($file in $chosen) {
                     if ($a[0] -eq 'minimize') { [PT]::SysCommand($h, 0xF120); Start-Sleep -Milliseconds 500 }
                     if (-not [PT]::TakeFocus($h)) { Start-Sleep -Milliseconds 300; [void][PT]::TakeFocus($h) }
                 }
-                'cpu' {                             # the game's CPU time over <s> seconds, as a share of one core
+                'cpu' {
                     [void](& $watch)
                     $p.Refresh(); $c0 = $p.TotalProcessorTime.TotalMilliseconds; $t0 = Get-Date
                     $end = $t0.AddSeconds([double]$a[2])
@@ -542,11 +481,11 @@ foreach ($file in $chosen) {
                     }
                 }
                 'expectfile' { if (-not (Test-Path (Join-Path $run $rest))) { & $fail "no file $rest" } }
-                'inihas' {      # a line of savegame\GangstarMV.ini matches the pattern
+                'inihas' {
                     $f = Join-Path $run 'savegame\GangstarMV.ini'
                     if (-not ((Test-Path $f) -and (Get-Content $f | Where-Object { $_ -match $rest } | Select-Object -First 1))) { & $fail "no ini line /$rest/" }
                 }
-                'inisec' {      # inisec <section> <key>...: each key's line stands in that [section]
+                'inisec' {
                     $f = Join-Path $run 'savegame\GangstarMV.ini'
                     $where = @{}; $sec = ''
                     if (Test-Path $f) {
@@ -591,7 +530,6 @@ foreach ($file in $chosen) {
         }
     }
 
-    # ---- what every scenario must keep to
     $log = @(Read-Log $logPath)
     foreach ($re in '^\[fault\]', '^\[MISSING', '^\[crash58\]') {
         $hit = $log | Where-Object { $_ -match $re } | Where-Object { $l = $_; -not @($allow | Where-Object { $l -match $_ }).Count } | Select-Object -First 1
@@ -611,7 +549,6 @@ foreach ($file in $chosen) {
 
 ""
 $summary | Format-Table -AutoSize -Wrap | Out-String -Width 160
-# The last ten passes are enough to look back at.
 Get-ChildItem (Split-Path $resultsRoot) -Directory | Sort-Object Name -Descending | Select-Object -Skip 10 | Remove-Item -Recurse -Force
 "results: $resultsRoot"
 if (@($summary | Where-Object Result -eq 'FAIL').Count) { exit 1 }

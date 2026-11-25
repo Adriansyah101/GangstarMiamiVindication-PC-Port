@@ -1,4 +1,3 @@
-/* patch_common.c -- what the patches share: writing to the game's code, and undoing it */
 #include "compat.h"
 #include <stdint.h>
 #include <string.h>
@@ -9,19 +8,10 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* Surgical correctness patches applied to the game's own __TEXT at load time.
-
-   These are not enhancements or behavioural changes: each one repairs a latent assumption in
-   the shipped i386 code that only holds on the original platform, by mirroring logic the engine
-   already contains elsewhere.  Each patch sanity-checks the exact bytes it is about to replace,
-   so it is a no-op on any binary that does not match, and each can be turned off with an env var. */
-
-patch_undo *patch_undo_now;     /* the group being put in, if any */
-patch_undo mac_undo;            /* every enhancement's hooks but the ones with groups of their own */
+patch_undo *patch_undo_now;
+patch_undo mac_undo;
 
 #if GMV_DEV
-/* [macaudit]: what the game's code and tables held before any patch of ours (ma_snapshot), compared under
-   ORIGINAL_MAC_EXPERIENCE (ma_tick).  Patches elsewhere, in its writable data, are noted here as they go in. */
 ma_site_t ma_site[MA_SITES];
 int ma_sites;
 
@@ -61,7 +51,6 @@ int patch_bytes(uint32_t va, const unsigned char *buf, size_t n)
     return 1;
 }
 
-/* The group out again, last patch first: the bytes are what they were before it went in. */
 void patch_undo_all(patch_undo *u)
 {
     patch_undo *keep = patch_undo_now;
@@ -73,11 +62,73 @@ void patch_undo_all(patch_undo *u)
     patch_undo_now = keep;
 }
 
-/* Emit `jmp rel32` at tr[o], targeting absolute game VA `dst`; advance o past the 5 bytes. */
 void emit_jmp(unsigned char *tr, size_t *o, uint32_t dst)
 {
     int32_t rel = (int32_t)(dst - ((uint32_t)(uintptr_t)tr + (uint32_t)*o + 5));
     tr[(*o)++] = 0xe9;
     memcpy(tr + *o, &rel, 4);
     *o += 4;
+}
+
+void emit_jmp_abs(unsigned char *tr, size_t *o, uint32_t dst)
+{
+    uint32_t slot = (uint32_t)(uintptr_t)(tr + *o + 6);
+    tr[(*o)++] = 0xff;
+    tr[(*o)++] = 0x25;
+    memcpy(tr + *o, &slot, 4);
+    *o += 4;
+    memcpy(tr + *o, &dst, 4);
+    *o += 4;
+}
+
+int patch_jmp(uint32_t site, const void *to, size_t len)
+{
+    unsigned char code[16];
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (site + 5));
+    if (len < 5 || len > sizeof code)
+        return 0;
+    memset(code, 0x90, len);
+    code[0] = 0xe9;
+    memcpy(code + 1, &rel, 4);
+    return patch_bytes(site, code, len);
+}
+
+int patch_call(uint32_t site, const void *to)
+{
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (site + 5));
+    return patch_bytes(site + 1, (const unsigned char *)&rel, 4);
+}
+
+int code_write(uint32_t va, const void *buf, size_t n)
+{
+    DWORD old;
+    void *p = (void *)(uintptr_t)va;
+    if (!VirtualProtect(p, n, PAGE_EXECUTE_READWRITE, &old))
+        return 0;
+    memcpy(p, buf, n);
+    VirtualProtect(p, n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, n);
+    return 1;
+}
+
+int code_jmp(uint32_t site, const void *to)
+{
+    unsigned char code[5] = { 0xe9 };
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (site + 5));
+    memcpy(code + 1, &rel, 4);
+    return code_write(site, code, sizeof code);
+}
+
+int code_call(uint32_t site, const void *to)
+{
+    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (site + 5));
+    return code_write(site + 1, &rel, 4);
+}
+
+uint32_t code_call_target(uint32_t site)
+{
+    const unsigned char *p = (const unsigned char *)(uintptr_t)site;
+    int32_t rel;
+    memcpy(&rel, p + 1, 4);
+    return p[0] == 0xe8 ? site + 5 + (uint32_t)rel : 0;
 }

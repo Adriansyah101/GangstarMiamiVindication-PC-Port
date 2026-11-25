@@ -1,4 +1,3 @@
-/* short_warning.c -- SHORT_WARNING: the start-up warning for 3 s, skippable */
 #include "compat.h"
 #include <stdint.h>
 
@@ -8,18 +7,11 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- SHORT_WARNING: the start-up "coarse language" warning for 3 s, skippable (an enhancement;
-   off under ORIGINAL_MAC_EXPERIENCE) ----
-   The warning is a state of its own (vtable 0x65a488).  Its enter (0x1b814e) keeps the ms clock
-   0x1b8a60 at [state+0xc]; its update (slot 6, 0x1b81a8) shows Texts.txtDisclaimer while the clock is
-   at most 14999 ms (0x3a97) past that, then hides it and goes on to the next state (0x1b5a30).  It
-   takes no input at all, so a key or a click does nothing for 15 s.  The update slot now goes to
-   gmv_sw_update: once 3 s have gone by, or a key, mouse button or pad button goes down while the
-   game's window is in front, it sets the start 15 s back and lets the game's own update move on. */
+/* 0x65a488 0x1b814e 0x1b8a60 [state+0xc] 0x1b81a8 0x3a97 */
 #define SW_VT       0x0065a488u
 #define SW_UPDATE   0x001b81a8u
-#define SW_CLOCK    0x001b8a60u         /* the ms clock the state times itself with */
-#define SW_HOLD_MS  15000u              /* past the game's 14999 */
+#define SW_CLOCK    0x001b8a60u
+#define SW_HOLD_MS  15000u
 #define SW_SHORT_MS 3000u
 
 __attribute__((cdecl, force_align_arg_pointer))
@@ -28,8 +20,6 @@ static uint32_t sw_clock(void)
     return ((uint32_t (*)(void))(uintptr_t)SW_CLOCK)();
 }
 
-/* A key, mouse button or pad button that went down since the last call (modifiers and Tab left out,
-   so coming back with Alt+Tab does not count). */
 static int sw_pressed(int prime)
 {
     static unsigned seen;

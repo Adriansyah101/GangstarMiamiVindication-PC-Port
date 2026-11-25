@@ -1,5 +1,4 @@
-# GPU_PROFILE=igpu: SHADOW_QUALITY left blank takes the built-in GPU's 1; MSAA set by hand (2) wins over the profile.
-# PRECISE_WAIT=0 and BACKGROUND_THROTTLE=0 take the old ways.
+# GPU_PROFILE=igpu: blank SHADOW_QUALITY -> 1, manual MSAA 2 wins; PRECISE_WAIT=0, BACKGROUND_THROTTLE=0
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

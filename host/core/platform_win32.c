@@ -1,4 +1,3 @@
-/* platform_win32.c -- platform.h on Windows. */
 #ifdef _WIN32
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +22,6 @@ static int to_utf8(const wchar_t *w, char *s, size_t n)
     return WideCharToMultiByte(CP_UTF8, 0, w, -1, s, (int)n, NULL, NULL) != 0;
 }
 
-/* -municode: the entry point gets the real command line, whatever the code page. */
 int wmain(int argc, wchar_t **argv)
 {
     static char *args[64];
@@ -36,8 +34,6 @@ int wmain(int argc, wchar_t **argv)
     }
     return gmv_main(argc, args);
 }
-
-/* ---- files ---- */
 
 void gmv_exe_dir(char *out, size_t n)
 {
@@ -97,8 +93,6 @@ unsigned long gmv_last_error(void)
     return GetLastError();
 }
 
-/* ---- memory ---- */
-
 int gmv_protect(uint32_t addr, uint32_t size, int prot)
 {
     static const DWORD win[] = {PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_EXECUTE_READ};
@@ -125,8 +119,6 @@ int gmv_module_of(uint32_t addr, char *name, size_t n, uint32_t *base)
     *base = (uint32_t)(uintptr_t)mbi.AllocationBase;
     return 1;
 }
-
-/* ---- threads and the process ---- */
 
 uint32_t gmv_thread_id(void)
 {
@@ -161,8 +153,6 @@ void gmv_exit(int code)
     ExitProcess((UINT)code);
 }
 
-/* ---- the user ---- */
-
 void gmv_alert(const char *text, int on_top)
 {
     static wchar_t w[2048];
@@ -176,15 +166,11 @@ void gmv_release_cursor(void)
     ClipCursor(NULL);
 }
 
-/* ---- starting ---- */
-
 static int dpi_aware;
 
 void gmv_platform_early(void)
 {
-    /* Before any window: Windows would otherwise stretch this one when the display is scaled above 100%. */
-    const char *da = gmv_getenv("GMV_DPI_AWARE");
-    dpi_aware = !(da && *da == '0') && SetProcessDPIAware();
+    dpi_aware = !gmv_env_off(gmv_getenv("GMV_DPI_AWARE")) && SetProcessDPIAware();
 }
 
 void gmv_platform_log_start(void)
@@ -196,11 +182,6 @@ void gmv_platform_log_start(void)
     }
 }
 
-/* Is every page of [lo, hi) committed and owned by the exe image?  The range starts as one region,
-   but a protection change on any page inside it (a copy-on-write touch, or another process such as
-   security software adjusting a page) splits it into several regions that are all still the exe's.
-   Requiring a single region made startup fail intermittently for no layout reason, so walk them
-   all; the first region that is not the exe's is logged so a real failure stays diagnosable. */
 static int range_owned_by_exe(uintptr_t lo, uintptr_t hi)
 {
     for (uintptr_t a = lo; a < hi;) {

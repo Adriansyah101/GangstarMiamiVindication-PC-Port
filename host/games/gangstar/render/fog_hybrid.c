@@ -1,4 +1,3 @@
-/* fog_hybrid.c -- FOG_MODE 2: the hybrid fog */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,33 +10,13 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- FOG_MODE=2: the hybrid fog ----
-   The linear fog counts depth along the view, the same at a screen edge as in the middle (so it shifts
-   as the camera turns), and stops dead at its end, which shows as a line where the sea meets the
-   skyline.  The hybrid draws each fogged material through a fragment shader instead; the
-   fixed-function vertex stage keeps the game's lighting and texture matrices, and the alpha test and
-   blending stay as they were:
-   - the true distance from the eye at each pixel, from its depth (gl_FragCoord through the inverse
-     projection, as the AO does), so it is right across the sea's huge triangles;
-   - an Exp2 curve fitted between FOG_START and FOG_END: clear = (e^(-a t^2) - e^(-a)) / (1 - e^(-a)),
-     t from 0 at the start to 1 at the end, times 1 - t^8 so it arrives at complete fog without a kink
-     (a = FOG_HYBRID_K at sea level);
-   - thinner higher up: a scales with the mean of e^(-height / FOG_HEIGHT) along the line of sight
-     (the camera's height from the patches, the world's up from the sky's orientation, sky.inv), so the
-     sea and the streets haze sooner than the tops of the towers; every height is complete at the end;
-   - nothing is drawn past FOG_END (the clip plane counts depth, which reaches further at the screen's
-     edges), so the world ends on the circle where the skyline's foot stands.
-   The shader follows from the units on and their environments (g_te): plain colour, unit 0 MODULATE,
-   or unit 0 MODULATE plus unit 1 COMBINE adding its colour and multiplying its alpha (lit windows and
-   reflections), which is all a survey of the world's draws found (2026-10).  Any other setup keeps the linear fog, logged once. */
-
 const char fh_fs_head[] =
     "#version 120\n"
     "uniform sampler2D t0, t1;\n"
     "uniform mat4 invp;\n"
-    "uniform vec4 vp, fogp, hgt;\n"     /* fogp: start, 1 / (end - start), end, K; hgt: up / H, eye height / H */
+    "uniform vec4 vp, fogp, hgt;\n"
     "uniform vec2 dr;\n"
-    "float fog_clear() {\n"                             /* 1 = no fog, 0 = all fog */
+    "float fog_clear() {\n"
     "    vec4 p = invp * vec4((gl_FragCoord.xy - vp.xy) / vp.zw * 2.0 - 1.0,\n"
     "                         (gl_FragCoord.z - dr.x) / (dr.y - dr.x) * 2.0 - 1.0, 1.0);\n"
     "    vec3 e = p.xyz / p.w;\n"
@@ -68,7 +47,6 @@ static const char *const fh_fs_main[3] = {
 
 fh_t fh;
 
-/* The shader's fog in C: at distance d from an eye at height h0, of a point at height h1. */
 float fh_amount(float d, float h0, float h1)
 {
     float fs = g_ao_fogp[1], fe = g_ao_fogp[2];
@@ -106,11 +84,10 @@ static int fh_init(void)
         aof.Uniform1i(aof.GetUniformLocation(fh.p[v], "t1"), 1);
     }
     aof.UseProgram(0);
-    memset(fh.set, 0xff, sizeof fh.set);                /* NaNs: nothing given yet */
+    memset(fh.set, 0xff, sizeof fh.set);
     return 1;
 }
 
-/* Which shader draws the current setup like the fixed-function pipeline; -1 = none. */
 static int fh_variant(unsigned tf)
 {
     unsigned on = (g_tf_tex2d & ~tf) & 0xF;
@@ -120,10 +97,10 @@ static int fh_variant(unsigned tf)
         return -1;
     if (on == 1)
         return 1;
-    if (on != 3 || g_te[1].mode != 0x8570 || g_te[1].crgb != GL_ADD || g_te[1].calpha != GL_MODULATE ||  /* GL_COMBINE */
+    if (on != 3 || g_te[1].mode != 0x8570 || g_te[1].crgb != GL_ADD || g_te[1].calpha != GL_MODULATE ||
         g_te[1].scale[0] != 1 || g_te[1].scale[1] != 1)
         return -1;
-    const GLint *s = g_te[1].src, *o = g_te[1].op;      /* previous (0x8578) and texture (0x1702), either way round */
+    const GLint *s = g_te[1].src, *o = g_te[1].op;      /* 0x8578 0x1702 */
     int rgb = ((s[0] == 0x8578 && s[1] == 0x1702) || (s[0] == 0x1702 && s[1] == 0x8578)) && o[0] == 0x300 && o[1] == 0x300;
     int alpha = ((s[3] == 0x8578 && s[4] == 0x1702) || (s[3] == 0x1702 && s[4] == 0x8578)) && o[3] == 0x302 && o[4] == 0x302;
     return rgb && alpha ? 2 : -1;
@@ -165,8 +142,6 @@ static void fh_count(int shaded)
         fh.linear++;
 }
 
-/* The uniforms of fh_fs_head for the current draw (invp, vp, dr, fogp, hgt in that order); 0 = the
-   projection, viewport or depth range will not do.  Needs linear fog parameters with end > start. */
 int fh_params(GLfloat u[30])
 {
     if (memcmp(fh.proj, g_ao_proj, sizeof fh.proj)) {
@@ -191,14 +166,12 @@ int fh_params(GLfloat u[30])
     return 1;
 }
 
-/* After fog_force_begin (ff, its kind) and texfix_begin (tf, the units it turned off); 1 = a shader is
-   bound until fog_hybrid_end. */
 int fog_hybrid_begin(GLenum mode, int ff, unsigned tf)
 {
     if (g_fog_mode != 2 || fh.ready < 0 || mode == GL_POINTS || !g_fog_all || g_sky_draw || g_sky_glow_draw ||
         g_glt.last_fb || !g_ao_depth_on || g_ao_fogp[0] != GL_LINEAR || !(g_ao_fogp[2] > g_ao_fogp[1]))
         return 0;
-    if (ff < 1 || ff > 3) {                             /* not forced: then fogged by the game itself */
+    if (ff < 1 || ff > 3) {
         if (ff || !g_ao_fog_on)
             return 0;
         ao_proj_refresh();

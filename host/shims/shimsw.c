@@ -1,26 +1,15 @@
-/* shimsw.c -- system-backed stand-ins for the macOS libSystem symbols that cannot be a plain
-   CRT forward: POSIX threads, mmap, the clocks, sysconf, and the time + FILE stdio groups that
-   stage 2a deferred because of a time_t/off_t width or FILE-ownership mismatch.  Windows' bodies
-   go through compat.h's Win32; where Linux has the Mac's own call, it has its own body.
-
-   The game owns the opaque POSIX storage (pthread_mutex_t is 44 bytes on macOS i386,
-   pthread_cond_t 28); because every pthread call goes through these shims, a smaller Win32
-   object is placement-constructed inside that buffer and recognised by a leading magic word.
-
-   Exercised, like the rest of the shims, only once stage 2 runs the game; stage 1 just binds. */
-
 #if defined _WIN32 && !defined _WIN32_WINNT
-#define _WIN32_WINNT 0x0600             /* CONDITION_VARIABLE and SleepConditionVariableCS */
+#define _WIN32_WINNT 0x0600
 #endif
 #ifndef _WIN32
-#define _GNU_SOURCE                     /* pread64, tm_gmtoff */
+#define _GNU_SOURCE
 #endif
 
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #ifdef _WIN32
-#include <io.h>                         /* _read, _lseeki64 (CRT fd backing for pread) */
+#include <io.h>
 #endif
 #include <stdint.h>
 #include <stdio.h>
@@ -29,7 +18,7 @@
 #include <time.h>
 #include "compat.h"
 #ifdef _WIN32
-#include <mmsystem.h>                   /* timeBeginPeriod (winmm) */
+#include <mmsystem.h>
 #else
 #include <dirent.h>
 #include <sys/mman.h>
@@ -42,37 +31,31 @@
 
 #define FN(mach_name, host_fn) {mach_name, (void *)(host_fn)}
 
-/* macOS i386 structs the game passes in, defined here so their widths are exact regardless of
-   the host CRT (whose time_t is 64-bit and whose off_t handling differs). */
 struct mac_timespec { int32_t tv_sec; int32_t tv_nsec; };
 struct mac_timeval  { int32_t tv_sec; int32_t tv_usec; };
-struct mac_tm {                         /* 9 ints then the two BSD extensions = 44 bytes */
+struct mac_tm {
     int sec, min, hour, mday, mon, year, wday, yday, isdst;
     long gmtoff;
     const char *zone;
 };
 
-/* ---- one-time setup ------------------------------------------------------------------- */
-
-/* __DefaultRuneLocale: the BSD ctype rune table the game's isX()/tolower macros index directly.
-   Layout matches macOS _RuneLocale: __runetype[256] at offset 0x34, then __maplower/__mapupper.
-   Filled from the host CRT ctype in gmv_shims_init. */
-#define RL_A 0x00000100u  /* alpha */
-#define RL_C 0x00000200u  /* control */
-#define RL_D 0x00000400u  /* digit */
-#define RL_G 0x00000800u  /* graph */
-#define RL_L 0x00001000u  /* lower */
-#define RL_P 0x00002000u  /* punct */
-#define RL_S 0x00004000u  /* space */
-#define RL_U 0x00008000u  /* upper */
-#define RL_X 0x00010000u  /* xdigit */
-#define RL_B 0x00020000u  /* blank */
-#define RL_R 0x00040000u  /* print */
+/* __DefaultRuneLocale +0x34 */
+#define RL_A 0x00000100u
+#define RL_C 0x00000200u
+#define RL_D 0x00000400u
+#define RL_G 0x00000800u
+#define RL_L 0x00001000u
+#define RL_P 0x00002000u
+#define RL_S 0x00004000u
+#define RL_U 0x00008000u
+#define RL_X 0x00010000u
+#define RL_B 0x00020000u
+#define RL_R 0x00040000u
 static struct {
     char magic[8];
     char encoding[32];
     void *sgetrune, *sputrune;
-    uint32_t invalid_rune;      /* offset 0x30; __runetype starts at 0x34 */
+    uint32_t invalid_rune;      /* 0x30 __runetype 0x34 */
     uint32_t runetype[256];
     uint32_t maplower[256];
     uint32_t mapupper[256];
@@ -102,20 +85,14 @@ static void rune_init(void)
     }
 }
 
-static CRITICAL_SECTION g_lock;         /* guards the thread table and lazy mutex init */
-static FILE *shim_stdoutp;              /* the ___stdoutp / ___stderrp data symbols point here */
+static CRITICAL_SECTION g_lock;
+static FILE *shim_stdoutp;
 static FILE *shim_stderrp;
 static int g_ready;
 
-/* 1 ms timer resolution for the whole process.  macOS usleep/nanosleep are accurate to
-   microseconds; Windows' default ~15.6 ms tick turns every short game sleep (the VoxThread audio
-   streamer, the 1 ms loader/streaming waits, the event pump) into a 16 ms stall.  Windows 11 also
-   drops a process's requested resolution while its window is minimised or occluded unless the
-   process opts out of that power throttling, so do that too (SetProcessInformation, Win8+). */
 static void timer_resolution_init(void)
 {
 #ifndef _WIN32
-    /* Linux sleeps to the microsecond already. */
 }
 #else
     timeBeginPeriod(1);
@@ -123,8 +100,8 @@ static void timer_resolution_init(void)
     BOOL (WINAPI *setpi)(HANDLE, int, void *, DWORD) = (BOOL (WINAPI *)(HANDLE, int, void *, DWORD))
         (uintptr_t)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessInformation");
     if (setpi) {
-        power_throttling pt = {1, 0x4, 0};      /* IGNORE_TIMER_RESOLUTION in control, clear in state */
-        setpi(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &pt, sizeof pt);
+        power_throttling pt = {1, 0x4, 0};
+        setpi(GetCurrentProcess(), 4 , &pt, sizeof pt);
     }
 }
 #endif
@@ -141,17 +118,14 @@ void gmv_shims_init(void)
     g_ready = 1;
 }
 
-/* ---- pthread mutexes ------------------------------------------------------------------ */
+#define MUTEX_MAGIC 0x584d564du
+#define COND_MAGIC  0x43564d47u
 
-#define MUTEX_MAGIC 0x584d564du         /* 'MVMX' */
-#define COND_MAGIC  0x43564d47u         /* 'GMVC' */
-
-typedef struct { uint32_t magic; CRITICAL_SECTION cs; } shim_mutex;   /* 28 <= 44 */
+typedef struct { uint32_t magic; CRITICAL_SECTION cs; } shim_mutex;
 #ifdef _WIN32
-typedef struct { uint32_t magic; CONDITION_VARIABLE cv; } shim_cond;  /* 8  <= 28 */
+typedef struct { uint32_t magic; CONDITION_VARIABLE cv; } shim_cond;
 #define COND_CV(c) (&(c)->cv)
 #else
-/* glibc's pthread_cond_t is 48 bytes and the game's buffer 28, so the condition lives on the heap. */
 typedef struct { uint32_t magic; CONDITION_VARIABLE *cv; } shim_cond;
 #define COND_CV(c) ((c)->cv)
 _Static_assert(sizeof(shim_mutex) <= 44, "a mutex must fit the Mac's pthread_mutex_t");
@@ -162,8 +136,6 @@ static void cond_make(shim_cond *c)
 }
 #endif
 
-/* Make sure the buffer holds a live CRITICAL_SECTION.  A mutex set up with the static
-   PTHREAD_MUTEX_INITIALIZER reaches lock/unlock without an _init call, so initialise lazily. */
 static shim_mutex *mutex_of(void *p)
 {
     shim_mutex *m = p;
@@ -192,7 +164,7 @@ static int shim_mutex_lock(void *mutex)
     shim_mutex *m = mutex_of(mutex);
     if (!gmv_prof_on()) {
         EnterCriticalSection(&m->cs);
-    } else if (!TryEnterCriticalSection(&m->cs)) {   /* GMV_LOAD_PROFILE: time a contended lock */
+    } else if (!TryEnterCriticalSection(&m->cs)) {
         long long t0 = gmv_prof_now();
         EnterCriticalSection(&m->cs);
         gmv_prof_add(GMV_PROF_LOCK, t0, 0);
@@ -200,7 +172,7 @@ static int shim_mutex_lock(void *mutex)
     return 0;
 }
 static int shim_mutex_unlock(void *mutex)  { LeaveCriticalSection(&mutex_of(mutex)->cs); return 0; }
-static int shim_mutex_trylock(void *mutex) { return TryEnterCriticalSection(&mutex_of(mutex)->cs) ? 0 : 16; } /* EBUSY */
+static int shim_mutex_trylock(void *mutex) { return TryEnterCriticalSection(&mutex_of(mutex)->cs) ? 0 : 16; }
 
 static int shim_mutex_destroy(void *mutex)
 {
@@ -212,12 +184,8 @@ static int shim_mutex_destroy(void *mutex)
     return 0;
 }
 
-/* attributes: CRITICAL_SECTION is recursive and process-local, so the attributes the game can
-   set make no difference to it; accept and ignore them. */
 static int shim_mutexattr_noop(void *a)        { (void)a; return 0; }
 static int shim_mutexattr_settype(void *a, int type) { (void)a; (void)type; return 0; }
-
-/* ---- pthread condition variables ------------------------------------------------------ */
 
 static shim_cond *cond_of(void *p)
 {
@@ -320,10 +288,8 @@ static int shim_cond_timedwait(void *cond, void *mutex, const struct mac_timespe
         gmv_prof_add(GMV_PROF_WAIT, t0, 0);
     if (woke)
         return 0;
-    return err == ERROR_TIMEOUT ? 60 : 0;   /* ETIMEDOUT */
+    return err == ERROR_TIMEOUT ? 60 : 0;
 }
-
-/* ---- pthread threads, keys, misc ------------------------------------------------------ */
 
 static struct { unsigned long tid; HANDLE h; } g_threads[256];
 static int g_nthreads;
@@ -331,7 +297,6 @@ static int g_nthreads;
 typedef void *(*pthread_fn)(void *);
 typedef struct { pthread_fn fn; void *arg; } thread_start;
 
-/* Calls the game's thread entry, which (like all game code) assumes a 16-byte aligned stack. */
 __attribute__((force_align_arg_pointer))
 static DWORD WINAPI thread_tramp(LPVOID p)
 {
@@ -345,7 +310,7 @@ static int shim_pthread_create(unsigned long *thread, const void *attr, pthread_
     (void)attr;
     thread_start *s = malloc(sizeof *s);
     if (!s)
-        return 11;                      /* EAGAIN */
+        return 11;
     s->fn = fn;
     s->arg = arg;
     DWORD tid = 0;
@@ -367,7 +332,7 @@ static int shim_pthread_create(unsigned long *thread, const void *attr, pthread_
         g_threads[g_nthreads].h = h;
         g_nthreads++;
     } else {
-        CloseHandle(h);                 /* can't track it for join; still runs */
+        CloseHandle(h);
     }
     LeaveCriticalSection(&g_lock);
     *thread = tid;
@@ -386,7 +351,7 @@ static int shim_pthread_join(unsigned long thread, void **retval)
         }
     LeaveCriticalSection(&g_lock);
     if (!h)
-        return 3;                       /* ESRCH */
+        return 3;
     WaitForSingleObject(h, INFINITE);
     if (retval) {
         DWORD code = 0;
@@ -402,14 +367,14 @@ static int shim_pthread_equal(unsigned long a, unsigned long b) { return a == b;
 static int shim_pthread_getschedparam(unsigned long t, int *policy, void *param)
 {
     (void)t;
-    if (policy) *policy = 1;            /* SCHED_OTHER */
+    if (policy) *policy = 1;
     (void)param;
     return 0;
 }
 
 static int shim_key_create(unsigned long *key, void (*destr)(void *))
 {
-    (void)destr;                        /* Win32 fiber-local storage has no destructor callback */
+    (void)destr;
     DWORD k = TlsAlloc();
     if (k == TLS_OUT_OF_INDEXES)
         return 11;
@@ -423,8 +388,6 @@ static int shim_setspecific(unsigned long key, const void *v) { return TlsSetVal
 static int shim_attr_noop(void *a)                        { (void)a; return 0; }
 static int shim_attr_set1(void *a, long v)                { (void)a; (void)v; return 0; }
 
-/* ---- mmap ----------------------------------------------------------------------------- */
-
 #define MAC_PROT_READ  0x1
 #define MAC_PROT_WRITE 0x2
 #define MAC_PROT_EXEC  0x4
@@ -432,7 +395,6 @@ static int shim_attr_set1(void *a, long v)                { (void)a; (void)v; re
 #define MAC_MAP_FAILED ((void *)-1)
 
 #ifndef _WIN32
-/* Linux's PROT_* are the Mac's. */
 static void *shim_mmap(void *addr, size_t len, int prot, int flags, int fd, long long offset)
 {
     (void)offset;
@@ -462,7 +424,6 @@ static DWORD prot_to_win(int prot)
     }
 }
 
-/* off_t is 64-bit on macOS i386, so the offset occupies two stack slots -- keep it long long. */
 static void *shim_mmap(void *addr, size_t len, int prot, int flags, int fd, long long offset)
 {
     (void)offset;
@@ -471,7 +432,7 @@ static void *shim_mmap(void *addr, size_t len, int prot, int flags, int fd, long
         return MAC_MAP_FAILED;
     }
     void *p = VirtualAlloc(addr, len, MEM_RESERVE | MEM_COMMIT, prot_to_win(prot));
-    if (!p && addr)                     /* a hint we couldn't honour: let the OS choose */
+    if (!p && addr)
         p = VirtualAlloc(NULL, len, MEM_RESERVE | MEM_COMMIT, prot_to_win(prot));
     return p ? p : MAC_MAP_FAILED;
 }
@@ -486,8 +447,6 @@ static int shim_munmap(void *addr, size_t len)
 }
 #endif
 
-/* ---- clocks, sleeping, sysconf -------------------------------------------------------- */
-
 static int shim_sched_yield(void)
 {
     long long t0 = gmv_prof_on() ? gmv_prof_now() : 0;
@@ -497,9 +456,6 @@ static int shim_sched_yield(void)
     return 0;
 }
 
-/* Sleep for a microsecond count with the 1 ms timer (timer_resolution_init).  Sub-millisecond
-   requests (the event pump's usleep(5), glf's usleep(1)) only yield, as they cost next to nothing
-   on macOS; longer ones round to the nearest millisecond instead of truncating. */
 static void sleep_us(uint64_t usec)
 {
     long long t0 = gmv_prof_on() ? gmv_prof_now() : 0;
@@ -509,7 +465,7 @@ static void sleep_us(uint64_t usec)
     else
         Sleep((DWORD)((usec + 500) / 1000));
 #else
-    struct timespec t = {(time_t)(usec / 1000000u), (long)(usec % 1000000u) * 1000L};      /* to the microsecond, as on the Mac */
+    struct timespec t = {(time_t)(usec / 1000000u), (long)(usec % 1000000u) * 1000L};
     while (nanosleep(&t, &t) && errno == EINTR) {
     }
 #endif
@@ -532,8 +488,6 @@ static int shim_nanosleep(const struct mac_timespec *req, struct mac_timespec *r
 
 static int shim_usleep(unsigned int usec) { sleep_us(usec); return 0; }
 
-/* sysctl / sysctlbyname: the game uses these for hardware/platform probing; report failure so
-   it falls back to defaults (returning bogus values would be worse than "unknown"). */
 static int shim_sysctl(int *name, unsigned namelen, void *oldp, size_t *oldlenp,
                        void *newp, size_t newlen)
 {
@@ -547,8 +501,6 @@ static int shim_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
     return -1;
 }
 
-/* Wide-char functions: macOS wchar_t is 32-bit (UTF-32), so we can't forward to the 16-bit CRT
-   ones; operate on uint32_t directly. */
 static size_t shim_wcslen(const uint32_t *s) { size_t n = 0; if (s) while (s[n]) n++; return n; }
 static int shim_wcscmp(const uint32_t *a, const uint32_t *b)
 {
@@ -570,10 +522,6 @@ static int shim_wmemcmp(const uint32_t *a, const uint32_t *b, size_t n)
     return 0;
 }
 
-/* swprintf with the Mac's 32-bit wchar_t: format and output are UTF-32.  The game's calls use
-   "%d" (glitch's int attributes, pak entries) and a GUI widget's own format with a double; each
-   conversion is formatted by the CRT and widened, %ls/%lc are copied as code points.  As on the
-   Mac, a result that does not fit gives -1 (the buffer still ends in a NUL). */
 static int wide_put_str(uint32_t *out, size_t n, size_t *o, const void *s, int wide,
                         int width, int prec, int left)
 {
@@ -697,7 +645,7 @@ static int shim_swprintf(uint32_t *out, size_t n, const uint32_t *fmt, ...)
         case 'n':
             *va_arg(ap, int *) = (int)o;
             continue;
-        default:                                /* unknown: copy it as text */
+        default:
             tmp[0] = '%';
             tmp[1] = c < 0x80 ? (char)c : '?';
             m = 2;
@@ -717,9 +665,6 @@ static int shim_swprintf(uint32_t *out, size_t n, const uint32_t *fmt, ...)
     return over ? -1 : (int)o;
 }
 
-/* opendir / readdir / closedir over FindFirstFile, with macOS's 64-bit-inode struct dirent:
-   d_ino @0 (8), d_seekoff @8 (8), d_reclen @16, d_namlen @18, d_type @20, d_name[1024] @21.
-   glf's file system can list a directory; without these the game stopped there. */
 #define MAC_DIRENT_SIZE 1048
 static void st_put16(char *p, uint16_t v);
 static void st_put64(char *p, uint64_t v);
@@ -755,11 +700,11 @@ static void *shim_readdir(void *dir)
     size_t nl = strlen(de->d_name);
     if (nl > 1023)
         nl = 1023;
-    st_put64((char *)e + 0, ++d->count);                  /* d_ino: never 0 (0 = deleted entry) */
-    st_put64((char *)e + 8, d->count);                    /* d_seekoff */
-    st_put16((char *)e + 16, MAC_DIRENT_SIZE);            /* d_reclen */
-    st_put16((char *)e + 18, (uint16_t)nl);               /* d_namlen */
-    e[20] = de->d_type == DT_DIR ? 4 : 8;                 /* DT_DIR / DT_REG */
+    st_put64((char *)e + 0, ++d->count);
+    st_put64((char *)e + 8, d->count);
+    st_put16((char *)e + 16, MAC_DIRENT_SIZE);
+    st_put16((char *)e + 18, (uint16_t)nl);
+    e[20] = de->d_type == DT_DIR ? 4 : 8;
     memcpy(e + 21, de->d_name, nl);
     return e;
 }
@@ -776,7 +721,7 @@ static int shim_closedir(void *dir)
 #else
 typedef struct {
     HANDLE h;
-    int pending;                                /* fd holds an entry readdir has not returned yet */
+    int pending;
     uint32_t count;
     WIN32_FIND_DATAA fd;
     unsigned char ent[MAC_DIRENT_SIZE];
@@ -789,7 +734,7 @@ static void *shim_opendir(const char *path)
         return NULL;
     }
     if (path[0] == '.' && (path[1] == '/' || path[1] == '\\') && path[2] && path[3] == ':')
-        path += 2;                              /* "./C:\..." as in fopen */
+        path += 2;
     char pat[MAX_PATH + 4];
     size_t l = strlen(path);
     if (l + 3 > MAX_PATH) {
@@ -829,11 +774,11 @@ static void *shim_readdir(void *dir)
     size_t nl = strlen(d->fd.cFileName);
     if (nl > 1023)
         nl = 1023;
-    st_put64((char *)e + 0, ++d->count);                  /* d_ino: never 0 (0 = deleted entry) */
-    st_put64((char *)e + 8, d->count);                    /* d_seekoff */
-    st_put16((char *)e + 16, MAC_DIRENT_SIZE);            /* d_reclen */
-    st_put16((char *)e + 18, (uint16_t)nl);               /* d_namlen */
-    e[20] = (d->fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 4 : 8;   /* DT_DIR / DT_REG */
+    st_put64((char *)e + 0, ++d->count);
+    st_put64((char *)e + 8, d->count);
+    st_put16((char *)e + 16, MAC_DIRENT_SIZE);
+    st_put16((char *)e + 18, (uint16_t)nl);
+    e[20] = (d->fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 4 : 8;
     memcpy(e + 21, d->fd.cFileName, nl);
     return e;
 }
@@ -849,21 +794,15 @@ static int shim_closedir(void *dir)
 }
 #endif
 
-/* Carbon keyboard-layout / input-source query -- stubbed, but for gmv_tis_input_source_property
-   (shimsinput.c).  Pointer-returning ones give NULL, status-returning ones noErr. */
-extern void gmv_setjmp(void);                   /* shimsobjc.S */
+extern void gmv_setjmp(void);
 extern void gmv_longjmp(void);
 static void *shim_ret_null(void) { return NULL; }
 static int shim_ret0(void) { return 0; }
-static void *g_tis_keylayout_key;               /* kTISPropertyUnicodeKeyLayoutData (data) */
+static void *g_tis_keylayout_key;
 
 static int shim_chdir(const char *path) { return SetCurrentDirectoryA(path) ? 0 : -1; }
 static int shim_mkdir(const char *path, unsigned mode) { (void)mode; return CreateDirectoryA(path, NULL) ? 0 : -1; }
 
-/* stat$INODE64 -- macOS i386 64-bit-inode stat.  Backed by GetFileAttributesEx.  The macOS
-   struct stat (108 bytes) has its 64-bit fields on 4-byte boundaries, which mingw would pad
-   differently, so we fill the caller's buffer at explicit byte offsets.  Many callers only test
-   the return value (file exists?); the fields are filled anyway for the ones that read size/mode. */
 static void st_put16(char *p, uint16_t v) { memcpy(p, &v, 2); }
 static void st_put32(char *p, uint32_t v) { memcpy(p, &v, 4); }
 static void st_put64(char *p, uint64_t v) { memcpy(p, &v, 8); }
@@ -876,20 +815,20 @@ static int shim_stat(const char *path, void *buf)
         return -1;
     char *b = buf;
     memset(b, 0, 108);
-    st_put32(b + 0, (uint32_t)st.st_dev);                   /* st_dev */
-    st_put16(b + 4, (uint16_t)st.st_mode);                  /* st_mode: the same bits */
-    st_put16(b + 6, (uint16_t)st.st_nlink);                 /* st_nlink */
-    st_put64(b + 8, (uint64_t)st.st_ino);                   /* st_ino */
-    st_put32(b + 16, st.st_uid);                            /* st_uid */
-    st_put32(b + 20, st.st_gid);                            /* st_gid */
-    st_put32(b + 24, (uint32_t)st.st_rdev);                 /* st_rdev */
+    st_put32(b + 0, (uint32_t)st.st_dev);
+    st_put16(b + 4, (uint16_t)st.st_mode);
+    st_put16(b + 6, (uint16_t)st.st_nlink);
+    st_put64(b + 8, (uint64_t)st.st_ino);
+    st_put32(b + 16, st.st_uid);
+    st_put32(b + 20, st.st_gid);
+    st_put32(b + 24, (uint32_t)st.st_rdev);
     st_put32(b + 28, (uint32_t)st.st_atim.tv_sec); st_put32(b + 32, (uint32_t)st.st_atim.tv_nsec);
     st_put32(b + 36, (uint32_t)st.st_mtim.tv_sec); st_put32(b + 40, (uint32_t)st.st_mtim.tv_nsec);
     st_put32(b + 44, (uint32_t)st.st_ctim.tv_sec); st_put32(b + 48, (uint32_t)st.st_ctim.tv_nsec);
     st_put32(b + 52, (uint32_t)st.st_ctim.tv_sec); st_put32(b + 56, (uint32_t)st.st_ctim.tv_nsec);
-    st_put64(b + 60, (uint64_t)st.st_size);                 /* st_size */
-    st_put64(b + 68, (uint64_t)st.st_blocks);               /* st_blocks */
-    st_put32(b + 76, (uint32_t)st.st_blksize);              /* st_blksize */
+    st_put64(b + 60, (uint64_t)st.st_size);
+    st_put64(b + 68, (uint64_t)st.st_blocks);
+    st_put32(b + 76, (uint32_t)st.st_blksize);
     return 0;
 }
 #else
@@ -916,44 +855,43 @@ static int shim_stat(const char *path, void *buf)
     uint32_t mt = filetime_to_unix(&fad.ftLastWriteTime);
     uint32_t ct = filetime_to_unix(&fad.ftCreationTime);
 
-    st_put32(b + 0, 0);                                     /* st_dev */
-    st_put16(b + 4, isdir ? (0040000 | 0777) : (0100000 | 0666));   /* st_mode: S_IFDIR/S_IFREG */
-    st_put16(b + 6, 1);                                     /* st_nlink */
-    st_put64(b + 8, 1);                                     /* st_ino */
-    st_put32(b + 16, 0);                                    /* st_uid */
-    st_put32(b + 20, 0);                                    /* st_gid */
-    st_put32(b + 24, 0);                                    /* st_rdev */
-    st_put32(b + 28, at); st_put32(b + 32, 0);              /* st_atimespec  */
-    st_put32(b + 36, mt); st_put32(b + 40, 0);              /* st_mtimespec  */
-    st_put32(b + 44, ct); st_put32(b + 48, 0);              /* st_ctimespec  */
-    st_put32(b + 52, ct); st_put32(b + 56, 0);              /* st_birthtimespec */
-    st_put64(b + 60, size);                                 /* st_size */
-    st_put64(b + 68, (size + 511) / 512);                   /* st_blocks */
-    st_put32(b + 76, 4096);                                 /* st_blksize */
+    st_put32(b + 0, 0);
+    st_put16(b + 4, isdir ? (0040000 | 0777) : (0100000 | 0666));
+    st_put16(b + 6, 1);
+    st_put64(b + 8, 1);
+    st_put32(b + 16, 0);
+    st_put32(b + 20, 0);
+    st_put32(b + 24, 0);
+    st_put32(b + 28, at); st_put32(b + 32, 0);
+    st_put32(b + 36, mt); st_put32(b + 40, 0);
+    st_put32(b + 44, ct); st_put32(b + 48, 0);
+    st_put32(b + 52, ct); st_put32(b + 56, 0);
+    st_put64(b + 60, size);
+    st_put64(b + 68, (size + 511) / 512);
+    st_put32(b + 76, 4096);
     return 0;
 }
 #endif
 
-/* UpdateSystemActivity (Carbon): keep the display awake; map to the Win32 equivalent. */
 static int shim_UpdateSystemActivity(unsigned char activity)
 {
     (void)activity;
 #ifdef _WIN32
     SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
 #endif
-    return 0;                                   /* noErr */
+    return 0;
 }
 
 #ifndef _WIN32
 static long shim_sysconf(int name)
 {
     switch (name) {
-    case 29:                            /* _SC_PAGESIZE / _SC_PAGE_SIZE */
+    case 29:
         return sysconf(_SC_PAGESIZE);
-    case 57: case 58:                   /* _SC_NPROCESSORS_CONF / _ONLN */
+    case 57: case 58:
         return sysconf(name == 57 ? _SC_NPROCESSORS_CONF : _SC_NPROCESSORS_ONLN);
-    case 5:  return 256;                /* _SC_OPEN_MAX */
-    case 3:  return 100;                /* _SC_CLK_TCK */
+    case 5:  return 256;
+    case 3:  return 100;
     default: return -1;
     }
 }
@@ -962,39 +900,35 @@ static long shim_sysconf(int name)
 {
     SYSTEM_INFO si;
     switch (name) {
-    case 29:                            /* _SC_PAGESIZE / _SC_PAGE_SIZE */
+    case 29:
         GetSystemInfo(&si);
         return (long)si.dwPageSize;
-    case 57: case 58:                   /* _SC_NPROCESSORS_CONF / _ONLN */
+    case 57: case 58:
         GetSystemInfo(&si);
         return (long)si.dwNumberOfProcessors;
-    case 5:  return 256;                /* _SC_OPEN_MAX */
-    case 3:  return 100;                /* _SC_CLK_TCK */
+    case 5:  return 256;
+    case 3:  return 100;
     default: return -1;
     }
 }
 #endif
 
-/* mach_absolute_time in nanoseconds, so the timebase ratio is 1/1 and the game's conversion is
-   the identity. */
 static uint64_t shim_mach_absolute_time(void)
 {
-    LARGE_INTEGER c, f;
-    QueryPerformanceCounter(&c);
+    long long c = gmv_qpc();
+    LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
-    return (uint64_t)((double)c.QuadPart * 1e9 / (double)f.QuadPart);
+    return (uint64_t)((double)c * 1e9 / (double)f.QuadPart);
 }
 
 static int shim_mach_timebase_info(uint32_t *info)
 {
     if (info) {
-        info[0] = 1;                    /* numer */
-        info[1] = 1;                    /* denom */
+        info[0] = 1;
+        info[1] = 1;
     }
     return 0;
 }
-
-/* ---- time (macOS time_t is 32-bit) ---------------------------------------------------- */
 
 static int32_t shim_time(int32_t *t)
 {
@@ -1004,7 +938,6 @@ static int32_t shim_time(int32_t *t)
     return v;
 }
 
-/* exported (non-static) so cond_timedwait can reuse it */
 int gmv_gettimeofday(struct mac_timeval *tv, void *tz)
 {
     (void)tz;
@@ -1017,13 +950,6 @@ int gmv_gettimeofday(struct mac_timeval *tv, void *tz)
     }
 #else
     if (tv) {
-        /* GetSystemTimeAsFileTime only advances on the ~15 ms system clock tick, so at 60+ fps
-           consecutive calls return an IDENTICAL value.  The game derives its per-frame render/
-           camera delta from gettimeofday; an identical pair makes dt == 0, the integration divides
-           by it, the render position becomes NaN/Inf and the view flies outside the world -- the
-           3D turns black while the fixed-timestep game logic (the pause-menu map) stays correct.
-           GetSystemTimePreciseAsFileTime (Win8+, always present on Win10/11) gives sub-microsecond
-           resolution so each frame gets a distinct time; resolve it once, fall back if missing. */
         static void (WINAPI *precise)(LPFILETIME) = NULL;
         static int resolved = 0;
         if (!resolved) {
@@ -1038,15 +964,12 @@ int gmv_gettimeofday(struct mac_timeval *tv, void *tz)
             precise(&ft);
         else
             GetSystemTimeAsFileTime(&ft);
-        uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime; /* 100 ns since 1601 */
-        t -= 116444736000000000ULL;                                         /* to the 1970 epoch */
+        uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        t -= 116444736000000000ULL;
         tv->tv_sec = (int32_t)(t / 10000000ULL);
         tv->tv_usec = (int32_t)((t % 10000000ULL) / 10);
     }
 #endif
-    /* GMV_LOOP_TRACE=1: find the per-frame delta-time site.  The game derives its frame dt from
-       gettimeofday; log distinct callers with call counts so the per-frame one (highest count, ~1/
-       frame) stands out -- that is where update(dt) is driven. */
     if (GMV_DEV) {
         static int lt = -1;
         if (lt < 0) { const char *e = gmv_dbgenv("GMV_LOOP_TRACE"); lt = (gmv_env_on(e)) ? 1 : 0; }
@@ -1099,12 +1022,6 @@ static struct mac_tm *shim_localtime(const int32_t *tp)
 #endif
 }
 
-/* The game keeps its player data (Gangstar2.sav, Gangstar2.preferences) AND its scratch sandbox
-   (home/, tmp/) in the SAME writable dir -- it only ever asks NSSearchPath for one (dir=5 -> the
-   exe's cache\).  We want the save + settings in savegame\ and only the scratch in cache\.  Those
-   two files are reached purely through fopen (no NSFileManager existence checks on this path), so
-   redirect them by basename to <exedir>\savegame\<name>; everything else is left in place.  Returns
-   1 and fills `out` when `path` names a .sav / .preferences file. */
 static __attribute__((noinline)) int savegame_redirect(const char *path, char *out, size_t n)
 {
     if (!path)
@@ -1114,7 +1031,7 @@ static __attribute__((noinline)) int savegame_redirect(const char *path, char *o
         if (*p == '\\' || *p == '/')
             base = p + 1;
     size_t bl = strlen(base);
-    if (bl < 5 || bl > 63)                   /* a real save/pref basename is short */
+    if (bl < 5 || bl > 63)
         return 0;
     int is_save = (!strcmp(base + bl - 4,  ".sav"));
     int is_pref = (bl > 12 && !strcmp(base + bl - 12, ".preferences"));
@@ -1136,15 +1053,8 @@ static __attribute__((noinline)) int savegame_redirect(const char *path, char *o
     return 1;
 }
 
-/* ---- lightweight wav->pack capture (GMV_WAVMAP=1) ---------------------------------------
-   The asset loader opens "<dir>/<logical>.wav" (FAILs -- no loose file) then the matching
-   "<dir>/fileNNNNNN.dat" (OK) on the SAME thread.  The full GMV_FOPEN_TRACE below logs EVERY
-   fopen (to stdout, fflush each) from the many loader threads, which stalls loading enough to
-   spike the frame dt and crash this dt-sensitive game.  This instead records ONLY the wav->dat
-   pair: it keeps a per-thread pending wav name under a short lock (no I/O), and emits one line
-   when the pack file opens -- a few hundred lines total, so no stall and no crash. */
 static CRITICAL_SECTION g_wavmap_cs;
-static int g_wavmap_mode = -1;                  /* -1 unknown, 0 off, 1 on */
+static int g_wavmap_mode = -1;
 #define WAVPEND_SLOTS 64
 static struct { DWORD tid; char wav[104]; } g_wavpend[WAVPEND_SLOTS];
 
@@ -1183,7 +1093,7 @@ static void wavmap_note(const char *path, int ok)
     const char *b = wav_basename(path);
     DWORD tid = GetCurrentThreadId();
 
-    if (!ok && wav_ends_ci(b, ".wav")) {        /* the logical name that failed -> remember it */
+    if (!ok && wav_ends_ci(b, ".wav")) {
         EnterCriticalSection(&g_wavmap_cs);
         int slot = -1, freeslot = -1;
         for (int i = 0; i < WAVPEND_SLOTS; i++) {
@@ -1197,7 +1107,7 @@ static void wavmap_note(const char *path, int ok)
         return;
     }
 
-    if (ok && strncmp(b, "file", 4) == 0 && wav_ends_ci(b, ".dat")) {   /* its pack file opened */
+    if (ok && strncmp(b, "file", 4) == 0 && wav_ends_ci(b, ".dat")) {
         char matched[104];
         matched[0] = 0;
         EnterCriticalSection(&g_wavmap_cs);
@@ -1215,20 +1125,15 @@ static void wavmap_note(const char *path, int ok)
     }
 }
 
-/* ---- unresolved-asset trace (GMV_FOPEN_TRACE=2) -----------------------------------------
-   Same per-thread idea as wavmap, for every asset type: a FAILed logical name is held (no I/O)
-   until its fileNNNNNN.dat opens on that thread.  Only a name that is NOT followed by its pack
-   file (another name fails, or a non-pack file opens instead) is logged as [fmiss] -- i.e. an
-   asset the game really could not load.  A healthy run logs nothing, so no stall. */
 static CRITICAL_SECTION g_fmiss_cs;
 static struct { DWORD tid; int err; char name[104]; char path[MAX_PATH]; } g_fmiss[WAVPEND_SLOTS];
 
 static void fmiss_note(const char *path, int ok)
 {
-    int err = errno;                            /* from the failed fopen, before anything else */
+    int err = errno;
     static int init;
     if (!init) {
-        InitializeCriticalSection(&g_fmiss_cs);  /* first fopen runs before the loader threads */
+        InitializeCriticalSection(&g_fmiss_cs);
         init = 1;
         gmv_log("[fmiss] FOPEN_TRACE=2: logging only assets with no pack file\n");
     }
@@ -1248,10 +1153,10 @@ static void fmiss_note(const char *path, int ok)
         if (freeslot < 0 && g_fmiss[i].tid == 0) freeslot = i;
     }
     if (slot >= 0 && strcmp(g_fmiss[slot].name, b) != 0 && !pack) {
-        snprintf(missed, sizeof missed, "%s", g_fmiss[slot].path);   /* never resolved */
+        snprintf(missed, sizeof missed, "%s", g_fmiss[slot].path);
         missed_err = g_fmiss[slot].err;
     }
-    if (!ok) {                                  /* ("./X" then "X" is the same name: keep it) */
+    if (!ok) {
         if (slot < 0) slot = (freeslot >= 0) ? freeslot : 0;
         g_fmiss[slot].tid = tid;
         g_fmiss[slot].err = err;
@@ -1266,19 +1171,8 @@ static void fmiss_note(const char *path, int ok)
         gmv_log("[fmiss] \"%s\" errno=%d (no pack file followed)\n", missed, missed_err);
 }
 
-/* Diagnostic fopen wrapper (GMV_FOPEN_TRACE=1): logs the path the game opens and whether it
-   succeeds, to see which asset/data files load after the logo.  Forwards to the CRT fopen.
-   =1 logs every open and stalls loading enough to crash the game; =2 logs misses only. */
-/* ---- ftell without the kernel (FAST_FTELL) -------------------------------------------
-   The game's file stream (vtable 0x6839a8) asks ftell before every fread: Read (0x5a0320) clamps
-   the count to size - Tell, and Tell (0x5a0170) is a tail call to ftell.  Loading the menu's
-   scene does that ~580,000 times.  macOS stdio keeps the offset in the FILE (__SOFF), so on the
-   Mac each call cost next to nothing; msvcrt's ftell asks the kernel every time (query + set the
-   file position), which held the main thread for ~2 s per scene load.  For files opened
-   read-only the position is kept here instead: fopen and fseek set it, fread advances it, ftell
-   returns it.  Anything not followed exactly (a short read, SEEK_END, an error) drops it, and the
-   next ftell asks msvcrt once.  The game gets the same values either way. */
-#define FPOS_N 4096                     /* power of two; far more than the files open at once */
+/* FAST_FTELL 0x6839a8 0x5a0320 0x5a0170 */
+#define FPOS_N 4096
 static struct { FILE *f; long pos; int known, bin; } g_fpos[FPOS_N];
 static int g_fpos_used;
 static SRWLOCK g_fpos_lock = SRWLOCK_INIT;
@@ -1287,8 +1181,7 @@ static int g_fast_ftell = -1;
 static int fast_ftell_on(void)
 {
 #ifndef _WIN32
-    return 0;                           /* glibc keeps the offset in the FILE, as the Mac's stdio does
-                                           (LOAD_PROFILE in WSL: the menu scene's load is the same with it) */
+    return 0;
 #endif
     if (g_fast_ftell < 0) {
         const char *e = gmv_getenv("GMV_FAST_FTELL");
@@ -1299,10 +1192,9 @@ static int fast_ftell_on(void)
 
 static unsigned fpos_hash(FILE *f)
 {
-    return ((uint32_t)(uintptr_t)f * 2654435761u) >> 20;     /* 12 bits */
+    return ((uint32_t)(uintptr_t)f * 2654435761u) >> 20;
 }
 
-/* the slot holding f, or NULL (lock held) */
 static __typeof__(&g_fpos[0]) fpos_find(FILE *f)
 {
     for (unsigned i = fpos_hash(f); g_fpos[i].f; i = (i + 1) & (FPOS_N - 1))
@@ -1331,7 +1223,7 @@ static void fpos_remove(FILE *f)
 {
     AcquireSRWLockExclusive(&g_fpos_lock);
     __typeof__(&g_fpos[0]) s = fpos_find(f);
-    if (s) {                            /* linear-probing delete: shift the run back over the gap */
+    if (s) {
         unsigned i = (unsigned)(s - g_fpos), j = i;
         for (;;) {
             j = (j + 1) & (FPOS_N - 1);
@@ -1339,7 +1231,7 @@ static void fpos_remove(FILE *f)
                 break;
             unsigned k = fpos_hash(g_fpos[j].f);
             if (i <= j ? (i < k && k <= j) : (i < k || k <= j))
-                continue;               /* j's home is between the gap and j: it stays */
+                continue;
             g_fpos[i] = g_fpos[j];
             i = j;
         }
@@ -1349,24 +1241,13 @@ static void fpos_remove(FILE *f)
     ReleaseSRWLockExclusive(&g_fpos_lock);
 }
 
-/* ---- fseek inside the read buffer (FAST_FSEEK) -----------------------------------------
-   The same stream seeks between its small reads: one scene load does ~270,000 file calls for
-   ~640 KB.  macOS stdio (FreeBSD's) serves a seek that lands inside the bytes it has already
-   buffered by moving its pointer, so on the Mac those seeks never reached the kernel.  msvcrt's
-   fseek always drops the buffer and asks the kernel to move the file position (SEEK_CUR asks it
-   twice: once for where it is), and the next read asks again to refill it.  For files opened
-   "rb" the seek is done here instead when the target is inside msvcrt's buffer: the FILE's
-   _ptr/_cnt move, as Mac stdio does.  Other seeks go to msvcrt as SEEK_SET from the kept
-   position (one kernel call instead of two for SEEK_CUR).  Those streams also get a 64 KB buffer
-   instead of msvcrt's 4 KB, so more of each file's seeks land inside it.  The game reads the
-   same bytes and gets the same positions either way.  Needs FAST_FTELL's kept position. */
 #define FREAD_BUF (64 * 1024)
 static int g_fast_fseek = -1;
 
 static int fast_fseek_on(void)
 {
 #ifndef _WIN32
-    return 0;                           /* glibc seeks inside its buffer itself */
+    return 0;
 #endif
     if (g_fast_fseek < 0) {
         const char *e = gmv_getenv("GMV_FAST_FSEEK");
@@ -1375,9 +1256,6 @@ static int fast_fseek_on(void)
     return g_fast_fseek;
 }
 
-/* Move f's read position from `pos` to `to` inside its buffer.  The buffer holds the file bytes
-   [pos - (_ptr - _base), pos + _cnt) only while _cnt > 0: after a read too big for the buffer
-   went straight to the caller, _cnt is 0 and what sits in _base is from an older position. */
 static int seek_in_buffer(FILE *f, long pos, long to)
 {
     int ok = 0;
@@ -1392,7 +1270,7 @@ static int seek_in_buffer(FILE *f, long pos, long to)
         if (to >= start && to <= end) {
             f->_ptr = f->_base + (to - start);
             f->_cnt = (int)(end - to);
-            f->_flag &= ~_IOEOF;        /* as a successful fseek does */
+            f->_flag &= ~_IOEOF;
             ok = 1;
         }
     }
@@ -1403,7 +1281,6 @@ static int seek_in_buffer(FILE *f, long pos, long to)
 
 static FILE *shim_fopen_inner(const char *path, const char *mode);
 
-/* For the [crash58] line: how many streams are open, and the last open that failed. */
 static volatile LONG g_files_open;
 static char g_fopen_fail[MAX_PATH];
 static volatile int g_fopen_errno;
@@ -1416,8 +1293,6 @@ void gmv_fopen_info(const char **fail_path, int *fail_errno, long *open_files)
 }
 
 #if GMV_DEV
-/* PERF_PROFILE's file line: what the opens and stats do, all threads.  A "reopen" is a read-only open in the bundle of a
-   path among the last 64 such opens (what a pool of open files could have kept). */
 static volatile LONG fs_open, fs_fail, fs_fail_bundle, fs_rb_bundle, fs_reopen, fs_close, fs_stat, fs_stat_fail,
     fs_stat_fail_bundle, fs_miss_hit, fs_pool_hit;
 static long long fs_fail_ticks, fs_open_ticks, fs_stat_ticks;
@@ -1425,26 +1300,11 @@ static SRWLOCK fs_lock = SRWLOCK_INIT;
 static uint32_t fs_recent[64];
 static unsigned fs_recent_at;
 
-static uint32_t fs_hash(const char *s)
-{
-    uint32_t h = 2166136261u;
-    while (*s)
-        h = (h ^ (unsigned char)*s++) * 16777619u;
-    return h;
-}
-
-static long long fs_now(void)
-{
-    LARGE_INTEGER t;
-    QueryPerformanceCounter(&t);
-    return t.QuadPart;
-}
-
 static void fs_note_open(const char *path, const char *mode, int ok, long long t0)
 {
     if (!gmv_perf_on())
         return;
-    long long dt = fs_now() - t0;
+    long long dt = gmv_qpc() - t0;
     int bundle = path && gmv_in_bundle(path[0] == '.' && (path[1] == '/' || path[1] == '\\') ? path + 2 : path);
     int rb = mode && mode[0] == 'r' && !strchr(mode, '+');
     AcquireSRWLockExclusive(&fs_lock);
@@ -1456,7 +1316,7 @@ static void fs_note_open(const char *path, const char *mode, int ok, long long t
         fs_fail_bundle += bundle;
     } else if (bundle && rb) {
         fs_rb_bundle++;
-        uint32_t h = fs_hash(path);
+        uint32_t h = gmv_fnv1a(path);
         for (int i = 0; i < 64; i++)
             if (fs_recent[i] == h) {
                 fs_reopen++;
@@ -1471,7 +1331,7 @@ static void fs_note_stat(const char *path, int ok, long long t0)
 {
     if (!gmv_perf_on())
         return;
-    long long dt = fs_now() - t0;
+    long long dt = gmv_qpc() - t0;
     AcquireSRWLockExclusive(&fs_lock);
     fs_stat++;
     fs_stat_ticks += dt;
@@ -1501,28 +1361,19 @@ void gmv_file_stats_report(double seconds)
     ReleaseSRWLockExclusive(&fs_lock);
 }
 #else
-#define fs_now() 0LL
+#define gmv_qpc() 0LL
 #define fs_note_open(path, mode, ok, t0) ((void)0)
 #define fs_note_stat(path, ok, t0) ((void)0)
 #endif
 
-/* ---- FILE_POOL (a port speed-up, [Advanced], on by default and under ORIGINAL_MAC_EXPERIENCE) ---------------------
-   The game opens a pack file, reads an asset and closes it, and soon opens the same pack again: walking through the
-   city, ~65-85 read-only opens a second in the bundle, nearly all of a file among the last 64 opened (PERF_PROFILE),
-   each a kernel open and close (and on Windows a look by the virus scanner) of ~80 us.  A read-only
-   stream of a file in the bundle (the .app, which does not change while the game runs) that the game closes is kept
-   open instead, up to POOL_N of them, the least recently used closed for real when more come; an open of the same
-   spelling and mode gets the kept stream back, rewound (position 0, no end-of-file or error flag), as a new open would
-   be.  Its buffer (FAST_FSEEK's 64 KB) is kept too.  GMV_FILE_POOL=0 closes each stream when the game does. */
-#define POOL_N    32                                    /* streams kept after the game closed them */
-#define POOL_OPEN 128                                   /* streams of the bundle the game has open */
+#define POOL_N    32
+#define POOL_OPEN 128
 typedef struct { FILE *f; char mode[4]; char path[MAX_PATH]; unsigned long long used; } pool_ent;
 static pool_ent g_pool[POOL_N], g_pool_open[POOL_OPEN];
 static unsigned long long g_pool_clock;
 static SRWLOCK g_pool_lock = SRWLOCK_INIT;
 static int g_pool_on = -1;
 
-/* The stream may go in the pool: a read-only open of a file in the bundle, of a spelling that fits. */
 static int pool_eligible(const char *path, const char *mode)
 {
     if (g_pool_on < 0) {
@@ -1553,7 +1404,6 @@ static void fpos_rewound(FILE *f)
     ReleaseSRWLockExclusive(&g_fpos_lock);
 }
 
-/* A kept stream of this spelling and mode, rewound, or NULL. */
 static FILE *pool_take(const char *path, const char *mode)
 {
     FILE *f = NULL;
@@ -1574,7 +1424,7 @@ static FILE *pool_take(const char *path, const char *mode)
             }
     ReleaseSRWLockExclusive(&g_pool_lock);
     if (f) {
-        rewind(f);                                      /* position 0, end-of-file and error flags cleared */
+        rewind(f);
         fpos_rewound(f);
 #if GMV_DEV
         InterlockedIncrement(&fs_pool_hit);
@@ -1583,7 +1433,6 @@ static FILE *pool_take(const char *path, const char *mode)
     return f;
 }
 
-/* A stream just opened that may go in the pool when closed. */
 static void pool_track(FILE *f, const char *path, const char *mode)
 {
     AcquireSRWLockExclusive(&g_pool_lock);
@@ -1597,7 +1446,6 @@ static void pool_track(FILE *f, const char *path, const char *mode)
     ReleaseSRWLockExclusive(&g_pool_lock);
 }
 
-/* The game closes f: 1 if it was kept (the least recently used stream kept before may be closed for real). */
 static int pool_park(FILE *f)
 {
     FILE *out = NULL;
@@ -1611,7 +1459,7 @@ static int pool_park(FILE *f)
                     slot = k;
                     break;
                 }
-            if (slot < 0) {                             /* full: the least recently used goes */
+            if (slot < 0) {
                 slot = 0;
                 for (int k = 1; k < POOL_N; k++)
                     if (g_pool[k].used < g_pool[slot].used)
@@ -1636,7 +1484,7 @@ static int pool_park(FILE *f)
 static FILE *shim_fopen(const char *path, const char *mode)
 {
     long long t0 = gmv_prof_on() ? gmv_prof_now() : 0;
-    long long ts = GMV_DEV ? fs_now() : 0;
+    long long ts = GMV_DEV ? gmv_qpc() : 0;
     int pooled = pool_eligible(path, mode);
     if (pooled) {
         FILE *pf = pool_take(path, mode);
@@ -1658,21 +1506,18 @@ static FILE *shim_fopen(const char *path, const char *mode)
     if (f)
         InterlockedIncrement(&g_files_open);
 #ifndef _WIN32
-    /* Linux: glibc already seeks inside its buffer (FAST_FSEEK's job), but the buffer is one block (4 KB on most
-       file systems), so the game's many small reads of a pack file still cost a read() each 4 KB; on WSL's /mnt/c
-       each crosses to the Windows drive.  FAST_FSEEK gives those streams the same 64 KB as on Windows. */
     static int big = -1;
     if (big < 0) {
         const char *e = gmv_getenv("GMV_FAST_FSEEK");
         big = gmv_env_flag(e, 1);
     }
     if (f && big && mode && mode[0] == 'r' && !strchr(mode, '+'))
-        setvbuf(f, NULL, _IOFBF, FREAD_BUF);            /* before any I/O; on failure glibc's own stays */
+        setvbuf(f, NULL, _IOFBF, FREAD_BUF);
 #endif
     if (f && mode && mode[0] == 'r' && !strchr(mode, '+') && fast_ftell_on()) {
-        int bin = strchr(mode, 'b') != NULL;    /* text mode's CRLF folding breaks the offsets */
+        int bin = strchr(mode, 'b') != NULL;
         if (bin && fast_fseek_on())
-            setvbuf(f, NULL, _IOFBF, FREAD_BUF);    /* before any I/O; on failure the 4 KB stays */
+            setvbuf(f, NULL, _IOFBF, FREAD_BUF);
         fpos_add(f, bin);
     }
     return f;
@@ -1684,7 +1529,7 @@ static int shim_fclose(FILE *f)
     if (gmv_perf_on())
         InterlockedIncrement(&fs_close);
 #endif
-    if (pool_park(f)) {                                 /* FILE_POOL: kept open for the next open of it */
+    if (pool_park(f)) {
         InterlockedDecrement(&g_files_open);
         return 0;
     }
@@ -1694,8 +1539,6 @@ static int shim_fclose(FILE *f)
     return fclose(f);
 }
 
-/* GMV_LOAD_PROFILE also times these (fopen/fread/fseek/pread are where the game's asset bytes
-   come from). */
 static size_t shim_fread(void *buf, size_t size, size_t n, FILE *f)
 {
     long long t0 = gmv_prof_on() ? gmv_prof_now() : 0;
@@ -1707,7 +1550,7 @@ static size_t shim_fread(void *buf, size_t size, size_t n, FILE *f)
             if (got == n)
                 s->pos += (long)(got * size);
             else
-                s->known = 0;           /* short read: a partial item may have been consumed */
+                s->known = 0;
         }
         ReleaseSRWLockExclusive(&g_fpos_lock);
     }
@@ -1728,7 +1571,7 @@ static int shim_fseek(FILE *f, long off, int whence)
             to = whence == SEEK_SET ? off : pos + off;
         }
         ReleaseSRWLockShared(&g_fpos_lock);
-        if (to >= 0) {                  /* (a negative target goes to msvcrt for its error) */
+        if (to >= 0) {
             int r = seek_in_buffer(f, pos, to) ? 0 : fseek(f, to, SEEK_SET);
             AcquireSRWLockExclusive(&g_fpos_lock);
             s = fpos_find(f);
@@ -1753,7 +1596,7 @@ static int shim_fseek(FILE *f, long off, int whence)
             } else if (r == 0 && whence == SEEK_CUR && s->known) {
                 s->pos += off;
             } else {
-                s->known = 0;           /* SEEK_END or a failed seek: ask msvcrt next time */
+                s->known = 0;
             }
         }
         ReleaseSRWLockExclusive(&g_fpos_lock);
@@ -1794,15 +1637,7 @@ static long shim_ftell(FILE *f)
     return r;
 }
 
-/* ---- FILE_MISS_CACHE (a port speed-up, [Advanced], on by default and under ORIGINAL_MAC_EXPERIENCE) --------------
-   A game often looks for a loose file before it takes the same asset from its packs (Gangstar asks for every .wav, .tga
-   and .bdae by name first), so a scene or a walk through the city tries to open the same missing files again and again:
-   up to ~80 a second while walking (PERF_PROFILE), each a failed kernel open, and on Windows one the virus
-   scanner may look at too.  The bundle (the .app) does not change while the game runs, so a read-only open of a path
-   inside it that found no file is remembered, and the next open of that exact spelling fails at once with the same
-   ENOENT.  Paths outside the bundle (settings, saves, add-ons, the game's scratch folders) are never remembered, and
-   an open for writing inside the bundle forgets everything.  GMV_FILE_MISS_CACHE=0 asks the system every time. */
-#define MISS_SLOTS 4096                                 /* power of two; at most half used */
+#define MISS_SLOTS 4096
 static struct { uint32_t h; char *path; } g_miss[MISS_SLOTS];
 static unsigned g_miss_used;
 static SRWLOCK g_miss_lock = SRWLOCK_INIT;
@@ -1810,9 +1645,7 @@ static int g_miss_on = -1;
 
 static uint32_t miss_hash(const char *s)
 {
-    uint32_t h = 2166136261u;
-    while (*s)
-        h = (h ^ (unsigned char)*s++) * 16777619u;
+    uint32_t h = gmv_fnv1a(s);
     return h ? h : 1;
 }
 
@@ -1872,19 +1705,12 @@ static FILE *shim_fopen_inner(const char *path, const char *mode)
 {
     char redir[MAX_PATH * 2];
     if (savegame_redirect(path, redir, sizeof redir))
-        path = redir;                       /* .sav / .preferences -> savegame\ */
-    /* The game's FileSystem prepends a base dir ("./") to an already-absolute bundle path,
-       producing e.g. "./C:\...\_packMac\file000000.dat" -- invalid because of the "./" before the
-       drive letter, so every packed asset would fail to open and the scene render empty.  When
-       the path starts "./X:\" (or "./X:/") open from the drive letter straight away: the original
-       spelling can never open, and trying it first cost a failed kernel open per asset. */
+        path = redir;
     if (path && path[0] == '.' && (path[1] == '/' || path[1] == '\\') &&
         ((path[2] | 32) >= 'a' && (path[2] | 32) <= 'z') && path[3] == ':' &&
         (path[4] == '\\' || path[4] == '/'))
         path += 2;
 #ifndef _WIN32
-    /* Linux: the same base dir before the bundle's absolute path comes out as "./home/.../X.app/..." (a Mac starts
-       apps in "/", where that opens).  Open the absolute path straight away, as for a drive letter above. */
     else if (path && path[0] == '.' && path[1] == '/' && gmv_in_bundle(path + 1))
         path += 1;
 #endif
@@ -1893,9 +1719,9 @@ static FILE *shim_fopen_inner(const char *path, const char *mode)
     if (uc)
         path = uc;
     int ro = mode && mode[0] == 'r' && !strchr(mode, '+');
-    int cacheable = path && miss_on() && gmv_in_bundle(path);  /* FILE_MISS_CACHE */
+    int cacheable = path && miss_on() && gmv_in_bundle(path);
     if (cacheable && !ro)
-        miss_clear();                                   /* the bundle is being written to */
+        miss_clear();
     FILE *f = NULL;
     int known = cacheable && ro && miss_known(path);
     if (known) {
@@ -1907,7 +1733,6 @@ static FILE *shim_fopen_inner(const char *path, const char *mode)
         f = fopen(path, mode);
     }
     if (!f && path && !known) {
-        /* any other spelling with a drive letter (X:\ or X:/) past the start: retry from it */
         for (const char *p = path; p[0] && p[1] && p[2]; p++) {
             char c = p[0];
             if (((c | 32) >= 'a' && (c | 32) <= 'z') && p[1] == ':' && (p[2] == '\\' || p[2] == '/')) {
@@ -1923,7 +1748,7 @@ static FILE *shim_fopen_inner(const char *path, const char *mode)
         if (cacheable && ro && !known && errno == ENOENT)
             miss_add(path);
     }
-    wavmap_note(path, f != NULL);           /* GMV_WAVMAP: capture wav->pack pairs (no stall) */
+    wavmap_note(path, f != NULL);
     if (!GMV_DEV)
         return f;
     static int trace = -1;
@@ -1939,12 +1764,6 @@ static FILE *shim_fopen_inner(const char *path, const char *mode)
     return f;
 }
 
-/* POSIX pread: read `count` bytes at absolute `offset` WITHOUT moving the fd's file position.
-   On Darwin i386 off_t is 64-bit, so the 4th argument consumes 8 stack bytes -- it must be a
-   64-bit type here or the cdecl frame (and the return) is corrupted.  Every fd the game holds
-   came from fileno() on a shim_fopen FILE*, i.e. a CRT descriptor, so the mingw _lseeki64/_read
-   pair backs it.  The glitch pack reader uses this to pull an asset from a fileNNNNNN.dat at a
-   stored offset; save and restore the position so an interleaved fread/fseek still sees it. */
 static int shim_pread_inner(int fd, void *buf, size_t count, long long offset);
 
 static int shim_pread(int fd, void *buf, size_t count, long long offset)
@@ -1956,8 +1775,6 @@ static int shim_pread(int fd, void *buf, size_t count, long long offset)
     return n;
 }
 
-/* POSIX pread is one atomic call; here it is seek, read, seek back, so two threads reading one
-   fd at once could each read from the other's offset.  This lock makes the three steps one. */
 static SRWLOCK g_pread_lock = SRWLOCK_INIT;
 
 static int shim_pread_inner(int fd, void *buf, size_t count, long long offset)
@@ -1973,7 +1790,7 @@ static int shim_pread_inner(int fd, void *buf, size_t count, long long offset)
         return -1;
     }
     int n = _read(fd, buf, (unsigned)count);
-    _lseeki64(fd, cur, SEEK_SET);           /* pread must not disturb the file offset */
+    _lseeki64(fd, cur, SEEK_SET);
     ReleaseSRWLockExclusive(&g_pread_lock);
 #endif
     if (!GMV_DEV)
@@ -1988,20 +1805,16 @@ static int shim_pread_inner(int fd, void *buf, size_t count, long long offset)
     return n;
 }
 
-/* stat with PERF_PROFILE's counts (dev). */
 static int shim_stat_counted(const char *path, void *buf)
 {
-    long long ts = GMV_DEV ? fs_now() : 0;
+    long long ts = GMV_DEV ? gmv_qpc() : 0;
     int r = shim_stat(path, buf);
     fs_note_stat(path, r == 0, ts);
     (void)ts;
     return r;
 }
 
-/* ---- the table ------------------------------------------------------------------------ */
-
 const host_symbol gmv_host_symbols_win32[] = {
-    /* mutexes */
     FN("_pthread_mutex_init", shim_mutex_init),
     FN("_pthread_mutex_lock", shim_mutex_lock),
     FN("_pthread_mutex_unlock", shim_mutex_unlock),
@@ -2011,7 +1824,6 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_pthread_mutexattr_destroy$UNIX2003", shim_mutexattr_noop),
     FN("_pthread_mutexattr_settype", shim_mutexattr_settype),
 
-    /* condition variables */
     FN("_pthread_cond_init$UNIX2003", shim_cond_init),
     FN("_pthread_cond_destroy", shim_cond_destroy),
     FN("_pthread_cond_signal", shim_cond_signal),
@@ -2019,7 +1831,6 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_pthread_cond_wait$UNIX2003", shim_cond_wait),
     FN("_pthread_cond_timedwait$UNIX2003", shim_cond_timedwait),
 
-    /* threads, keys, attributes */
     FN("_pthread_create", shim_pthread_create),
     FN("_pthread_join$UNIX2003", shim_pthread_join),
     FN("_pthread_self", shim_pthread_self),
@@ -2034,11 +1845,9 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_pthread_attr_setdetachstate", shim_attr_set1),
     FN("_pthread_attr_setstacksize", shim_attr_set1),
 
-    /* memory */
     FN("_mmap$UNIX2003", shim_mmap),
     FN("_munmap$UNIX2003", shim_munmap),
 
-    /* clocks, sleeping, sysconf */
     FN("_sched_yield", shim_sched_yield),
     FN("_nanosleep$UNIX2003", shim_nanosleep),
     FN("_usleep$UNIX2003", shim_usleep),
@@ -2049,7 +1858,7 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_chdir", shim_chdir),
     FN("_mkdir", shim_mkdir),
     FN("_stat$INODE64", shim_stat_counted),
-    FN("_lstat$INODE64", shim_stat_counted),   /* we don't resolve symlinks specially */
+    FN("_lstat$INODE64", shim_stat_counted),
     FN("__DefaultRuneLocale", &g_rune),
     FN("_wcslen", shim_wcslen),
     FN("_wcscmp", shim_wcscmp),
@@ -2075,14 +1884,11 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_mach_absolute_time", shim_mach_absolute_time),
     FN("_mach_timebase_info", shim_mach_timebase_info),
 
-    /* time */
     FN("_time", shim_time),
     FN("_gettimeofday", gmv_gettimeofday),
     FN("_gmtime", shim_gmtime),
     FN("_localtime", shim_localtime),
 
-    /* stdio: a FILE* only ever comes from one of these shims or from the stdout/stderr data
-       symbols below, so forwarding the opaque pointer straight to the host CRT is safe */
     FN("_fopen$UNIX2003", shim_fopen),
     FN("_fopen", shim_fopen),
     FN("_fclose", shim_fclose),
@@ -2104,7 +1910,6 @@ const host_symbol gmv_host_symbols_win32[] = {
     FN("_puts", puts),
     FN("_putchar", putchar),
 
-    /* stdout / stderr data symbols: slot points at our FILE* variable (set in gmv_shims_init) */
     FN("___stdoutp", &shim_stdoutp),
     FN("___stderrp", &shim_stderrp),
 

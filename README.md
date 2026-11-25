@@ -1,11 +1,11 @@
 # Gangstar: Miami Vindication · PC Port
 
 <p align="center">
-  <a href="https://github.com/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/releases/latest"><img src="https://img.shields.io/github/v/release/Adriansyah101/Gangstar-Miami-Vindication-PC-Port" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Adriansyah101/Gangstar-Miami-Vindication-PC-Port" alt="License: MIT"></a>
+  <a href="https://github.com/Adriansyah101/GangstarMiamiVindication-PC-Port/releases/latest"><img src="https://img.shields.io/github/v/release/Adriansyah101/GangstarMiamiVindication-PC-Port" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Adriansyah101/GangstarMiamiVindication-PC-Port" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue" alt="Platforms: Windows, Linux">
   <img src="https://img.shields.io/badge/CPU-x86%20(Intel%20%2F%20AMD)-blue" alt="CPU: x86 (Intel or AMD)">
-  <a href="https://github.com/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/releases"><img src="https://img.shields.io/github/downloads/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/total" alt="Downloads"></a>
+  <a href="https://github.com/Adriansyah101/GangstarMiamiVindication-PC-Port/releases"><img src="https://img.shields.io/github/downloads/Adriansyah101/GangstarMiamiVindication-PC-Port/total" alt="Downloads"></a>
 </p>
 
 <p align="center">
@@ -27,9 +27,10 @@
 Gangstar: Miami Vindication is a 2011 open-world action game by Gameloft. It is set in Miami and played on foot, by
 car and in the air, with story missions, side missions and races.
 
-This repository contains a Windows and Linux loader for **the macOS i386 release of the game, version 1.0.0**, for
-PCs with an **x86 processor (Intel or AMD)**. There is no CPU emulation, because the game is already x86. A custom Mach-O loader runs the official executable at its own
-addresses, and host shims supply the macOS libraries it imports, in the spirit of Wine or Darling.
+This repository contains a Windows and Linux loader for **the macOS i386 release of the game, version 1.0.0**, for PCs
+with an **x86 processor (Intel or AMD)**. There is no CPU emulation, because the game is already x86. A custom Mach-O
+loader runs the official executable at its own addresses, and host shims supply the macOS libraries it imports, in the
+spirit of Wine or Darling.
 
 The port runs the game with the fixes it needs on a PC, and adds optional extras, which are on by default. One
 setting, `ORIGINAL_MAC_EXPERIENCE`, turns them all off and plays the game as the Mac did.
@@ -48,11 +49,13 @@ The main additions, all switchable in the game under **OPTIONS**, then **GAMEPAT
 | The iPhone version's sun and moon | `SUN_MOON` | on | off |
 | Fog over the whole city | `FOG_MODE` | 2 (hybrid) | the game's own |
 | Sharper textures at a distance | `ANISOTROPIC_FILTERING` | 16x | off |
+| Smooth cut-out edges with MSAA, FXAA under the HUD | `ALPHA_TO_COVERAGE` `POST_AA` | on | off |
 | Longer draw distance | `DRAW_DISTANCE` | 2x | 1x |
 | More traffic and people | `TRAFFIC_DENSITY` `PEDESTRIAN_DENSITY` `PARKED_CAR_DENSITY` | 3x | 1x |
 | Gamepad menus, GTA V-like layout, pad hints and icons | `PAD_MENU` `PAD_LAYOUT` `PAD_HINTS` `PAD_ICONS` | on | off |
 | W/A/S/D diagonals and smooth turns | `KEY_MOVE` | on | off |
 | Replay completed missions | `MISSION_REPLAY` | on | off |
+| Set the clock by the hour in SERVICES; a random time on CONTINUE | `TIME_OF_DAY` `RANDOM_TIME_OF_DAY` | on | off |
 | A radio station for your own music | `CUSTOM_RADIO` | on | off |
 
 [**Patch Notes**](PATCHNOTES.md) lists every fix and addition.
@@ -77,8 +80,8 @@ game is included either.
 | Processor | x86 (Intel or AMD), 64-bit or 32-bit | 64-bit x86 (Intel or AMD) |
 | System | Windows 10 or 11. Tested on Windows 11; older versions have not been tried | 64-bit x86 with 32-bit support and glibc 2.35 or newer. Tested on Debian 13 (in WSL2) |
 | Libraries | Included (`SDL3.dll`) | 32-bit SDL 3.2 or newer, OpenGL, FreeType and fontconfig; `ffmpeg` for the intro (see below) |
-| Graphics | OpenGL 2.1 with framebuffer objects, for the anti-aliasing and the graphics options. Tested on an NVIDIA RTX 3050 Ti, and in scripted drives on AMD Radeon graphics built into the processor | the same |
-| Memory | The game used about 230 MB in the city with every option on, at 1920x1080 | the same |
+| Graphics | OpenGL 2.1 with framebuffer objects, for the anti-aliasing and the graphics options. Tested on an NVIDIA RTX 3050 Ti, and on integrated AMD Radeon graphics | the same |
+| Memory | ~230 MB RAM (in the city at 1920x1080 with all options on) | the same |
 | Disk | About 800 MB for the game, 7 MB for the port | About 800 MB for the game, 2 MB for the port |
 
 **x86 processors only (Intel or AMD).** The program is 32-bit x86 code, like the game, and runs it as it is, with no
@@ -98,16 +101,17 @@ emulation, but the port has not been tried there.
    >
    > On Linux: `sha1sum GangstarMV.app/Contents/MacOS/GangstarMV`
 
-2. Go to [**Releases**](https://github.com/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/releases/latest) and
+2. Go to [**Releases**](https://github.com/Adriansyah101/GangstarMiamiVindication-PC-Port/releases/latest) and
    download the file for your system:
 
    | System | File |
    |---|---|
-   | Windows | `GangstarMV-PC-Port-V1.0.0-Windows-x86.zip` |
-   | Linux | `GangstarMV-PC-Port-V1.0.0-Linux-x86.tar.gz` |
+   | Windows | `GangstarMV-PC-Port-V1.0.1-Windows-x86.zip` |
+   | Linux | `GangstarMV-PC-Port-V1.0.1-Linux-x86.tar.gz` |
 
    To check that the download is intact, compare it with `SHA256SUMS.txt` on the same page: on Windows,
-   `certutil -hashfile <file> SHA256`; on Linux, `sha256sum -c SHA256SUMS.txt --ignore-missing` in the download folder.
+   `certutil -hashfile <file> SHA256`; on Linux, `sha256sum -c SHA256SUMS.txt --ignore-missing` in the download
+   folder.
 
 3. Extract it.
 4. Replace the empty `GangstarMV.app` folder inside it with your copy, so that
@@ -137,20 +141,12 @@ plain words.
 the sixth station.
 
 **Add-ons:** the `add-on` folder is for two optional extras that you make from your own copies of other versions
-of the game. None is included, and the game plays the same without them. The note in that folder explains them.
+of the game. None is included, and the game plays the same without them. The note in that folder explains them, and
+there is more about them at <http://tiny.cc/gangstarmv-add-on>.
 
-The Crusher add-on (`UC_CRUSHER`) puts Urban Crime's monster truck on the beach. It is not in the download. To see it in your game:
-
-1. Make `crusher.pak` from your own copy of Gameloft's **Urban Crime**. The scripts are in this repository's `tools`
-   folder; the note in the `add-on` folder lists them.
-2. Put it in the `add-on` folder, under exactly that name.
-3. Keep it on: **CRUSHER MONSTER TRUCK** under **OPTIONS**, **GAMEPATCH**, **FIXES** in the game, or `UC_CRUSHER`
-   in `savegame/GangstarMV.ini`. It is on by default.
-4. Finish the story mission **ON A LION HUNT**. From then on, whenever no mission is under way, the Crusher is
-   parked on the beach by L.C.'s hotel.
-
-Without `crusher.pak`, its setting on the GAMEPATCH tab is marked with `*`, the foot of the page says
-"* NEEDS ITS ADD ON FILE", and the game is unchanged.
+The Crusher add-on (`UC_CRUSHER`, on by default) parks Urban Crime's monster truck on the beach by L.C.'s hotel once
+**ON A LION HUNT** is done. It is not in the download: make `crusher.pak` from your own copy of Urban Crime and put it
+in the `add-on` folder, where `add-on/WHAT GOES HERE.txt` lists the scripts that pack it.
 
 ### Updating, backing up and uninstalling
 
@@ -195,20 +191,20 @@ Xbox, PlayStation and other pads work in play. `PAD_LAYOUT` gives them a layout 
 
 ## Settings
 
-Everything lives in `savegame/GangstarMV.ini`, which is created with the defaults and a description of each key.
-Deleting it restores the defaults. A new file turns the enhancements on; a key left blank, or missing from the file,
-takes its built-in value, which for the enhancements is off, as on the Mac. In a new file the speed-ups in the
-table below, except `PRECISE_WAIT` (in `[Timing]`), are in `[Advanced]`, and the original-game fixes in `[Fixes]`;
-a file from an earlier version keeps its values, as each key is read in whichever section it stands.
+Everything lives in `savegame/GangstarMV.ini`, created with the defaults and a description of each key; delete it to
+restore them. A key left blank or missing takes its built-in value: off for the enhancements, as on the Mac, except
+`TIME_OF_DAY`, `RANDOM_TIME_OF_DAY`, `AI_STEERING_FIX` and `BOAT_SEAT_FIX`, which are on. Each key is read in
+whichever section it stands, so a file from an earlier version keeps its values.
 
 - **`GAMEPATCH_TAB`** (on by default) adds the GAMEPATCH tab to the game's options menu, where most settings can be
   changed in game. `GAMEPATCH_TAB=0` removes it.
-- **`ORIGINAL_MAC_EXPERIENCE=1`** plays the game as the Mac did, whatever the other keys say. It leaves on the fixes the
-  port needs and the speed-ups that give the same picture and rules, and turns everything else off, the fixes of the
-  original game's own bugs included. The GAMEPATCH tab stays, holding only that switch. Add-on files are still read
-  at the start, unused, so an add-on can come back without a restart.
-- **`auto`** (`MSAA`, `SHADOW_QUALITY`) follows `GPU_PROFILE`: graphics built into the processor get the lighter shadow
-  map, a graphics card the full one, and both get the Mac's 4x anti-aliasing. A number in the file always wins.
+- **`ORIGINAL_MAC_EXPERIENCE=1`** plays the game as the Mac did, whatever the other keys say. It leaves on the fixes
+  the port needs and the speed-ups that give the same picture and rules, and turns everything else off, the fixes of
+  the original game's own bugs included. The GAMEPATCH tab stays, holding only that switch. Add-on files are still
+  read at the start, unused, so an add-on can come back without a restart.
+- **`auto`** (`MSAA`, `SHADOW_QUALITY`) follows `GPU_PROFILE`: graphics built into the processor get the lighter
+  shadow map, a graphics card the full one, and both get the Mac's 4x anti-aliasing. A number in the file always wins.
+  `POST_AA=auto` follows `MSAA` instead: FXAA only while `MSAA=0` (the default `POST_AA=1` runs it at any `MSAA`).
 
 | Group | Keys | Default | Mac preset |
 |---|---|---|---|
@@ -218,14 +214,15 @@ a file from an earlier version keeps its values, as each key is read in whicheve
 | Original-game fixes | `MENUFLASH_FIX` `FADE_EDGE_FIX` `MENU_FADE_CLICKS` `RADIO_LOGO_FIX` `SWITCH_SAVE_FIX` | on | off |
 | Original-game fix kept by saves | `MISSION_SAVE_FIX` | on | on |
 | Anti-aliasing and GPU profile | `MSAA` `GPU_PROFILE` | auto (4) | 4 |
-| Frame rate | `FRAME_MS` | 60 fps (`8.3333`) | 30 fps, as on the Mac |
+| Anti-aliasing extras | `ALPHA_TO_COVERAGE` `POST_AA` (FXAA; `auto` = only with `MSAA=0`) | on | off |
+| Frame rate | `FRAME_MS` | 60 fps (`8.3333`, 120 ticks/s) | 30 fps (`16.6667`, 60 ticks/s), as on the Mac |
 | Vsync | `SWAP_INTERVAL` | off | off |
 | Behind other windows / minimized | `BACKGROUND_THROTTLE` (`BACKGROUND_FPS` 30, `MINIMIZED_FPS` 10) | on | off |
 | One physics step per tick | `PHYSICS_SYNC` | on | off |
 | High frame rates, no effect at 60 ticks/s | `CAMERA_SYNC` `WALK_SYNC` `AI_SYNC` | on | off |
 | Graphics | `ANISOTROPIC_FILTERING` (16) `AMBIENT_OCCLUSION` `BLOOM` (2) `WATER_REFLECTIONS` `VEHICLE_REFLECTIONS` `DYNAMIC_SHADOWS` (`SHADOW_QUALITY` auto) `SUN_MOON` `SPAWN_FADE` `FOG_MODE` (2, hybrid) | on | off |
 | Draw distance and crowds | `DRAW_DISTANCE` (2) `TRAFFIC_DENSITY` `PEDESTRIAN_DENSITY` `PARKED_CAR_DENSITY` (3 each) | as given | 1 |
-| Gameplay | `ALLOW_WEAPON_SPRINT` `MINIMAP_SHOPS` `MISSION_REPLAY` `PLAYERSWITCH_INVENTORY` `LC_SWITCH` | on | off |
+| Gameplay | `ALLOW_WEAPON_SPRINT` `MINIMAP_SHOPS` `MISSION_REPLAY` `TIME_OF_DAY` `RANDOM_TIME_OF_DAY` `PLAYERSWITCH_INVENTORY` `LC_SWITCH` `AI_STEERING_FIX` `BOAT_SEAT_FIX` (original-game fixes) | on | off |
 | Add-ons (each does nothing until its files are there) | `CUSTOM_RADIO` `UC_CRUSHER` `RADIO_SONGS` | on | off |
 | Controls | `KEY_MOVE` `PAD_LAYOUT` `PAD_MENU` `PAD_HINTS` `PAD_ICONS` | on | off |
 | Menus and cutscenes | `SHORT_WARNING` `CUTSCENE_KEYS` `TUTORIAL_KEYS` `HIDE_MORE_GAMES` `HIDE_GAMELOFT_LIVE` | on | off |
@@ -233,24 +230,17 @@ a file from an earlier version keeps its values, as each key is read in whicheve
 
 [`FIXES.txt`](FIXES.txt) explains each of these in plain words.
 
-### How far each option has been tested
-
-| Record | Options |
-|---|---|
-| Played in game | `ANISOTROPIC_FILTERING` `AMBIENT_OCCLUSION` `BLOOM` `FOG_MODE` `DYNAMIC_SHADOWS` `SUN_MOON` `SPAWN_FADE` `DRAW_DISTANCE` the three density keys `ALLOW_WEAPON_SPRINT` `MINIMAP_SHOPS` `MISSION_REPLAY` `SWITCH_SAVE_FIX` `PLAYERSWITCH_INVENTORY` `LC_SWITCH` `CUSTOM_RADIO` `UC_CRUSHER` `RADIO_SONGS` `KEY_MOVE` `PAD_LAYOUT` `PAD_MENU` `SHORT_WARNING` `CUTSCENE_KEYS` `TUTORIAL_KEYS` `HIDE_MORE_GAMES` `HIDE_GAMELOFT_LIVE` |
-| Seen working in scripted runs and their logs | `FAST_LOAD` `WATER_REFLECTIONS` `VEHICLE_REFLECTIONS` `PAD_HINTS` `PAD_ICONS` (with a DualSense) `GPU_PROFILE` `SHADOW_QUALITY` `PRECISE_WAIT` `BACKGROUND_THROTTLE` `SPIKE_MS` |
-
 ## Performance Tips
 
 Most of the work is on the processor: a longer draw distance and bigger crowds give the physics and the people more
 to do. The graphics options weigh on the graphics card. On a slower PC, in this order:
 
-1. Lower `DRAW_DISTANCE` and the three density options, to 1 (the Mac's) or 2.
+1. Lower `DRAW_DISTANCE` and the three density options to 1 (the Mac's) or 2.
 2. On integrated graphics, turn off `AMBIENT_OCCLUSION`, `WATER_REFLECTIONS`, `VEHICLE_REFLECTIONS` and
-   `DYNAMIC_SHADOWS`, and set `BLOOM` to 1 or off. (`SHADOW_QUALITY` on auto already takes the lighter shadow map
-   there.)
-3. Set `MSAA` to 2 or 0. On integrated graphics, never above 4 (see Known Issues).
-4. Play at 30 fps, as on the Mac: `FRAME_MS=16.6667`.
+   `DYNAMIC_SHADOWS`, and set `BLOOM` to 1 or 0.
+3. Set `MSAA` to 2 or 0 (never above 4 on integrated graphics, see Known Issues), and `POST_AA=0` to drop the FXAA
+   pass.
+4. Play at 30 fps, as on the Mac, with `FRAME_MS=16.6667`.
 
 ## Troubleshooting
 
@@ -272,20 +262,18 @@ to do. The graphics options weigh on the graphics card. On a slower PC, in this 
 ## Known Issues
 
 1. **Few GPUs tested:** an NVIDIA RTX 3050 Ti on Windows 11, played to the end, and the AMD Radeon graphics built into
-   a laptop's processor, in scripted drives only. Nothing has been run on Intel graphics or on an AMD graphics card.
+   a laptop's processor. Nothing has been run on Intel graphics or on an AMD graphics card.
    The optional graphics use their own shaders, so those are the most likely to differ.
 2. **`MSAA=8` on integrated graphics:** with every graphics option on, the built-in AMD graphics sometimes took about
-   5 s for one frame. Windows then reset the GPU and the game stopped. Every such stop had `AMBIENT_OCCLUSION` on. Keep
-   `MSAA` at 4 there (the default, auto, picks 4): that ran clean.
+   5 s for one frame. Windows then reset the GPU and the game stopped. Every such stop had `AMBIENT_OCCLUSION` on.
+   Keep `MSAA` at 4 there (the default, auto, picks 4): that ran clean.
 3. **Linux has run in WSL2 only** (Debian 13, with Mesa's software renderer). It has not been tried on a Linux machine
    with a real GPU yet.
-4. **One crash not explained:** a fault was seen once while replaying MIAMI BOUND! after switching
-   `ORIGINAL_MAC_EXPERIENCE`. It did not come back in three more replays, and the cause is not proved.
-5. **Offline only.** Gameloft's services are long gone, so the game's online buttons report no connection.
+4. **Offline only.** Gameloft's services are long gone, so the game's online buttons report no connection.
 
 ### Reporting a bug
 
-Open an issue on the [**Issues**](https://github.com/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/issues/new/choose)
+Open an issue on the [**Issues**](https://github.com/Adriansyah101/GangstarMiamiVindication-PC-Port/issues/new/choose)
 page. The bug report form asks for:
 
 - your system and its version, and your graphics card and driver;
@@ -306,9 +294,9 @@ in it as `%USERPROFILE%` (`$HOME` on Linux), `%EXE%` and `%APP%`. A release log 
 the `-dev` build does, and it is much longer, so read it before you send it.
 
 After a crash, `cache/GangstarMV.dmp` holds what the port's threads were doing: registers, stacks and the loaded
-modules. The folders above, your environment variables and the computer's name are blanked in it, but it is raw memory,
-so it can hold other scraps, such as a song's file name. It stays on your computer until you choose to send it, and the
-next start deletes it.
+modules. The folders above, your environment variables and the computer's name are blanked in it, but it is raw
+memory, so it can hold other scraps, such as a song's file name. It stays on your computer until you choose to send
+it, and the next start deletes it.
 
 `LOG=0` turns off both the log and the crash dump.
 
@@ -327,7 +315,7 @@ The build is CMake (`host/CMakeLists.txt`). You need:
 Clone this repository and put your `GangstarMV.app` in its folder. Then, on Windows, in PowerShell:
 
 ```powershell
-cd Gangstar-Miami-Vindication-PC-Port
+cd GangstarMiamiVindication-PC-Port
 mkdir build
 
 # SDL3, once: the official 32-bit build, one pinned version, into host\third_party
@@ -348,7 +336,7 @@ If PowerShell blocks a script, run it as `powershell -ExecutionPolicy Bypass -Fi
 On Linux:
 
 ```sh
-cd Gangstar-Miami-Vindication-PC-Port
+cd GangstarMiamiVindication-PC-Port
 mkdir -p build
 python3 -I tools/genlow.py GangstarMV.app/Contents/MacOS/GangstarMV build/gmv_patch.bin
 
@@ -365,11 +353,10 @@ build/linux/gangstar/release/GangstarMV --app "$PWD/GangstarMV.app"
 | `host\build.ps1 -Dev` | `BUILD=dev sh host/linux/build.sh gangstar` | Every diagnostic, symbols stripped |
 | `host\build.ps1 -Release` | `BUILD=release sh host/linux/build.sh gangstar` | Public build: no debug mode, symbols stripped |
 
-A release build has no debug mode. The code of the traces, surveys, captures, profilers and test aids is not compiled
-in, so no setting can bring it back: there is no console, no `[Diagnostics]` or `[Testing]` key, no staged
-command-line flag, no debug hotkey and no `GMV_*` environment override. Its log holds only the version, the settings,
-what was found about the hardware, what a feature applied, skipped or failed at, and the details of a crash. A release
-program holds no path or name from the machine that built it. Debugging needs a `-Dev` or plain build.
+A release build leaves out the traces, profilers and test aids at compile time, so it has no console, debug keys,
+`[Diagnostics]` or `[Testing]` section or `GMV_*` overrides, and holds no path or name from the machine that built it.
+Its log keeps only the version, the settings, the hardware, what each feature did and the details of a crash; for
+debugging, use a `-Dev` or plain build.
 
 The source has no icon, because the icon is the game's art, so your program is built without one.
 
@@ -387,15 +374,17 @@ The source has no icon, because the icon is the game's art, so your program is b
 | [`PATCHNOTES.md`](PATCHNOTES.md) | What changed in each release |
 | [`FIXES.txt`](FIXES.txt) | Every fix and option in plain words, shipped with each build |
 
-`.gitignore` keeps out the game, anything taken from it (art, sound, screenshots, analysis dumps) and the build output.
+`.gitignore` keeps out the game, anything taken from it (art, sound, screenshots, analysis dumps) and the build
+output.
 
 ## Contributing
 
 Help is welcome, and the most useful help right now needs no code at all:
 
-- **Play it on hardware that has not been tried:** an Intel GPU, an AMD graphics card, Linux on a real GPU, the Steam Deck.
+- **Play it on hardware that has not been tried:** an Intel GPU, an AMD graphics card, Linux on a real GPU, the Steam
+  Deck.
 
-Report what you find on the [Issues](https://github.com/Adriansyah101/Gangstar-Miami-Vindication-PC-Port/issues)
+Report what you find on the [Issues](https://github.com/Adriansyah101/GangstarMiamiVindication-PC-Port/issues)
 page, with the log, even when everything works. For code, [`CONTRIBUTING.md`](CONTRIBUTING.md) explains how the
 project is laid out, the rules it keeps and how changes are tested.
 

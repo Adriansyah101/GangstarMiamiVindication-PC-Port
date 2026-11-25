@@ -1,0 +1,56 @@
+# DRAW_DISTANCE=1: free roam from CONTINUE, then MISSION REPLAY's first story mission; the dev probe (GMV_COLLISION_PROBE=1) finds every static object near the camera with its collision body
+dev
+env GMV_COLLISION_PROBE=1
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini MISSION_REPLAY=1
+ini CUTSCENE_KEYS=1
+ini KEY_MOVE=1
+ini DRAW_DISTANCE=1
+save Gangstar2.sav
+wait 8
+key SPACE
+wait 12
+click 0.13 0.39
+waitlog ^\[collision\] probe at 60
+wait 25
+shot city
+holdscan 2A
+holdscan 11
+wait 6
+look 300 0
+wait 6
+look -500 0
+wait 6
+releasescan 11
+releasescan 2A
+wait 3
+shot roamed
+moved city roamed
+key ESC
+wait 3
+click 0.19 0.20
+wait 3
+click 0.15 0.70
+wait 3
+shot replay
+click 0.47 0.79
+waitlog ^\[replay\] mission \d+ under way 60
+wait 10
+key ESC
+wait 15
+shot mission
+holdscan 11
+wait 8
+look 400 0
+wait 6
+releasescan 11
+wait 4
+shot walked
+expectlog ^\[gamepatch\] cutscene skipped by a key
+expectlog ^\[collision\] grid
+expectlog ^\[collision\] probe at
+nolog ^\[collision\] probe at .*, [1-9][0-9]* without a body

@@ -1,19 +1,3 @@
-/* shimsaudio.c -- bridge the game's CoreAudio output AudioUnit to an SDL3 audio stream.
-
-   The game builds a Default Output AudioUnit ('auou'/'def '), sets an interleaved 16-bit PCM
-   stream format (44100 Hz, stereo) and an AURenderCallback, then calls AudioOutputUnitStart.
-   On macOS CoreAudio would spin an audio thread that repeatedly calls the render callback to pull
-   PCM; there is no CoreAudio here, so we do exactly that: a playback thread opens a stream in the
-   captured format and, while the stream holds less than the queue below, calls the game's render
-   callback for one more slice and queues it.  The callback is game i386 cdecl code that expects to
-   run on a dedicated audio thread (as it would under CoreAudio), so it runs on our thread, not on
-   SDL's device thread: a long mix or a lock the game holds only eats into the queue.
-
-   The stream opens the default device, and SDL moves it when the default changes.  No Win32 here:
-   this file is meant to build unchanged for Linux.
-
-   Config is captured in shimsappkit.c (gmv_au_*).  GMV_NO_AUDIO=1 keeps the old silence. */
-
 #include <SDL3/SDL.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,45 +8,33 @@
 #include "log.h"
 #include "shims.h"
 
-/* AURenderCallback: OSStatus (*)(void *inRefCon, AudioUnitRenderActionFlags *ioActionFlags,
-   const AudioTimeStamp *inTimeStamp, UInt32 inBusNumber, UInt32 inNumberFrames,
-   AudioBufferList *ioData).  cdecl. */
 typedef int (*au_render_cb_t)(void *inRefCon, uint32_t *ioActionFlags, const void *inTimeStamp,
                               uint32_t inBusNumber, uint32_t inNumberFrames, void *ioData);
 
-/* CoreAudio structs as the i386 game lays them out. */
 struct au_buffer     { uint32_t mNumberChannels; uint32_t mDataByteSize; void *mData; };
 struct au_bufferlist { uint32_t mNumberBuffers;  struct au_buffer mBuffers[1]; };
-/* AudioTimeStamp is 64 bytes; we only set mSampleTime (+0, Float64) and mFlags (+56, UInt32). */
 struct au_timestamp  { unsigned char raw[64]; };
 
-#define AU_RENDER_OUTPUT_IS_SILENCE 0x10   /* kAudioUnitRenderAction_OutputIsSilence */
-#define AU_TS_SAMPLETIME_VALID      0x01   /* kAudioTimeStampSampleTimeValid */
+#define AU_RENDER_OUTPUT_IS_SILENCE 0x10
+#define AU_TS_SAMPLETIME_VALID      0x01
 
-#define NB_MAX 32                           /* most slices the queue may be set to                */
-#define FRAMES_DEFAULT 256                  /* frames per slice; 256 @44100 = ~5.8 ms.  The game
-                                               recomputes each voice's pitch step ONCE per slice
-                                               (0x5c2dc0), so the slice size IS the engine pitch-
-                                               update granularity.  The old 1024 (~23 ms) stepped
-                                               the rev in coarse ~43 Hz stairs -> a robotic zipper;
-                                               the Mac (CoreAudio ~256) steps finely -> smooth.
-                                               GMV_AUDIO_FRAMES overrides; GMV_AUDIO_NB sets count. */
+#define NB_MAX 32
+#define FRAMES_DEFAULT 256                  /* 0x5c2dc0 */
 
-static int      g_snd_ok;                   /* SDL's audio came up */
+static int      g_snd_ok;
 static SDL_AtomicInt g_started;
-static SDL_AtomicInt g_done;                /* the playback thread has closed its stream */
+static SDL_AtomicInt g_done;
 static SDL_Thread *g_thread;
-static SDL_Semaphore *g_wake;               /* signalled when the device takes data from the stream */
+static SDL_Semaphore *g_wake;
 static volatile int g_stop;
-static double   g_sample_time;              /* running frame count for the timestamp */
-static volatile int g_underruns;            /* diagnostic: times the device drained the whole queue */
+static double   g_sample_time;
+static volatile int g_underruns;
 
 static SDL_AudioFormat snd_format(uint32_t bits)
 {
     return bits == 8 ? SDL_AUDIO_U8 : bits == 32 ? SDL_AUDIO_S32LE : SDL_AUDIO_S16LE;
 }
 
-/* On the main thread, before the game runs: SDL wants its subsystems brought up there. */
 void gmv_snd_init(void)
 {
     SDL_SetAppMetadata(GMV_GAME_TITLE, NULL, NULL);
@@ -76,7 +48,6 @@ void gmv_snd_init(void)
     }
 }
 
-/* A second stream on the default device, for the intro movie's own sound.  NULL = no sound. */
 void *gmv_snd_open(uint32_t rate, uint32_t chans, uint32_t bits)
 {
     SDL_AudioSpec spec = { snd_format(bits), (int)chans, (int)rate };
@@ -91,7 +62,6 @@ void gmv_snd_write(void *st, const void *pcm, size_t len)
     SDL_PutAudioStreamData(st, pcm, (int)len);
 }
 
-/* Bytes the device has not taken yet. */
 int gmv_snd_queued(void *st)
 {
     return SDL_GetAudioStreamQueued(st);
@@ -103,8 +73,6 @@ void gmv_snd_close(void *st)
 }
 
 #if GMV_DEV
-/* GMV_AUDIO_DUMP=<path|1>: tap the exact mixed PCM the port outputs to a WAV, so the engine sound
-   can be analysed clean (no screen-record / YouTube compression) straight from our own mixer. */
 static FILE    *g_dump;
 static uint32_t g_dump_bytes;
 static uint16_t g_dump_ch, g_dump_bits;
@@ -116,13 +84,13 @@ static void dump_wav_open(uint32_t rate, uint16_t ch, uint16_t bits)
     if (!(gmv_env_on(e)))
         return;
     char def[1024];
-    snprintf(def, sizeof def, "%sgmv_audio_dump.wav", SDL_GetBasePath());   /* next to the exe (the game changes cwd) */
+    snprintf(def, sizeof def, "%sgmv_audio_dump.wav", SDL_GetBasePath());
     const char *path = (strcmp(e, "1") == 0) ? def : e;
     g_dump = fopen(path, "wb");
     if (!g_dump) { gmv_log("[audio] dump open failed: %s\n", path); return; }
     g_dump_ch = ch; g_dump_bits = bits; g_dump_rate = rate; g_dump_bytes = 0;
     unsigned char h[44];
-    memset(h, 0, sizeof h);                 /* real sizes patched in dump_wav_close */
+    memset(h, 0, sizeof h);
     memcpy(h, "RIFF", 4); memcpy(h + 8, "WAVEfmt ", 8);
     uint32_t sixteen = 16; uint16_t pcm = 1;
     uint32_t byterate = rate * ch * (bits / 8); uint16_t align = (uint16_t)(ch * (bits / 8));
@@ -133,7 +101,6 @@ static void dump_wav_open(uint32_t rate, uint16_t ch, uint16_t bits)
     gmv_log("[audio] dumping mixed PCM to %s (%u Hz %u ch %u-bit)\n", path, rate, ch, bits);
 }
 
-/* The game quits with no close, so the sizes are also refreshed as it runs. */
 static void dump_wav_sizes(void)
 {
     uint32_t riff = 36 + g_dump_bytes, data = g_dump_bytes;
@@ -156,19 +123,13 @@ static void dump_wav_close(void)
 #define dump_wav_close() ((void)0)
 #endif
 
-/* Marked force_align_arg_pointer so esp is 16-byte aligned when we call the game's SSE callback
-   (the macOS i386 ABI the game was built for). */
+/* force_align_arg_pointer esp SSE */
 __attribute__((noinline, force_align_arg_pointer))
 static int call_render(au_render_cb_t cb, void *refcon, uint32_t *flags,
                        const void *ts, uint32_t frames, void *abl)
 {
-    /* One-time anchor for the car-sound dig (GMV_CARSND_TRACE=1): the render callback is the game's
-       audio mixer (proc 0x5ea3a0) and `refcon` is the root mixer object, whose vtable[0x4c] is the
-       per-group mix fn.  The vtable VA is fixed in the game image, so this one line lets the rest of
-       the audio graph be followed statically from the binary.  (An earlier version also walked the
-       live voice list from this audio thread -- that raced with the game building voices during
-       level load and crashed, so it was removed; the dig continues statically.)  Pure: a log. */
-    static int trace;                 /* 0 = unknown, 1 = on, -1 = off */
+    /* 0x5ea3a0 vtable[0x4c] */
+    static int trace;
     if (trace == 0) {
         const char *e = gmv_dbgenv("GMV_CARSND_TRACE");
         trace = (gmv_env_on(e)) ? 1 : -1;
@@ -182,10 +143,7 @@ static int call_render(au_render_cb_t cb, void *refcon, uint32_t *flags,
     return cb(refcon, flags, ts, 0, frames, abl);
 }
 
-/* Frames per render call (see FRAMES_DEFAULT).  Also what AudioUnitGetProperty reports as
-   kAudioUnitProperty_MaximumFramesPerSlice (shimsappkit.c): the game turns it into the per-slice
-   voice pitch-ramp limit (0x5ea9f7 -> 0x5bf320 -> DAT_0064d5f8), so it must match the slices we
-   actually render. */
+/* 0x5ea9f7 -> 0x5bf320 DAT_0064d5f8 */
 uint32_t gmv_audio_frames(void)
 {
     uint32_t frames = FRAMES_DEFAULT;
@@ -210,11 +168,10 @@ static int SDLCALL audio_thread(void *param)
     uint32_t rate     = (uint32_t)(gmv_au_sample_rate > 0 ? gmv_au_sample_rate : 44100.0);
     uint32_t frame_sz = chans * (bits / 8);
 
-    /* Slice size = engine pitch-update granularity (see FRAMES_DEFAULT).  Overridable for testing. */
     uint32_t frames = gmv_audio_frames();
     int nb = 4;
     { const char *e = gmv_getenv("GMV_AUDIO_NB");     if (e && *e) { long v = atol(e); if (v >= 2  && v <= NB_MAX) nb = (int)v; }
-      else { nb = (int)(4096 / frames); if (nb < 4) nb = 4; if (nb > NB_MAX) nb = NB_MAX; } }   /* ~93 ms total, as before */
+      else { nb = (int)(4096 / frames); if (nb < 4) nb = 4; if (nb > NB_MAX) nb = NB_MAX; } }
 
     SDL_AudioSpec spec = { snd_format(bits), (int)chans, (int)rate };
     SDL_AudioStream *stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
@@ -236,16 +193,15 @@ static int SDLCALL audio_thread(void *param)
         int queued = SDL_GetAudioStreamQueued(stream);
         if (queued >= target) {
             if (!playing) {
-                SDL_ResumeAudioStreamDevice(stream);    /* opens paused: start on a full queue */
+                SDL_ResumeAudioStreamDevice(stream);
                 playing = 1;
             }
-            SDL_WaitSemaphoreTimeout(g_wake, 100);      /* full: wait for the device to take some */
+            SDL_WaitSemaphoreTimeout(g_wake, 100);
             continue;
         }
         if (playing && queued <= 0)
-            g_underruns++;                      /* device played out everything before we refilled */
+            g_underruns++;
 
-        /* Build the CoreAudio argument block pointing at the slice. */
         struct au_bufferlist abl;
         abl.mNumberBuffers          = 1;
         abl.mBuffers[0].mNumberChannels = chans;
@@ -254,11 +210,11 @@ static int SDLCALL audio_thread(void *param)
 
         struct au_timestamp ts;
         memset(&ts, 0, sizeof ts);
-        memcpy(ts.raw, &g_sample_time, 8);                 /* mSampleTime */
+        memcpy(ts.raw, &g_sample_time, 8);
         *(uint32_t *)(ts.raw + 56) = AU_TS_SAMPLETIME_VALID;
 
         uint32_t flags = 0;
-        memset(buf, 0, bufbytes);               /* default to silence if the callback leaves it */
+        memset(buf, 0, bufbytes);
         int rc = cb ? call_render(cb, refcon, &flags, &ts, frames, &abl) : 0;
         if (rc != 0 || (flags & AU_RENDER_OUTPUT_IS_SILENCE))
             memset(buf, 0, bufbytes);
@@ -266,9 +222,6 @@ static int SDLCALL audio_thread(void *param)
             gmv_game_audio_mix((int16_t *)buf, frames, chans, rate);
 
 #if GMV_DEV
-        /* Diagnostic: track the signal level + underruns so "quiet" / "glitchy" can be told
-           apart from a backend problem.  First few slices logged individually; then the window
-           peak + cumulative underruns + the emptiest the queue got, every 256 slices (~1.5 s). */
         {
             const int16_t *s = (const int16_t *)buf;
             int peak = 0, lrdiff = 0;
@@ -276,10 +229,6 @@ static int SDLCALL audio_thread(void *param)
                 int v = s[k] < 0 ? -s[k] : s[k];
                 if (v > peak) peak = v;
             }
-            /* stereo-spread probe: max |L-R| over the slice.  0 for every slice => the mix is
-               pure mono (either no stereo content was playing, or spatialisation is centred);
-               nonzero => the game IS producing stereo here.  Tells a missing-radio recording
-               apart from a broken-pan port bug.  (chans==2 interleaved L,R,L,R...) */
             if (chans == 2) {
                 for (uint32_t k = 0; k + 1 < bufbytes / 2; k += 2) {
                     int d = s[k] - s[k+1];
@@ -308,7 +257,7 @@ static int SDLCALL audio_thread(void *param)
             fwrite(buf, 1, bufbytes, g_dump);
             g_dump_bytes += bufbytes;
             if (sec && g_dump_bytes / sec != (g_dump_bytes - bufbytes) / sec)
-                dump_wav_sizes();             /* about once per second of audio */
+                dump_wav_sizes();
         }
 #endif
 
@@ -328,15 +277,15 @@ void gmv_audio_start(void)
 {
     const char *e = gmv_getenv("GMV_NO_AUDIO");
     if (gmv_env_on(e))
-        return;                                 /* opt-out: stay silent */
+        return;
     if (!gmv_au_render_cb) {
         gmv_log("[audio] start requested but no render callback captured; staying silent\n");
         return;
     }
     if (!g_snd_ok)
-        return;                                 /* gmv_snd_init said why */
+        return;
     if (SDL_SetAtomicInt(&g_started, 1))
-        return;                                 /* already running */
+        return;
     g_stop = 0;
     SDL_SetAtomicInt(&g_done, 0);
     g_wake = SDL_CreateSemaphore(0);
@@ -347,12 +296,10 @@ void gmv_audio_start(void)
     }
 }
 
-/* Also runs while the game is stopping on a fault, which may have hit inside the mix: never wait
-   long, and leave the thread be if it does not come back.  With nothing queueing, the stream runs dry. */
 void gmv_audio_stop(void)
 {
     if (!SDL_SetAtomicInt(&g_started, 0))
-        return;                                 /* not running */
+        return;
     g_stop = 1;
     if (g_wake)
         SDL_SignalSemaphore(g_wake);

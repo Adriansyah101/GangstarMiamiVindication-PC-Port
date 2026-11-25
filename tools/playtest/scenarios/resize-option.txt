@@ -1,4 +1,4 @@
-# The window sized by the player, then another resolution from the options: that is a new size, so the window takes it
+# Window sized by the player, then a new resolution from the options: window takes it
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720
@@ -12,7 +12,6 @@ wait 3
 click 0.12 0.578
 wait 3
 shot tab
-# The cursor stays inside the picture, so it needs the room for the drag
 move 0.9 0.9
 wait 1
 drag -320 -180

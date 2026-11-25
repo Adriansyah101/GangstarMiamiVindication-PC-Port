@@ -1,4 +1,4 @@
-# How far a known mouse move turns the camera, for comparing two builds: run it with -Exe on each and compare the shots
+# Camera turn for a fixed mouse move; compare shots across builds with -Exe
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
 ini SCREEN_HEIGHT=720

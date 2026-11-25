@@ -1,5 +1,4 @@
-# DYNAMIC_SHADOWS at SHADOW_QUALITY=2, then LOW from the pause menu's options (VIDEO, GRAPHICS, page 3) in the city:
-# the map is made again at 1024 with no restart
+# DYNAMIC_SHADOWS SHADOW_QUALITY=2, then DYNAMIC SHADOWS LOW from the pause options in the city: map rebuilt at 1024, no restart
 dev
 ini FULLSCREEN=0
 ini SCREEN_WIDTH=1280
@@ -20,29 +19,28 @@ shot high
 key ESC
 wait 3
 shot paused
-click 0.19 0.33          # OPTIONS
+click 0.19 0.33
 wait 3
-click 0.19 0.58          # VIDEO
+click 0.19 0.58
 wait 3
-click 0.839 0.27         # DISPLAY -> GRAPHICS
+click 0.839 0.27
 wait 2
-click 0.786 0.831        # page 2
+click 0.786 0.831
 wait 2
-click 0.786 0.831        # page 3: SHADOW QUALITY, FADE IN TRAFFIC
+shot graphics2
+click 0.783 0.767
 wait 2
-shot graphics3
-click 0.783 0.406        # SHADOW QUALITY: HIGH -> LOW
-wait 2
-click 0.734 0.902        # APPLY
+click 0.734 0.902
 wait 2
 shot applied
 waitlog ^\[gamepatch\] options tab: SHADOW_QUALITY=1 in force now 10
-click 0.06 0.957         # BACK
+click 0.06 0.957
 wait 3
-key ESC                  # out of the pause menu
+key ESC
 waitlog ^\[shadow\] map 1024x1024, 8 taps \(SHADOW_QUALITY=1\), from the options 20
 wait 2
 shot low
 moved paused low
 nolog ^\[shadow\] framebuffer incomplete
 expectlog ^\[shadow\] map 2048x2048, 16 taps \(SHADOW_QUALITY=2\)
+nolog ^\[gamepatch\] options tab: DYNAMIC_SHADOWS=

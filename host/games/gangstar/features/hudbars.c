@@ -1,33 +1,3 @@
-/* hudbars.c -- the HUD's health/armour bars without 38 full UI searches per update (same result).
-
-   PERF_PROFILE's UI-lookup probe showed the game's dotted-path UI search (find 0x2fd160, breadth-
-   first search 0x2fcf60/0x2fcba0) running 5000-9000 times a second while driving, ~1100-1500 tree
-   entries each.  Nearly all of it is two HUD bar functions:
-     0x17e870 bar_refresh(bar)        and   0x17e98c bar_set(bar, value)  (stores value at bar+0x14)
-   which pick a name by bar+0x18 (0 "IG_HUD_LIFES.character_life", 1 "...car_life",
-   2 "...ammor_life", else nothing) and then, for i = 0..37,
-     sprintf(path, "%s.bar.w%d", name, i);  SetVisible(ui = bar+8, path, value <= i);
-   SetVisible (0x2fdf80) is node = find(ui, path); if (node) node->+0xab = flag.
-
-   The search is a FIFO walk from root ui+0x40 of (node, path position) entries: a node whose name
-   (tu_string at +0x44: length byte + chars at +0x45, or 0xff with length at +0x48 and chars at
-   +0x50; the length counts the NUL) equals the current segment moves the position on, or ends the
-   search at the last segment; then if node->vtbl[2](node, 2) (a sprite) its children (+0xb8 array,
-   +0xbc count) are queued with that position.  When that finds nothing, find tries other roots.
-
-   The 38 paths share every segment but the last, so their walks queue exactly the same entries
-   in the same order until each one meets its own "wN".  One walk can therefore answer all 38: the
-   first entry at the last position named "wN" is path N's answer, as its own walk would return.
-   SetVisible's write (+0xab) is not read by the walk, so the writes can follow afterwards.  If any
-   path is not found from the first root (the original then tries other roots), the original loop
-   runs instead.  The search keeps only scratch arrays in ui (+0x18, +0x28), reset per search.
-
-   The police stars (5 searches per refresh, nearly every frame) are done the same way; see
-   ps_refresh below.
-
-   Installed as a jmp at the functions' entries.  GMV_FAST_HUDBARS=0 (dev) keeps the originals;
-   GMV_HUDBARS_VERIFY=1 (dev) also runs the original search per path and logs any difference. */
-
 #include "compat.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -43,7 +13,7 @@
 #define HB_FIND    0x002fd160u
 #define HB_SETVIS  0x002fdf80u
 #define HB_N       38
-#define HB_QMAX    (1u << 20)                /* queue entries before giving up (a cycle) */
+#define HB_QMAX    (1u << 20)
 
 typedef void *(*hb_find_fn)(void *ui, const char *path);
 typedef void (*hb_setvis_fn)(void *ui, const char *path, int on);
@@ -60,12 +30,11 @@ static volatile LONG g_busy;
 static int g_on, g_verify;
 static unsigned g_mismatch;
 typedef struct { unsigned updates, fast, fallback, busy; unsigned long long walked; long long t; } hb_stats;
-static hb_stats g_st, g_sst;                  /* bars, police stars */
-static size_t g_lastwalk;                     /* entries the last walk dequeued */
-static const char *g_wnames[HB_N];            /* "w0".."w37" */
+static hb_stats g_st, g_sst;
+static size_t g_lastwalk;
+static const char *g_wnames[HB_N];
 static char g_wbuf[HB_N][4];
 
-/* The node's name, as the search reads it. */
 static int hb_name(const unsigned char *n, const char **s)
 {
     if (n[0x44] == 0xff) {
@@ -76,8 +45,6 @@ static int hb_name(const unsigned char *n, const char **s)
     return (int)(signed char)n[0x44] - 1;
 }
 
-/* One walk for the n paths "<pre>.<last[i]>" from root (all n last segments different, at most
-   HB_N); res[i] = path i's answer.  1 when every one was found. */
 static int hb_walk(unsigned char *root, const char *pre, int n, const char *const *last,
                    unsigned char **res)
 {
@@ -96,7 +63,7 @@ static int hb_walk(unsigned char *root, const char *pre, int n, const char *cons
     int lastl[HB_N];
     if (n < 1 || n > HB_N)
         return 0;
-    char c0 = last[0][0];                     /* a quick first test when all share it */
+    char c0 = last[0][0];
     for (int i = 0; i < n; i++) {
         lastl[i] = (int)strlen(last[i]);
         if (last[i][0] != c0 || !lastl[i])
@@ -194,7 +161,6 @@ static void hb_update(unsigned char *bar)
     } else if (GMV_DEV) {
         g_st.busy++;
     }
-    /* The original loop. */
     for (int i = 0; i < HB_N; i++) {
         char path[64];
         snprintf(path, sizeof path, "%s.bar.w%d", name, i);
@@ -202,12 +168,14 @@ static void hb_update(unsigned char *bar)
     }
 }
 
+/* 0x17e870 0x2fd160 0x2fcf60/0x2fcba0 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void hb_refresh(unsigned char *bar)
 {
     hb_update(bar);
 }
 
+/* 0x17e98c +0x14 +0x18 0x2fdf80 */
 __attribute__((cdecl, force_align_arg_pointer))
 static void hb_set(unsigned char *bar, int value)
 {
@@ -215,20 +183,10 @@ static void hb_set(unsigned char *bar, int value)
     hb_update(bar);
 }
 
-/* Police stars.  0x180412 stars_refresh(hud) (also reached by tail jumps from 0x17b110, 0x18052d
-   set count, 0x18053f set flag) does, reading hud's fields afresh each time, for i = 0..4:
-     sprintf(path, "ingame_HUD_PoliceStars.stars%d", i);
-     if (count (+0x14) >= i + 1)
-         flag (+0x13) ? SetVisible(ui, "ingame_HUD_PoliceStars", 1)
-                      : (SetVisible(ui, path, 1), play(ui, path, "blink", 0) [0x2fe1d0]);
-     else
-         SetVisible(ui, path, 0);
-   The shown stars keep the original calls (the "blink" play runs the movie's code, which may change
-   the UI tree).  The hidden ones are the last 5 - count of the loop and only write +0xab, so one
-   walk made where the first of them would search answers them all, as for the bars. */
+/* 0x180412 0x17b110 0x18052d 0x18053f +0x14 +0x13 */
 #define PS_REFRESH 0x00180412u
 #define PS_PLAY    0x002fe1d0u
-#define PS_BLINK   0x0061feebu               /* the game's "blink" */
+#define PS_BLINK   0x0061feebu
 #define PS_GROUP   "ingame_HUD_PoliceStars"
 #define PS_N       5
 
@@ -257,7 +215,6 @@ static void ps_refresh(unsigned char *hud)
     }
     if (i == PS_N)
         return;
-    /* stars i..4 are hidden */
     void *ui = *(void **)(hud + 8);
     int n = PS_N - i;
     if (InterlockedCompareExchange(&g_busy, 1, 0) == 0) {
@@ -299,9 +256,8 @@ static void ps_refresh(unsigned char *hud)
 }
 
 #if GMV_DEV
-double ms_of(long long q);                      /* loadprof.c */
+double ms_of(long long q);
 
-/* One line every 5 s with the PERF_PROFILE summary (dev build). */
 static void hb_report1(const char *what, const char *unit, hb_stats *s, double seconds)
 {
     if (!s->updates)
@@ -325,49 +281,27 @@ void gmv_hudbars_report(double seconds)
 }
 #endif
 
-static int hb_call_to(uint32_t call, uint32_t to)
-{
-    int32_t rel;
-    memcpy(&rel, (const void *)(uintptr_t)(call + 1), 4);
-    return *(const unsigned char *)(uintptr_t)call == 0xe8 && call + 5 + (uint32_t)rel == to;
-}
-
 static int hb_check(uint32_t fn, uint32_t loop_cmp, const unsigned char *cmp3, uint32_t call)
 {
     return !memcmp((const void *)(uintptr_t)fn, "\x55\x89\xe5\x53\x57\x56", 6)
-        && !memcmp((const void *)(uintptr_t)loop_cmp, cmp3, 3) && hb_call_to(call, HB_SETVIS);
+        && !memcmp((const void *)(uintptr_t)loop_cmp, cmp3, 3) && code_call_target(call) == HB_SETVIS;
 }
 
-/* The police stars function as read: loop to 5, the fields +0x13/+0x14, its calls and strings. */
+/* +0x13/+0x14 */
 static int ps_check(void)
 {
     const unsigned char *p = (const unsigned char *)(uintptr_t)0x00180458u;
     return hb_check(PS_REFRESH, 0x00180500u, (const unsigned char *)"\x83\xfe\x05", 0x001804abu)
-        && hb_call_to(0x001804fbu, HB_SETVIS) && hb_call_to(0x001804ccu, PS_PLAY)
+        && code_call_target(0x001804fbu) == HB_SETVIS && code_call_target(0x001804ccu) == PS_PLAY
         && !memcmp(p, "\x80\x79\x13\x00\x8b\x59\x14", 7)
         && !memcmp((const void *)(uintptr_t)0x0061fecc, PS_GROUP ".stars%d", sizeof PS_GROUP ".stars%d")
         && !memcmp((const void *)(uintptr_t)0x0061eab8, PS_GROUP, sizeof PS_GROUP)
         && !memcmp((const void *)(uintptr_t)PS_BLINK, "blink", 6);
 }
 
-static int hb_jmp(uint32_t fn, void *to)
-{
-    unsigned char j[5] = { 0xe9 };
-    int32_t rel = (int32_t)((uint32_t)(uintptr_t)to - (fn + 5));
-    memcpy(j + 1, &rel, 4);
-    DWORD old;
-    if (!VirtualProtect((void *)(uintptr_t)fn, 5, PAGE_EXECUTE_READWRITE, &old))
-        return 0;
-    memcpy((void *)(uintptr_t)fn, j, 5);
-    VirtualProtect((void *)(uintptr_t)fn, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), (void *)(uintptr_t)fn, 5);
-    return 1;
-}
-
 void gmv_apply_hudbars(void)
 {
-    const char *e = gmv_dbgenv("GMV_FAST_HUDBARS");
-    if (e && *e == '0') {
+    if (gmv_env_off(gmv_dbgenv("GMV_FAST_HUDBARS"))) {
         gmv_log("[hudbars] FAST_HUDBARS=0: the original bar and police star updates kept\n");
         return;
     }
@@ -395,7 +329,7 @@ void gmv_apply_hudbars(void)
         g_verify = gmv_env_on(v);
     }
     if (bars) {
-        if (!hb_jmp(HB_REFRESH, (void *)hb_refresh) || !hb_jmp(HB_SET, (void *)hb_set)) {
+        if (!code_jmp(HB_REFRESH, (void *)hb_refresh) || !code_jmp(HB_SET, (void *)hb_set)) {
             gmv_log("[hudbars] write failed (%lu); bars skipped\n", GetLastError());
         } else {
             g_on = 1;
@@ -403,7 +337,7 @@ void gmv_apply_hudbars(void)
         }
     }
     if (stars) {
-        if (!hb_jmp(PS_REFRESH, (void *)ps_refresh)) {
+        if (!code_jmp(PS_REFRESH, (void *)ps_refresh)) {
             gmv_log("[hudbars] write failed (%lu); stars skipped\n", GetLastError());
         } else {
             g_son = 1;

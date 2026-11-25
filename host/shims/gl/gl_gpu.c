@@ -1,20 +1,3 @@
-/* gl_gpu.c -- GPU_PROFILE: the kind of GPU the game draws on, for the settings left on "auto"
-
-   Why: a GPU built into the processor shares the CPU's memory and has a fraction of a graphics card's memory
-   bandwidth; the same settings that a graphics card takes in its stride cost it the most per frame (the shadow
-   map's lookups, many-sample anti-aliasing), and one AMD built-in GPU's driver here stopped responding with 8x
-   anti-aliasing and every effect on.  A port addition: the Mac game ran on one kind of machine.
-
-   The kind: the DXGI adapter that OpenGL draws on (matched by vendor, then by name) is asked by Direct3D 11 whether
-   its memory is the CPU's (D3D11_FEATURE_D3D11_OPTIONS2 UnifiedMemoryArchitecture): true on Intel and AMD built-in
-   GPUs, false on graphics cards.  Creating that Direct3D device takes ~100-200 ms, so it is done on a thread of
-   its own started once GL's names are known (gmv_gpu_profile_start, from gl_context.c); the settings ask
-   (gmv_gpu_integrated) when they are first needed, long after the answer is in.  NVIDIA makes no built-in PC GPUs:
-   not asked.  Without an answer (no Direct3D 11.3, no matching adapter, Linux) the renderer's name decides.
-
-   GPU_PROFILE: auto (default) asks; igpu / full take that kind without asking (a test, or a wrong guess); 0 = every
-   setting on auto takes the graphics card's value, as before the profile.  What "auto" means for each setting is
-   the caller's (MSAA in gl_msaa.c, the game's own). */
 #ifdef _WIN32
 #define COBJMACROS
 #include <windows.h>
@@ -31,7 +14,7 @@
 #include "shims.h"
 #include "glshim.h"
 
-static volatile LONG g_integrated = -1;        /* 1 built-in, 0 graphics card, -1 not known yet */
+static volatile LONG g_integrated = -1;
 static char g_vendor[64], g_renderer[128];
 
 int gmv_setting_is_auto(const char *v)
@@ -50,20 +33,19 @@ static unsigned vendor_id(const char *v)
     return 0;
 }
 
-/* By the name alone. */
 static int by_name(unsigned vid, const char *r)
 {
     if (strstr(r, "llvmpipe") || strstr(r, "softpipe") || strstr(r, "Basic Render") || strstr(r, "SVGA3D"))
-        return 1;                               /* drawn by the CPU or a virtual machine: the lighter profile */
-    if (vid == 0x8086)                          /* Intel: built in, but the Arc A / B cards */
+        return 1;
+    if (vid == 0x8086)
         return !(strstr(r, "Arc(TM) A") || strstr(r, "Arc(TM) B") || strstr(r, "Arc A") || strstr(r, "Arc B") ||
                  strstr(r, "Iris(R) Xe MAX"));
-    if (vid == 0x1002) {                        /* AMD: the processors' GPUs by their names */
+    if (vid == 0x1002) {
         if (strstr(r, " RX ") || strstr(r, "Pro") || strstr(r, "Series") || strstr(r, "FirePro"))
             return 0;
         if (strstr(r, "Radeon(TM) Graphics") || strstr(r, "Radeon Graphics") || strstr(r, "Vega"))
             return 1;
-        for (const char *p = r; (p = strstr(p, "Radeon")) != NULL; p++) {     /* 610M .. 890M */
+        for (const char *p = r; (p = strstr(p, "Radeon")) != NULL; p++) {
             const char *d = strchr(p, ' ');
             if (d && d[1] >= '6' && d[1] <= '8' && d[2] >= '0' && d[2] <= '9' && d[3] >= '0' && d[3] <= '9' &&
                 d[4] == 'M')
@@ -76,7 +58,6 @@ static int by_name(unsigned vid, const char *r)
 #ifdef _WIN32
 static const GUID iid_factory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
 
-/* 1 / 0: the adapter's memory is / is not the CPU's; -1 no answer.  name: the adapter's. */
 static int by_d3d(unsigned vid, const char *renderer, char *name, size_t nn)
 {
     typedef HRESULT (WINAPI *factory_fn)(REFIID, void **);
@@ -97,7 +78,7 @@ static int by_d3d(unsigned vid, const char *renderer, char *name, size_t nn)
             (!vid || d.VendorId == vid)) {
             char n[128];
             WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, n, sizeof n, NULL, NULL);
-            score = 1 + (*n && !strncmp(renderer, n, strlen(n)));   /* GL's name starts with the adapter's */
+            score = 1 + (*n && !strncmp(renderer, n, strlen(n)));
             if (score > best_score)
                 snprintf(name, nn, "%s", n);
         }
@@ -164,7 +145,6 @@ static DWORD WINAPI worker_main(LPVOID p)
 }
 #endif
 
-/* gl_context.c, once the context is current: GL's names are copied for the worker, which has no context. */
 void gmv_gpu_profile_start(void)
 {
     const char *e = gmv_getenv("GMV_GPU_PROFILE");
@@ -189,8 +169,6 @@ void gmv_gpu_profile_start(void)
     }
 }
 
-/* 1 = a GPU built into the processor.  Waits for the worker if it is still at it (it is not, by the first frame
-   drawn in the city). */
 int gmv_gpu_integrated(void)
 {
 #ifdef _WIN32

@@ -1,4 +1,3 @@
-/* spawn_fade.c -- SPAWN_FADE */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -10,61 +9,42 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- SPAWN_FADE: the traffic and pedestrians fade in and out (an enhancement, off by default and
-   under ORIGINAL_MAC_EXPERIENCE) ----
-   Coming: the spawner (0x082504, called at 0x082bd1) takes its object from the spawn pool (see the
-   densities above), so the slot it empties names the object, which then fades in over SF_MS.
-   Going: the despawn check 0x1a8f6a (each frame, for each object with flags 0x890) takes an object
-   out of the world by calling 0x020ed0 at 0x1a93e8, whose answer is the next object to look at; an
-   answer of the object itself means it stays (the check's other ways out answer that).  So that call
-   first starts the object fading out and answers the object until it has gone; the call after that
-   takes it out.  If the check stops asking (the object came back in range), it fades back in.
-   Drawing: glitch's CSceneManager draws its lists of scene nodes in renderList<...> and
-   renderListAutoBatching<...> (0x0b84c0, 0x0b7f40, 0x0b8a90, 0x0b91cc, 0x0b96a8, reached through the
-   jumps at 0x5eda02 + 6k), which put the node being drawn at the manager's +0x9c before calling its
-   render (vfunc 0x1c).  A draw whose node hangs under a fading object's own node (obj+0x10, its lights
-   included) takes that object's fade.  Otherwise, while a list is being drawn, a draw whose node stands where a fading object
-   stands (the node's absolute transformation +0x10, translation at +0x40, against the object's
-   own node, obj+0x10) is drawn through shimsgl's dot pattern.  A vehicle's parts and its driver lie
-   within SF_CAR of it, a person's within SF_PERSON. */
+/* 0x082504 0x082bd1 0x1a8f6a 0x890 0x020ed0 0x1a93e8 */
 #define SF_MS          1000.0
 #define SF_N           256
-#define SF_CAR         250.0f     /* wheels and driver; not much more, or a car parked alongside fades too */
+#define SF_CAR         250.0f
 #define SF_PERSON      120.0f
-#define SF_LET_GO_MS   250.0      /* not asked to go for this long: it stays, so it comes back */
+#define SF_LET_GO_MS   250.0
 #define SF_REMOVE_SITE 0x001a93e8u
 #define SF_REMOVE_FN   0x00020ed0u
-#define SF_CATS        0x0063e174u   /* -> the type -> category table (8 = a person) */
+#define SF_CATS        0x0063e174u
 #define SF_STUB0       0x005eda02u
 #define SF_STUB_PTR0   0x0063ec78u
-#define SF_BATCH_LIMIT 0xdc          /* driver: the biggest node the batching lists gather */
+#define SF_BATCH_LIMIT 0xdc
 static const uint32_t sf_lists[5] = { 0x000b84c0u, 0x000b7f40u, 0x000b8a90u, 0x000b91ccu, 0x000b96a8u };
 
 typedef struct {
     uint32_t obj;
-    int out;                  /* fading out */
-    double t0, seen;          /* when the fade (re)started; when the despawn check last asked */
-    float a0, a;              /* how far shown at t0; now */
-    float x, y, z, r;         /* where its node stands; how near a drawn node must be */
-    int alive;                /* found in the world's lists at the last update */
-    int list;                 /* the world list it was in when its fade began (0-2), -1 = none of them */
+    int out;
+    double t0, seen;
+    float a0, a;
+    float x, y, z, r;
+    int alive;
+    int list;
 } sf_ent;
 static sf_ent sf_e[SF_N];
 int sf_n, sf_live, sf_depth, sf_lost;
-static const uint32_t sf_wlists[3] = {0x418, 0x424, 0x430};   /* the world's object lists */
-static int sf_wlen[3];            /* for the log: the longest each was when walked */
+static const uint32_t sf_wlists[3] = {0x418, 0x424, 0x430};
+static int sf_wlen[3];
 static uint32_t sf_mgr[8];
 static int sf_k[8];
 static uint32_t sf_snap[PD_POOL_N];
-static int sf_made, sf_gone;      /* for the log */
-static int sf_add_hit, sf_add_tree, sf_add_near, sf_add_out, sf_add_k[5];   /* additive draws (lights) while something fades */
+static int sf_made, sf_gone;
+static int sf_add_hit, sf_add_tree, sf_add_near, sf_add_out, sf_add_k[5];
 
-/* Every scene node under a fading object's own node (obj+0x10), with the object's alpha.  The car's
-   lights are models hung on its dummy_light / dummy_headlight nodes (0x115b6a), standing too far from
-   the car's middle to be caught by SF_CAR.  A node's children: a list whose head is at node+0xe0, each
-   child linked through its +4 (as 0x4c0c30, the find-by-name, walks it). */
-#define SF_TREE_N     16384           /* a power of two */
-#define SF_TREE_MAX   8192            /* nodes gathered at most (~120 per car, 25 fading = 3000 seen) */
+/* obj+0x10 dummy_light 0x115b6a node+0xe0 0x4c0c30 */
+#define SF_TREE_N     16384
+#define SF_TREE_MAX   8192
 #define SF_KIDS       0xe0
 static struct { uint32_t node, gen; float a; } sf_tree[SF_TREE_N];
 static uint32_t sf_gen;
@@ -115,14 +95,12 @@ static void sf_tree_walk(uint32_t node, float a, int depth)
 static double sf_now(void)
 {
     static LARGE_INTEGER f;
-    LARGE_INTEGER c;
     if (!f.QuadPart)
         QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&c);
-    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+    return (double)gmv_qpc() * 1000.0 / (double)f.QuadPart;
 }
 
-int sf_menu = -1;           /* the options menu's FADE IN TRAFFIC, -1 = not touched */
+int sf_menu = -1;
 
 static int sf_setting(void)
 {
@@ -162,7 +140,6 @@ static void sf_place(sf_ent *e)
     e->r = cats && cats[*(const uint8_t *)(uintptr_t)(e->obj + 0x24)] == 8 ? SF_PERSON : SF_CAR;
 }
 
-/* Start obj fading (out = 1) from wherever it stands now, or from a0 if it isn't fading yet */
 static sf_ent *sf_start(uint32_t obj, int out, float a0, double now)
 {
     sf_ent *e = sf_find(obj);
@@ -176,7 +153,7 @@ static sf_ent *sf_start(uint32_t obj, int out, float a0, double now)
     e = &sf_e[sf_n++];
     memset(e, 0, sizeof *e);
     e->obj = obj, e->out = out, e->a0 = e->a = a0, e->t0 = e->seen = now;
-    /* An object in a world list points back at it (+0x20, set by the list add 0x2056a) */
+    /* +0x20 0x2056a */
     uint32_t world = *(const uint32_t *)(uintptr_t)SV_WORLD, in = *(const uint32_t *)(uintptr_t)(obj + 0x20);
     e->list = -1;
     for (int l = 0; world && l < 3; l++)
@@ -195,7 +172,6 @@ static sf_ent *sf_start(uint32_t obj, int out, float a0, double now)
     return e;
 }
 
-/* Once per list drawn: the fades' progress and where their objects stand */
 static void sf_update(void)
 {
     sf_live = sf_setting();
@@ -203,19 +179,13 @@ static void sf_update(void)
         sf_n = 0;
         return;
     }
-    /* An object can leave the world other ways than the despawn check (a mission's start clears the
-       streets, a replay puts the world back): one no longer in any of the world's lists (+0x418, +0x424,
-       +0x430, each a head at +4 linking objects through +0xc) is let go before it is read.  The world
-       only changes between frames, so this runs at the frame's first list (it took ~2.7% of a tick
-       when run at every list, still ~2.4% once a frame over all three: the lists are long); only the
-       lists the fading objects were in are walked (one that moved to another list is let go too); a
-       bit table keyed by the object's address skips most sf_find calls. */
+    /* +0x418 +0x424 +0x430 +4 +0xc */
     static unsigned walked = ~0u;
     unsigned frame = gmv_gl_frame_no();
     if (sf_n && frame != walked) {
         walked = frame;
         uint32_t world = *(const uint32_t *)(uintptr_t)SV_WORLD;
-        uint32_t bits[64] = {0};                        /* 2048 bits */
+        uint32_t bits[64] = {0};
         unsigned want = 0;
         for (int i = 0; i < sf_n; i++) {
             uint32_t h = (sf_e[i].obj >> 3) & 2047;
@@ -305,7 +275,7 @@ static uint32_t gmv_sf_remove(uint32_t world, uint32_t obj)
         if (e) {
             e->seen = now;
             if (sf_alpha(e, now) > 0)
-                return obj;                     /* stays until it has faded out */
+                return obj;
         }
     }
     if (e)
@@ -320,9 +290,7 @@ static void sf_list(int k, uint32_t mgr, uint32_t pass, uint32_t list, uint32_t 
     if (sf_depth < 8)
         sf_mgr[sf_depth] = mgr, sf_k[sf_depth] = k;
     sf_depth++;
-    /* The batching lists (k 3, 4) let the driver gather nodes that share a material (all the cars'
-       lights) into one draw, sent while a later node is current.  A node whose size (vfunc 0x20) is
-       over the driver's +0xdc is drawn on its own, so while anything fades every node is "too big". */
+    /* 0x20 +0xdc */
     int32_t *lim = NULL, keep = 0;
     uint32_t drv = *(const uint32_t *)(uintptr_t)(mgr + 0x14);
     if (k >= 3 && sf_n && drv) {
@@ -397,7 +365,6 @@ int gmv_spawn_fade_level(int add)
     return a >= 1 ? 64 : (int)(a * 64);
 }
 
-/* DYNAMIC_SHADOWS: the absolute transformation of the node being drawn, if it belongs to a vehicle or a person. */
 const float *gmv_ds_caster(void)
 {
     if (!sf_depth || sf_depth > 8)
@@ -408,8 +375,6 @@ const float *gmv_ds_caster(void)
     return (const float *)(uintptr_t)(node + 0x10);
 }
 
-/* The options menu's FADE IN TRAFFIC: 1 when put in force, 0 when the hooks are not in.  Going off,
-   sf_update lets go of the fades at the next list drawn and the despawn check removes as before. */
 int spawn_fade_set(int on)
 {
     if (!sf_hooked)
@@ -420,11 +385,9 @@ int spawn_fade_set(int on)
     return 1;
 }
 
-/* With GAMEPATCH_TAB the hooks go in even while it is off, so the menu can switch it on; while off
-   they pass every call straight through.  Under ORIGINAL_MAC_EXPERIENCE they are not in at all. */
 void apply_spawn_fade(void)
 {
-    const char *ds = gmv_getenv("GMV_DYNAMIC_SHADOWS");     /* its casters are found through the same lists */
+    const char *ds = gmv_getenv("GMV_DYNAMIC_SHADOWS");
     if (gmv_config_mac() || (!sf_setting() && !tab_live() && !(gmv_env_on(ds))))
         return;
     static void *const wraps[5] = { (void *)gmv_sf_list0, (void *)gmv_sf_list1, (void *)gmv_sf_list2,
@@ -442,20 +405,14 @@ void apply_spawn_fade(void)
         return;
     }
     for (int k = 0; k < 5; k++) {
-        unsigned char code[6] = { 0xe9, 0, 0, 0, 0, 0x90 };
-        int32_t rel = (int32_t)((uint32_t)(uintptr_t)wraps[k] - (SF_STUB0 + 6 * k + 5));
-        memcpy(code + 1, &rel, 4);
-        if (!patch_bytes(SF_STUB0 + 6 * k, code, sizeof code)) {
+        if (!patch_jmp(SF_STUB0 + 6 * k, wraps[k], 6)) {
             gmv_log("[spawnfade] write failed (%lu); SPAWN_FADE skipped\n", GetLastError());
             return;
         }
     }
-    int32_t r = (int32_t)((uint32_t)(uintptr_t)gmv_sf_remove - (SF_REMOVE_SITE + 5));
-    patch_bytes(SF_REMOVE_SITE + 1, (const unsigned char *)&r, 4);
-    if (sm_is_call(PD_MAKE_SITE, PD_MAKE_FN)) {
-        r = (int32_t)((uint32_t)(uintptr_t)gmv_spawn_make - (PD_MAKE_SITE + 5));
-        patch_bytes(PD_MAKE_SITE + 1, (const unsigned char *)&r, 4);
-    }
+    patch_call(SF_REMOVE_SITE, (void *)gmv_sf_remove);
+    if (sm_is_call(PD_MAKE_SITE, PD_MAKE_FN))
+        patch_call(PD_MAKE_SITE, (void *)gmv_spawn_make);
     sf_hooked = 1;
     sf_live = sf_setting();
     gmv_log("[spawnfade] SPAWN_FADE%s: cars and pedestrians fade in and out over %.0f ms\n",

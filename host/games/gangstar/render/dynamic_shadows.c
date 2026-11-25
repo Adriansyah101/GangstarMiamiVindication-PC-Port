@@ -1,4 +1,3 @@
-/* dynamic_shadows.c -- DYNAMIC_SHADOWS */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,78 +11,58 @@
 #include "gangstar.h"
 #include "render.h"
 
-/* ---- DYNAMIC_SHADOWS: an enhancement, off by default and under ORIGINAL_MAC_EXPERIENCE -------------------
-   Shadows that follow the sun and the moon.  The game's own are a ready-made shadow-mesh under each model,
-   whatever the hour; the patches hides them (gmv_ds_node) while this runs.
-   - Neither is up for part of the day (measured: the sun from about 5.05 h to 16.9 h, the moon from about 18.1 h
-     to 3.2 h), and at those hours a thing would stand on nothing.  So a low light's direction is drawn towards
-     straight up: as it sets the shadow shortens to a soft one under the thing, and it stays that way
-     until the next light rises and draws it out again.  It never jumps, and no second map is needed.
-   - Each frame the casters are drawn a second time, into a depth map seen from the sun: an orthographic box
-     DS_RADIUS around a point ahead of the camera, moved in whole texels so that its edges do not crawl.  The
-     view comes from the first caster: its modelview if that puts the eye where the game's camera is (vertices
-     already in world space), or else that with its node's absolute transformation taken out.  The casters are
-     whatever solid is drawn for a node of a vehicle or a person (the patches keeps the table, gmv_ds_caster) and
-     the bodies shine_body knows, which also has the people without a game shadow; the map only holds what the
-     game draws, so a car just off the screen casts nothing.
-   - Only a caster can shadow itself by rounding, so only its pixels (a stencil bit set as it is drawn) need the
-     bias.  On a low sun the bias slides a shadow along the ground by nearly its own length (about 70 cm), which
-     left it short of the feet, so the rest of the world takes next to none.
-   - The pass runs where the reflections do: each pixel's position comes from the frame's depth (as the AO's)
-     and is looked up in the map, 16 filtered taps for a soft edge (SHADOW_QUALITY=2), or every other one of the
-     same 4 x 4 on a map a quarter the size (SHADOW_QUALITY=1, for graphics built into the processor).  Shadowed pixels are multiplied by
-     1 - the light's strength.  A surface turned away from the light takes none, so walls behind a car do not.
-     Below DS_SEA_Z (the sea does not write
-     depth, so this is its bed) nothing is darkened, nor in the fog, or towards the map's edge.
-   - Only the casters are in the map: buildings throw no shadow, so a car in a building's shade still
-     casts one.
-   - SHADOW_QUALITY is taken at a frame's first caster, so a change from the GAMEPATCH tab never has a map of one
-     size looked up as the other. */
-#define DS_SIZE_HIGH 2048                               /* texels of the map a side: SHADOW_QUALITY=2 */
-#define DS_SIZE_LOW 1024                                /* SHADOW_QUALITY=1 */
-int g_shadow_quality = 2;                               /* SHADOW_QUALITY (draw_hooks.c, the GAMEPATCH tab) */
-#define DS_RADIUS 6000.0f                               /* half its width in world units (about 1 cm): 60 m */
-#define DS_DEPTH 20000.0f                               /* half its depth: 200 m up and down the sun's line */
-#define DS_AHEAD 0.6f                                   /* its centre, ahead of the camera, in DS_RADIUS */
-#define DS_BIAS 25.0f                                   /* world units a caster's pixel may be behind the map's */
-#define DS_BIAS_WORLD 1.0f                              /* the same for the rest of the world */
-#define DS_BIT 0x40                                     /* the stencil bit a caster sets */
-#define DS_EYE_NEAR 500.0f                              /* world units from the game's camera for a modelview to be the view */
+#define DS_SIZE_HIGH 2048
+#define DS_SIZE_LOW 1024
+int g_shadow_quality = 2;
+#define DS_RADIUS 6000.0f
+#define DS_DEPTH 20000.0f
+#define DS_AHEAD 0.6f
+#define DS_BIAS 25.0f
+#define DS_BIAS_WORLD 1.0f
+#define DS_BIT 0x40
+#define DS_EYE_NEAR 500.0f
 #define DS_STRENGTH 0.45f
-#define DS_MOON_STRENGTH 0.30f                          /* moonlight is the lesser part of a night's light */
-#define DS_SKY_STRENGTH 0.40f                        /* the one under a thing, with neither up */
-#define DS_SKY_SOFT 2.0f                                /* its taps' spacing, in texels */
-#define DS_LOW 0.03f                                    /* sine of a light's height where it no longer counts */
-#define DS_SUN_HIGH 0.20f                               /* the same where it has the whole say: about 11.5 degrees */
-#define DS_MOON_HIGH 0.14f                              /* about 8; it peaks at 27 */
+#define DS_MOON_STRENGTH 0.30f
+#define DS_SKY_STRENGTH 0.40f
+#define DS_SKY_SOFT 2.0f
+#define DS_LOW 0.03f
+#define DS_SUN_HIGH 0.20f
+#define DS_MOON_HIGH 0.14f
 #define DS_SEA_Z (-20.0f)
-extern float g_sun_dir[3];                              /* the patches: towards the sun; 0,0,0 until it is known */
-extern float g_moon_dir[3];                             /* the same for the moon */
-extern float g_cam_world[3];                            /* the patches: the camera's position at the last tick */
+#define DS_QUEUE 512
+extern float g_sun_dir[3];
+extern float g_moon_dir[3];
+extern float g_cam_world[3];
 
 static struct {
-    unsigned frame;                                     /* g_frame_no + 1 of the last frame with a map */
-    unsigned tried;                                     /* the same, of the last frame looked at */
-    unsigned n[4];                                      /* casters of that frame, by ds_kind's kind */
-    unsigned mask;                                      /* g_frame_no + 1 of the last frame the stencil bit was cleared */
+    unsigned frame;
+    unsigned tried;
+    unsigned n[4];
+    unsigned mask;
 #if GMV_DEV
-    int eye_said;                                       /* first casters that gave no view, logged */
-    unsigned eye_frame;                                 /* g_frame_no + 1 of the last frame with one */
-    unsigned eye_bad, eye_frames, eye_nomap, eye_nocam; /* since the last summary */
-    unsigned eye_kind[4];                               /* by ds_kind's kind */
-    unsigned eye_reach, eye_reach_frames, eye_reach_nomap, eye_reach_frame; /* those the map could have held */
-    float eye_min;                                      /* the nearest, world units */
-    DWORD eye_t;                                        /* when that was */
+    int eye_said;
+    unsigned eye_frame;
+    unsigned eye_bad, eye_frames, eye_nomap, eye_nocam;
+    unsigned eye_kind[4];
+    unsigned eye_reach, eye_reach_frames, eye_reach_nomap, eye_reach_frame;
+    float eye_min;
+    DWORD eye_t;
 #endif
-    int ready;                                         /* 1 = the programs are built, -1 = they failed */
-    int size;                                           /* the map's texels a side; 0 before it has storage */
-    GLuint p_map, p_pass[2], fbo, t;                    /* p_pass: 8 taps, 16 taps */
-    GLfloat lvp[16];                                    /* eye space to the map's clip space */
-    GLfloat iv[16];                                     /* eye space to world */
-    GLfloat leye[3];                                    /* towards the sun, in eye space */
-    GLfloat strength, soft;                             /* of the frame's light */
-    GLfloat dir[3];                                     /* towards it, in the world */
-    const char *source;                                 /* for the log */
+    int ready;
+    int size;
+    GLuint p_map, p_pass[2], fbo, t;
+    GLint u_lvp;
+    GLfloat lvp[16];
+    GLfloat iv[16];
+    GLfloat leye[3];
+    GLfloat strength, soft;
+    GLfloat dir[3];
+    const char *source;
+    unsigned nq;
+    struct {
+        mark_t d;
+        GLfloat m[16];
+    } q[DS_QUEUE];
 } ds;
 
 int ds_frame(void)
@@ -91,7 +70,6 @@ int ds_frame(void)
     return ds.frame == g_frame_no + 1;
 }
 
-/* Before a draw to the screen, with shine_body's answer: 1 shiny car, 2 character, 3 another part, 0 no caster. */
 int ds_kind(GLenum mode, GLsizei count, int body)
 {
     if (!g_ds_want || !g_ds)
@@ -108,19 +86,19 @@ int ds_kind(GLenum mode, GLsizei count, int body)
 static const char ds_vs_map[] =
     "#version 120\n"
     "uniform mat4 lvp;\n"
-    "void main() { gl_Position = lvp * gl_ModelViewMatrix * gl_Vertex; }\n";
+    "void main() { gl_Position = lvp * gl_Vertex; }\n";
 
 static const char ds_fs_map[] =
     "#version 120\n"
     "void main() { gl_FragColor = vec4(1.0); }\n";
 
-static const char ds_fs[] =                            /* after "#version 120" and TAPS (8 or 16) */
+static const char ds_fs[] =
     "uniform sampler2D dep;\n"
     "uniform sampler2DShadow smap;\n"
     "uniform vec2 full, dr;\n"
-    "uniform vec4 vp, fogp, wz, leye;\n"                /* wz: the row of eye to world giving the height */
+    "uniform vec4 vp, fogp, wz, leye;\n"
     "uniform mat4 proj, invp, lvp;\n"
-    "uniform float str, texel, soft, tw, zs, bias, sl, seaz;\n"   /* tw: a texel in world units; zs: map depth per world unit */
+    "uniform float str, texel, soft, tw, zs, bias, sl, seaz;\n"
     "vec3 pos(vec2 px) {\n"
     "    float d = texture2D(dep, px / full).r;\n"
     "    vec4 p = invp * vec4((px - vp.xy) / vp.zw * 2.0 - 1.0, (d - dr.x) / (dr.y - dr.x) * 2.0 - 1.0, 1.0);\n"
@@ -135,7 +113,6 @@ static const char ds_fs[] =                            /* after "#version 120" a
     "    vec3 q = (lvp * vec4(pc, 1.0)).xyz;\n"
     "    float e = max(abs(q.x), abs(q.y));\n"
     "    if (e >= 1.0 || abs(q.z) >= 1.0) discard;\n"
-    /* the surface's facing, each way from the nearer neighbour, so a silhouette's other side does not count */
     "    vec3 xa = pos(px + vec2(1.0, 0.0)) - pc, xb = pc - pos(px - vec2(1.0, 0.0));\n"
     "    vec3 ya = pos(px + vec2(0.0, 1.0)) - pc, yb = pc - pos(px - vec2(0.0, 1.0));\n"
     "    vec3 n = normalize(cross(dot(xa, xa) < dot(xb, xb) ? xa : xb, dot(ya, ya) < dot(yb, yb) ? ya : yb));\n"
@@ -162,7 +139,7 @@ static const char ds_fs[] =                            /* after "#version 120" a
     "    for (float j = -1.5; j < 2.0; j += 1.0)\n"
     "        for (float i = -1.5; i < 2.0; i += 1.0)\n"
     "            lit += shadow2D(smap, vec3(uvz.xy + vec2(i, j) * st, uvz.z)).r;\n"
-    "#else\n"                                           /* every other tap of the same 4 x 4, as on a draughts board */
+    "#else\n"
     "    for (float j = -1.5; j < 2.0; j += 2.0) {\n"
     "        lit += shadow2D(smap, vec3(uvz.xy + vec2(-1.5, j) * st, uvz.z)).r;\n"
     "        lit += shadow2D(smap, vec3(uvz.xy + vec2(0.5, j) * st, uvz.z)).r;\n"
@@ -175,26 +152,25 @@ static const char ds_fs[] =                            /* after "#version 120" a
     "    gl_FragColor = vec4(vec3(1.0 - k), 1.0);\n"
     "}\n";
 
-static char ds_fs8[sizeof ds_fs + 32], ds_fs16[sizeof ds_fs + 32];   /* ds_fs with its tap count */
+static char ds_fs8[sizeof ds_fs + 32], ds_fs16[sizeof ds_fs + 32];
 
-/* The map's storage at size texels a side (again when SHADOW_QUALITY changes); 0 = its framebuffer is not complete. */
 static int ds_alloc(int size)
 {
     GLint dfb = 0, rfb = 0;
     dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING);
     rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
     glPushAttrib(GL_TEXTURE_BIT | GL_COLOR_BUFFER_BIT | GL_PIXEL_MODE_BIT);
-    ao_tex(ds.t, 0x81A6, size, size, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT);   /* DEPTH_COMPONENT24 */
+    ao_tex(ds.t, 0x81A6, size, size, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, 0x884C, 0x884E);     /* GL_TEXTURE_COMPARE_MODE, COMPARE_R_TO_TEXTURE */
-    glTexParameteri(GL_TEXTURE_2D, 0x884D, GL_LEQUAL);  /* GL_TEXTURE_COMPARE_FUNC */
+    glTexParameteri(GL_TEXTURE_2D, 0x884C, 0x884E);
+    glTexParameteri(GL_TEXTURE_2D, 0x884D, GL_LEQUAL);
     msf.BindFramebuffer(MS_FRAMEBUFFER, ds.fbo);
-    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8D00, GL_TEXTURE_2D, ds.t, 0);   /* GL_DEPTH_ATTACHMENT */
+    aof.FramebufferTexture2D(MS_FRAMEBUFFER, 0x8D00, GL_TEXTURE_2D, ds.t, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
     GLenum st = msf.CheckFramebufferStatus(MS_FRAMEBUFFER);
-    msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);       /* first: the pop's draw buffer is the game's framebuffer's */
+    msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);
     msf.BindFramebuffer(MS_DRAW_FB, (GLuint)dfb);
     glPopAttrib();
     if (st != 0x8CD5) {
@@ -218,15 +194,15 @@ static int ds_init(void)
         gmv_log("[shadow] dynamic shadows off\n");
         return 0;
     }
+    ds.u_lvp = aof.GetUniformLocation(ds.p_map, "lvp");
     glGenTextures(1, &ds.t);
     msf.GenFramebuffers(1, &ds.fbo);
     return 1;
 }
 
-/* At a frame's first caster: the map at SHADOW_QUALITY's size.  0 = it cannot be had. */
 static int ds_size_sync(void)
 {
-    int q = g_shadow_quality ? g_shadow_quality : gmv_gpu_integrated() ? 1 : 2;   /* 0 = auto: GPU_PROFILE */
+    int q = g_shadow_quality ? g_shadow_quality : gmv_gpu_integrated() ? 1 : 2;
     int want = q == 1 ? DS_SIZE_LOW : DS_SIZE_HIGH;
     if (want == ds.size)
         return 1;
@@ -239,14 +215,13 @@ static int ds_size_sync(void)
     return 1;
 }
 
-static void ds_mul(GLfloat *o, const GLfloat *a, const GLfloat *b)
+void ds_mul(GLfloat *o, const GLfloat *a, const GLfloat *b)
 {
     for (int c = 0; c < 4; c++)
         for (int r = 0; r < 4; r++)
             o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
 }
 
-/* The frame's light, from the sun or else the moon: 0 until the sun is known. */
 static int ds_light(void)
 {
     const float *m = g_sun_dir, *d = NULL;
@@ -289,10 +264,6 @@ static int ds_eye_near(const GLfloat *iv)
 }
 
 #if GMV_DEV
-/* A first caster that gave no view: it alone stays out of this frame's map, and the next caster is asked.  The
-   camera is 0,0,0 until the game's first tick with one (nothing can be near it then), and a caster with a
-   transform of its own needs its node in the table, or the eye comes out in that transform's space: its length is
-   then how far the caster is, and only one within the map's reach can lose a shadow by this. */
 static void ds_eye_note(const float *abs, const GLfloat *iv, int kind)
 {
     int nocam = !g_cam_world[0] && !g_cam_world[1] && !g_cam_world[2];
@@ -322,7 +293,6 @@ static void ds_eye_note(const float *abs, const GLfloat *iv, int kind)
     }
 }
 
-/* What it came to, at most once a minute.  A frame that found no view at all has no shadows. */
 void ds_eye_frame_end(void)
 {
     if (ds.eye_frame == g_frame_no + 1 && ds.tried != ds.eye_frame) {
@@ -342,18 +312,16 @@ void ds_eye_frame_end(void)
 }
 #endif
 
-/* The first caster of a frame: where the sun's map lies, from the view.  0 = no sun this frame, -1 = no view
-   from this caster. */
 static int ds_begin(int kind)
 {
     if (!ds_light())
         return 0;
     GLfloat v[16], iv[16], lw[16];
-    glGetFloatv(GL_MODELVIEW_MATRIX, v);
+    memcpy(v, ao_matrix(GL_MODELVIEW), sizeof v);
     if (!ao_invert(v, iv))
         return -1;
     if (!ds_eye_near(iv)) {
-        const float *abs = gmv_ds_caster();             /* a transform of its own: the rest is the view */
+        const float *abs = gmv_ds_caster();
         GLfloat ia[16], own[16];
         if (abs && ao_invert(abs, ia)) {
             memcpy(own, v, sizeof v);
@@ -369,13 +337,13 @@ static int ds_begin(int kind)
         }
     }
     const float *l = ds.dir;
-    float u[3] = {-l[1], l[0], 0};                      /* the map's axes: across the sun's line, Z being up */
+    float u[3] = {-l[1], l[0], 0};
     float ul = sqrtf(u[0] * u[0] + u[1] * u[1]);
     if (ul < 1e-3f)
         u[0] = 1, u[1] = 0, ul = 1;
     u[0] /= ul, u[1] /= ul;
     float w[3] = {l[1] * u[2] - l[2] * u[1], l[2] * u[0] - l[0] * u[2], l[0] * u[1] - l[1] * u[0]};
-    float fw = g_ao_proj[11] > 0 ? 1.0f : -1.0f;        /* the way the eye looks along its own z */
+    float fw = g_ao_proj[11] > 0 ? 1.0f : -1.0f;
     float c[3];
     for (int i = 0; i < 3; i++)
         c[i] = iv[12 + i] + iv[8 + i] * fw * DS_RADIUS * DS_AHEAD;
@@ -400,22 +368,17 @@ static int ds_begin(int kind)
     return 1;
 }
 
-/* After a caster's draw, in the game's state: it is drawn again into the map. */
 void ds_mark(int kind, GLenum mode, GLsizei count, GLenum type, const void *idx)
 {
-    static void(APIENTRY * de)(GLenum, GLsizei, GLenum, const void *);
     if (!ds.ready)
         ds.ready = ds_init() ? 1 : -1;
-    if (!de)
-        de = gl_real("glDrawElements");
-    if (ds.ready < 0 || !de) {
+    if (ds.ready < 0) {
         g_ds = 0;
         return;
     }
     if (ds.tried == g_frame_no + 1 && !ds_frame())
-        return;                                         /* no sun to cast from, this frame */
-    int first = ds.tried != g_frame_no + 1;
-    if (first) {
+        return;
+    if (ds.tried != g_frame_no + 1) {
         if (!ds_size_sync()) {
             ds.ready = -1;
             g_ds = 0;
@@ -423,72 +386,76 @@ void ds_mark(int kind, GLenum mode, GLsizei count, GLenum type, const void *idx)
         }
         int b = ds_begin(kind);
         if (b < 0)
-            return;                                     /* a later caster's may be the view */
+            return;
         ds.tried = g_frame_no + 1;
         if (!b)
             return;
+        ds.frame = g_frame_no + 1;
+        ds.n[1] = ds.n[2] = ds.n[3] = 0;
+        ds.nq = 0;
     }
-    GLint dfb = 0, rfb = 0, prog = 0;
-    dfb = gmv_gl_cur_fb(MS_DRAW_FB_BINDING);
-    rfb = gmv_gl_cur_fb(MS_READ_FB_BINDING);
-    prog = gmv_gl_cur_prog();                       /* GL_CURRENT_PROGRAM, QUERY_FREE */
-    glPushAttrib(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_ENABLE_BIT | GL_VIEWPORT_BIT | GL_SCISSOR_BIT);
+    ds.n[kind]++;
+    if (ds.nq == DS_QUEUE || !mark_take(&ds.q[ds.nq].d, mode, count, type, idx, 0))
+        return;
+    ds_mul(ds.q[ds.nq++].m, ds.lvp, ao_matrix(GL_MODELVIEW));
+}
+
+static void ds_flush(void)
+{
     msf.BindFramebuffer(MS_FRAMEBUFFER, ds.fbo);
     glViewport(0, 0, ds.size, ds.size);
     glDepthRange(0, 1);
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
     glDepthFunc(GL_LEQUAL);
-    glDisable(GL_BLEND);
-    glDisable(GL_ALPHA_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glDisable(GL_CULL_FACE);                            /* a model may have no underside */
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    if (first) {
-        ds.frame = g_frame_no + 1;
-        ds.n[1] = ds.n[2] = ds.n[3] = 0;
-        glClearDepth(1);
-        glClear(GL_DEPTH_BUFFER_BIT);
-    }
-    ds.n[kind]++;
+    glClearDepth(1);
+    glClear(GL_DEPTH_BUFFER_BIT);
     aof.UseProgram(ds.p_map);
-    aof.UniformMatrix4fv(aof.GetUniformLocation(ds.p_map, "lvp"), 1, GL_FALSE, ds.lvp);
-    de(mode, count, type, idx);
-    aof.UseProgram((GLuint)prog);
-    msf.BindFramebuffer(MS_READ_FB, (GLuint)rfb);       /* first: the pop's draw buffer is the game's framebuffer's */
-    msf.BindFramebuffer(MS_DRAW_FB, (GLuint)dfb);
-    glPopAttrib();
+    mark_begin(0);
+    for (unsigned i = 0; i < ds.nq; i++) {
+        aof.UniformMatrix4fv(ds.u_lvp, 1, GL_FALSE, ds.q[i].m);
+        mark_draw(&ds.q[i].d, 0);
+    }
+    mark_end();
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
 }
 
-/* Around a caster's draw to the screen: the stencil bit marks its pixels.  Returns whether to pop. */
 int ds_mask_begin(int body)
 {
     if (!body || !g_ds_want || !g_ds)
         return 0;
-    glPushAttrib(GL_STENCIL_BUFFER_BIT | GL_SCISSOR_BIT);
+    int sc = 0;
     if (ds.mask != g_frame_no + 1) {
         ds.mask = g_frame_no + 1;
-        glDisable(GL_SCISSOR_TEST);
+        sc = g_glt.scissor;
+        if (sc)
+            glDisable(GL_SCISSOR_TEST);
         glStencilMask(DS_BIT);
         glClearStencil(0);
         glClear(GL_STENCIL_BUFFER_BIT);
+        glClearStencil(g_glt.st_clear);
     }
     glEnable(GL_STENCIL_TEST);
     glStencilFunc(GL_ALWAYS, DS_BIT, DS_BIT);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
     glStencilMask(DS_BIT);
-    return 1;
+    return 1 + sc;
 }
 
 void ds_mask_end(int on)
 {
-    if (on)
-        glPopAttrib();
+    if (!on)
+        return;
+    if (!g_glt.stencil)
+        glDisable(GL_STENCIL_TEST);
+    glStencilFunc(g_glt.st_func, g_glt.st_ref, g_glt.st_mask);
+    glStencilOp(g_glt.st_op[0], g_glt.st_op[1], g_glt.st_op[2]);
+    glStencilMask(g_glt.st_wmask);
+    if (on == 2)
+        glEnable(GL_SCISSOR_TEST);
 }
 
-/* Inside ao_run's state save, on the frame's map; li is the layer most draws had. */
 void ds_pass(int w, int h, int li)
 {
     const GLfloat *P = g_ao_layer[li].m, *dr = g_ao_layer[li].dr, *fogs = g_ao_layer[li].fog;
@@ -501,7 +468,7 @@ void ds_pass(int w, int h, int li)
         g_ds = 0;
         return;
     }
-    GLuint dep = post_depth(w, h);                              /* SHARED_RESOLVE; else a copy of its own */
+    GLuint dep = post_depth(w, h);
     if (!dep) {
         msf.BindFramebuffer(MS_READ_FB, g_ms_fbo);
         msf.BindFramebuffer(MS_DRAW_FB, ssr.fbo_depth);
@@ -509,8 +476,9 @@ void ds_pass(int w, int h, int li)
         dep = ssr.t_depth;
     }
     ssr_fog(fogs, fogp);
+    ds_flush();
 
-    GLuint p = ds.p_pass[ds.size != DS_SIZE_LOW];         /* SHADOW_QUALITY: 8 or 16 taps */
+    GLuint p = ds.p_pass[ds.size != DS_SIZE_LOW];
     aof.UseProgram(p);
     aof.Uniform1i(aof.GetUniformLocation(p, "dep"), 0);
     aof.Uniform1i(aof.GetUniformLocation(p, "smap"), 1);
@@ -529,7 +497,7 @@ void ds_pass(int w, int h, int li)
     aof.Uniform1f(aof.GetUniformLocation(p, "tw"), 2.0f * DS_RADIUS / (float)ds.size);
     aof.Uniform1f(aof.GetUniformLocation(p, "zs"), 0.5f / DS_DEPTH);
     aof.Uniform1f(aof.GetUniformLocation(p, "seaz"), DS_SEA_Z);
-    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);             /* the screen */
+    msf.BindFramebuffer(MS_FRAMEBUFFER, g_ms_fbo);
     glViewport(0, 0, w, h);
     aof.ActiveTexture(0x84C1);
     glBindTexture(GL_TEXTURE_2D, ds.t);
@@ -537,10 +505,12 @@ void ds_pass(int w, int h, int li)
     glBindTexture(GL_TEXTURE_2D, dep);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ZERO, GL_SRC_COLOR);
-    aof.BlendEquation(0x8006);                                  /* GL_FUNC_ADD */
+    aof.BlendEquation(0x8006);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    GLint bias = aof.GetUniformLocation(p, "bias"), sl = aof.GetUniformLocation(p, "sl"), sbits = 0;
-    glGetIntegerv(GL_STENCIL_BITS, &sbits);
+    GLint bias = aof.GetUniformLocation(p, "bias"), sl = aof.GetUniformLocation(p, "sl");
+    static GLint sbits = -1;
+    if (sbits < 0)
+        glGetIntegerv(GL_STENCIL_BITS, &sbits);
     if (sbits) {
         glEnable(GL_STENCIL_TEST);
         glStencilMask(0);
@@ -551,7 +521,7 @@ void ds_pass(int w, int h, int li)
         ao_tri();
         glStencilFunc(GL_EQUAL, DS_BIT, DS_BIT);
     }
-    aof.Uniform1f(bias, DS_BIAS);                               /* no stencil: all of it, as a caster's */
+    aof.Uniform1f(bias, DS_BIAS);
     aof.Uniform1f(sl, 2);
     ao_tri();
     glDisable(GL_STENCIL_TEST);
@@ -563,7 +533,6 @@ void ds_pass(int w, int h, int li)
                 runs, w, h, ds.n[1], ds.n[2], ds.n[3], ds.source, ds.dir[0], ds.dir[1], ds.dir[2], g_tod_ms / 3600000.0f, ds.strength);
 }
 
-/* the patches: the shadows are being drawn, so the game's own are to go. */
 int gmv_ds_active(void)
 {
     return g_ds_want && g_ds;

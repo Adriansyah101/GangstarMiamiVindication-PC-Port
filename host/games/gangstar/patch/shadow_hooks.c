@@ -1,4 +1,3 @@
-/* shadow_hooks.c -- DYNAMIC_SHADOWS: the game side of the shadows */
 #include "compat.h"
 #include <stdint.h>
 #include <string.h>
@@ -9,29 +8,20 @@
 #include "gangstar.h"
 #include "patch.h"
 
-#define SM_TOD_SITE   0x001420d3u   /* call 0x142892 (time-of-day update; arg: the time object) */
+#define SM_TOD_SITE   0x001420d3u   /* call 0x142892 */
 #define SM_BB_VT_RENDER    0x00676a90u
 #define SM_BB_VT_THUNK     0x00676ae8u
 
-/* ---- DYNAMIC_SHADOWS: the game's own shadows (the GL shim draws the new ones) ----
-   A shadow-node is a mesh of the model, the same whatever the hour: a vehicle's at +0x270 (found by 0x11455a),
-   a character's at +0x2f0 (0x74aea, on this + 0x2e8).  Each update (0x112bc4, 0x76090) sets its visibility each
-   tick, while it is visible, from the profile's flag and gTweakEnableShadow; both tests now go to gmv_ds_node.
-   While the new shadows run, the node is hidden and kept in a list; once they stop, the list's nodes are shown
-   again.  A node on the list may have gone with its owner since, so the owner must still be one the world or a
-   pool holds, and the node's page and vtable are checked too (a model can be changed under a living owner).
-   Those updates also say what casts: every scene node under the owner's own (obj+0x10) goes in a table, which the
-   draws look up by the node being drawn (gmv_ds_caster).  Each table lives DS_TREE_FRAMES and the last one still
-   counts, so a part hung on later is at most that late and an owner updated less often does not flicker. */
-#define DS_TREE_N      65536u        /* a power of two */
+/* +0x270 0x11455a +0x2f0 0x74aea 0x2e8 0x112bc4 0x76090 */
+#define DS_TREE_N      65536u
 #define DS_TREE_MAX    32768
 #define DS_TREE_FRAMES 30u
-#define DS_KIDS        0xe0          /* a node's children: see SF_KIDS */
+#define DS_KIDS        0xe0
 #define DS_NODE_CAR    0x00112c3au
 #define DS_NODE_PERSON 0x000775dbu
 #define DS_NODES       1024
-#define DS_PROFILE_PP  0x0063dfbcu   /* -> the profile; +8: the game's shadows */
-#define DS_TWEAK       0x00641120u   /* gTweakEnableShadow */
+#define DS_PROFILE_PP  0x0063dfbcu
+#define DS_TWEAK       0x00641120u
 static struct { unsigned char *n; void *vt; uint32_t owner; int copy; } ds_nodes[DS_NODES];
 static int ds_nodes_n, ds_nodes_at;
 
@@ -67,7 +57,6 @@ static uint32_t ds_tree_gen = 1;
 static unsigned ds_tree_frame;
 static int ds_tree_cur, ds_tree_used;
 
-/* Whether the node is there; if not and add is set, it is put there. */
 int ds_tree_has(int t, uint32_t node, int add)
 {
     uint32_t gen = ds_tree_gen - (uint32_t)(t != ds_tree_cur);
@@ -102,7 +91,7 @@ static void ds_tree_owner(uint32_t obj)
     unsigned frame = gmv_gl_frame_no();
     if (frame - ds_tree_frame >= DS_TREE_FRAMES) {
         ds_tree_frame = frame;
-        ds_tree_gen++;                              /* so the old table's entries are its gen - 1, as has() reads them */
+        ds_tree_gen++;
         ds_tree_cur ^= 1;
         ds_tree_used = 0;
     }
@@ -130,7 +119,7 @@ void gmv_ds_node(unsigned char *n, uint32_t obj)
     ((sm_vfn_i)sm_vt(n)[0x48 / 4])(n, 0);
     for (int i = 0; i < ds_nodes_n; i++)
         if (ds_nodes[i].n == n) {
-            ds_nodes[i].vt = *(void **)n;           /* the game showed it again, or it is a new node in the old one's place */
+            ds_nodes[i].vt = *(void **)n;
             ds_nodes[i].owner = obj;
             ds_nodes[i].copy = pd_is_extra(obj);
             return;
@@ -144,13 +133,13 @@ void gmv_ds_node(unsigned char *n, uint32_t obj)
         ds_nodes_n++;
 }
 
-/* eax = the node, esi = its owner; the rest of the test at the site is skipped. */
+/* eax esi */
 __attribute__((naked)) static void ds_node_stub(void)
 {
     __asm__("pushl %esi\n\tpushl %eax\n\tcall " GMV_ASM_SYM(gmv_ds_node) "\n\taddl $8, %esp\n\tret");
 }
 
-/* testb $1,0x108(%eax); je +0x3a: becomes the call and a jump to that same place. */
+/* testb $1; je +0x3a: */
 static void ds_node_hook(uint32_t site)
 {
     static const unsigned char want[] = {0xf6, 0x80, 0x08, 0x01, 0x00, 0x00, 0x01, 0x74, 0x3a};
@@ -170,18 +159,18 @@ void apply_sun_moon(void)
     int ds_key = gmv_env_on(ds);
     sm_mode_set(!e || !*e || *e == '0' ? 0 : *e == '2' ? 2 : 1);
     if (gmv_config_mac())
-        return;                                 /* the Mac's sky: the hooks come with the switch */
+        return;
     if (tab_live() || ds_key) {
         ds_node_hook(DS_NODE_CAR);
         ds_node_hook(DS_NODE_PERSON);
     }
     if (!g_sm_on && !tab_live() && !ds_key) {
-        if (!bloom_windows_on())
+        if (!bloom_clock_on())
             return;
         if (!sm_is_call(SM_TOD_SITE, SM_TOD_FN))
-            gmv_log("[gamepatch] time-of-day call not the expected bytes; BLOOM_WINDOWS has no clock\n");
+            gmv_log("[gamepatch] time-of-day call not the expected bytes; the bloom has no clock\n");
         else if (sm_redirect(SM_TOD_SITE, (void *)gmv_sun_moon_tod))
-            gmv_log("[gamepatch] the game's clock read for BLOOM_WINDOWS\n");
+            gmv_log("[gamepatch] the game's clock read for the bloom\n");
         return;
     }
     if (!sm_is_call(SM_TOD_SITE, SM_TOD_FN) || !sm_is_call(sm_track_sites[0], SM_TRACK_FN) ||

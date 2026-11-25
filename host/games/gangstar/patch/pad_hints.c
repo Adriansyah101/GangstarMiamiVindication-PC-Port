@@ -1,4 +1,3 @@
-/* pad_hints.c -- PAD_HINTS: tutorial boxes name the pad's buttons */
 #include "compat.h"
 #include <math.h>
 #include <stdint.h>
@@ -11,23 +10,11 @@
 #include "gangstar.h"
 #include "patch.h"
 
-/* ---- PAD_HINTS (menu: PAD BUTTON HINTS): the in-game tutorial boxes name the pad's buttons while the
-   pad is the last thing used (an enhancement; off under
-   ORIGINAL_MAC_EXPERIENCE) ----
-   A tutorial's text comes from 0x1902a4(tutorials, title id, std::string *out), called once at
-   0x16ee2d: the template is the string id title + 1 (GLOBAL_TUTO_CONTENT_*; the files' "\0" "\1" marks,
-   held as <font color="#FFFF33"> </font> once loaded, mark the yellow
-   parts), filled with the keyboard's key names for the actions it needs (0x182a48 through the
-   keyboard schemes [menu mgr+0x1f0..0x1fc]).  With the pad last used (a pad press or a stick push
-   after the last key press or mouse click), ours writes the text with the pad's button names instead:
-   GTA-LIKE's from pl_map, the Mac layout's from the pad schemes [menu mgr+0x204..0x210] (button ->
-   logical id at +0x20, logical id -> action at +0x38; the controls page's rows).  The texts are
-   English (several originals talk of the mouse); in another language, or when an action has no
-   button, the game's own keyboard text stays. */
-#define PH_SITE      0x0016ee2du     /* call 0x1902a4 (tutorials, title, out)                       */
+/* 0x1902a4 0x16ee2d 0x182a48 [mgr+0x1f0..0x1fc] */
+#define PH_SITE      0x0016ee2du     /* call 0x1902a4 */
 #define PH_FN        0x001902a4u
-#define PH_ASSIGN    0x005edde0u     /* std::string::assign(const char *) (the dyld stub)           */
-#define PH_MGR       0x00a064a0u     /* the menu manager (0x15e4fa's static) and its guard          */
+#define PH_ASSIGN    0x005edde0u
+#define PH_MGR       0x00a064a0u     /* 0x15e4fa */
 #define PH_MGR_GUARD 0x00a066d8u
 int g_ph_on, g_ph_ok;
 
@@ -39,7 +26,7 @@ int ph_set(int on)
     return g_ph_ok || !on;
 }
 
-/* In-order successor in a libstdc++ red-black tree (node: +4 parent, +8 left, +0xc right). */
+/* +4 +8 +0xc */
 static const unsigned char *ph_next(const unsigned char *n)
 {
     const unsigned char *p;
@@ -57,7 +44,6 @@ static const unsigned char *ph_next(const unsigned char *n)
     return *(const unsigned char *const *)(n + 0xc) != p ? p : n;
 }
 
-/* The Mac layout's pad button (0-11) for an action of a kind, or -1. */
 static int ph_mac_button(int kind, int action)
 {
     const unsigned char *mgr = (const unsigned char *)(uintptr_t)PH_MGR, *sc = NULL, *n, *end;
@@ -84,7 +70,6 @@ static int ph_mac_button(int kind, int action)
     return -1;
 }
 
-/* The button (0-11, 12-15 the D-pad's up right down left) that does an action, or -1. */
 static int ph_button(int kind, int action)
 {
     if (g_pl_on) {
@@ -110,7 +95,6 @@ static const char *ph_name(int b)
     return st >= 2 ? ps[b] : xbox[b];
 }
 
-/* The name of the first action of `acts` (0-ended) with a button, or NULL. */
 static const char *ph_act(int kind, const int *acts)
 {
     for (; *acts; acts++) {
@@ -123,45 +107,43 @@ static const char *ph_act(int kind, const int *acts)
 
 #define PH_A(...) ((const int[]){ __VA_ARGS__, 0 })
 
-/* The highlight marks as the game holds them once loaded (the "\0" "\1" of the text files). */
 #define PH_HL  "<font color=\"#FFFF33\">"
 #define PH_END "</font>"
 
-/* Our text for a tutorial, or 0 to keep the game's. */
 static int ph_text(int title, char *t, size_t n)
 {
     const char *a, *b, *c, *d;
     switch (title) {
-    case 0x3079:                                                    /* moving */
+    case 0x3079:
         if (!(a = ph_act(PL_FOOT, PH_A(0x12))))
             return 0;
         snprintf(t, n, "Use the " PH_HL "Left Stick" PH_END " to walk and press " PH_HL "%s" PH_END " to run.", a);
         return 1;
-    case 0x307b:                                                    /* the mini-map */
+    case 0x307b:
         if (!(a = ph_act(PL_FOOT, PH_A(0xb))))
             return 0;
         snprintf(t, n, "If you can't see the spot you should go to, you can always refer to the mini-map. "
                        "You can even press " PH_HL "%s" PH_END " to enlarge it.", a);
         return 1;
-    case 0x307d:                                                    /* get in a car */
+    case 0x307d:
         if (!(a = ph_act(PL_FOOT, PH_A(3, 5))))
             return 0;
         snprintf(t, n, "Press " PH_HL "%s" PH_END " to enter or exit a vehicle.", a);
         return 1;
-    case 0x307f:                                                    /* driving */
+    case 0x307f:
         if (!(a = ph_act(PL_CAR, PH_A(0x27, 0x12))) || !(b = ph_act(PL_CAR, PH_A(0x28, 0x11))))
             return 0;
         snprintf(t, n, "When driving, use " PH_HL "%s" PH_END " to accelerate, " PH_HL "%s" PH_END " to brake/reverse, and the "
                        "" PH_HL "Left Stick" PH_END " to turn left/right.", a, b);
         return 1;
-    case 0x3081:                                                    /* the helicopter */
+    case 0x3081:
         if (!(a = ph_act(PL_FLY, PH_A(0x27))) || !(b = ph_act(PL_FLY, PH_A(0x28))) ||
             !(c = ph_act(PL_FLY, PH_A(0x29))) || !(d = ph_act(PL_FLY, PH_A(0x2a))))
             return 0;
         snprintf(t, n, "Use " PH_HL "%s" PH_END " and " PH_HL "%s" PH_END " to adjust the altitude and " PH_HL "%s" PH_END " and " PH_HL "%s" PH_END " to rotate "
                        "the helicopter. Use the " PH_HL "Left Stick" PH_END " to move the helicopter.", a, b, c, d);
         return 1;
-    case 0x3083:                                                    /* drive-by */
+    case 0x3083:
         if (!(a = ph_act(PL_CAR, PH_A(1))))
             return 0;
         b = g_pl_on ? ph_act(PL_CAR, PH_A(PL_AIM)) : NULL;
@@ -172,7 +154,7 @@ static int ph_text(int title, char *t, size_t n)
             snprintf(t, n, "You can target and shoot thugs from the car just like you would on foot. Press " PH_HL "%s" PH_END " "
                            "to shoot.", a);
         return 1;
-    case 0x3085:                                                    /* guns */
+    case 0x3085:
         if (!(a = ph_act(PL_FOOT, PH_A(1))))
             return 0;
         b = g_pl_on ? ph_act(PL_FOOT, PH_A(PL_AIM)) : NULL;
@@ -182,47 +164,47 @@ static int ph_text(int title, char *t, size_t n)
         else
             snprintf(t, n, "Use the " PH_HL "Right Stick" PH_END " to aim and press " PH_HL "%s" PH_END " to shoot.", a);
         return 1;
-    case 0x3087:                                                    /* punching */
+    case 0x3087:
         if (!(a = ph_act(PL_FOOT, PH_A(1))))
             return 0;
         snprintf(t, n, "Press " PH_HL "%s" PH_END " to punch. The closest target will be automatically selected.", a);
         return 1;
-    case 0x3089:                                                    /* shops */
+    case 0x3089:
         if (!(a = ph_act(PL_FOOT, PH_A(4, 5))))
             return 0;
         snprintf(t, n, "Yellow markers are shops. Press " PH_HL "%s" PH_END " to enter.\n"
                        "Shops are also available in your " PH_HL "Service" PH_END " menu, with some shipping fees.", a);
         return 1;
-    case 0x308b:                                                    /* weapons */
+    case 0x308b:
         if (!(a = ph_act(PL_FOOT, PH_A(10))) || !(b = ph_act(PL_FOOT, PH_A(9))))
             return 0;
         snprintf(t, n, "Press " PH_HL "%s" PH_END " or " PH_HL "%s" PH_END " to browse through available weapons.", a, b);
         return 1;
-    case 0x308d:                                                    /* the radio */
+    case 0x308d:
         if (!(a = ph_act(PL_CAR, PH_A(0xd))) || !(b = ph_act(PL_CAR, PH_A(0xe))))
             return 0;
         snprintf(t, n, "You can press " PH_HL "%s" PH_END " and " PH_HL "%s" PH_END " to change radio station.", a, b);
         return 1;
-    case 0x309d:                                                    /* the camera / sniper view */
+    case 0x309d:
         if (!(a = ph_act(PL_SNIPER, PH_A(10))) || !(b = ph_act(PL_SNIPER, PH_A(9))) ||
             !(c = ph_act(PL_SNIPER, PH_A(1))) || !(d = ph_act(PL_SNIPER, PH_A(0xf))))
             return 0;
         snprintf(t, n, "Use " PH_HL "%s" PH_END " and " PH_HL "%s" PH_END " to zoom in and out. Press " PH_HL "%s" PH_END " to take a picture and "
                        "" PH_HL "%s" PH_END " to return to normal view mode.", a, b, c, d);
         return 1;
-    case 0x309f:                                                    /* cover */
+    case 0x309f:
         if (!(a = ph_act(PL_FOOT, PH_A(0x11))))
             return 0;
         snprintf(t, n, "You can press " PH_HL "%s" PH_END " to take cover behind certain objects. You can still shoot or "
                        "walk while in cover. Press " PH_HL "%s" PH_END " again to exit.", a, a);
         return 1;
-    case 0x30a1:                                                    /* grenades */
+    case 0x30a1:
         if (!(a = ph_act(PL_FOOT, PH_A(1))))
             return 0;
         snprintf(t, n, "" PH_HL "Hold" PH_END " and " PH_HL "release" PH_END " " PH_HL "%s" PH_END " to throw a grenade. The " PH_HL "longer" PH_END " you hold, the "
                        "" PH_HL "further" PH_END " you'll throw the grenade.", a);
         return 1;
-    case 0x30a3:                                                    /* wheelies */
+    case 0x30a3:
         if (g_pl_on) {
             snprintf(t, n, "Pull the " PH_HL "Left Stick" PH_END " back or push it forward while riding to do tricks like "
                            "wheelies or stoppies.");
@@ -236,8 +218,6 @@ static int ph_text(int title, char *t, size_t n)
     return 0;
 }
 
-/* The game's English moving text reads like this (marks already turned into font tags); another
-   language keeps the game's texts. */
 static int ph_english(void)
 {
     static const char want[] = "Use " PH_HL "%s" PH_END " to walk";
@@ -267,7 +247,6 @@ static int gmv_ph_text(void *tuto, int title, void *out)
         gmv_trace("[padhints] tutorial 0x%x with the pad's buttons\n", title);
         return 1;
     }
-    /* each tutorial shows once, so a line per box is cheap; it says why the keyboard text stayed */
     gmv_trace("[padhints] tutorial 0x%x keeps the keyboard text: %s (pad used %d ms ago, key/click %d ms ago)\n",
             title, why, pad ? (int)(now - pad) : -1, kbm ? (int)(now - kbm) : -1);
     return (unsigned char)pl_call3(PH_FN, (uint32_t)(uintptr_t)tuto, (uint32_t)title, (uint32_t)(uintptr_t)out);

@@ -1,0 +1,80 @@
+# Merged options rows: ANTI-ALIASING 4X + A2C to 4X, ORIGINAL BUG FIXES off, HIDE DEAD ONLINE MENUS from CUSTOM to ON, CUTSCENE & POPUP KEYS off; each writes its own keys only
+ini FULLSCREEN=0
+ini SCREEN_WIDTH=1280
+ini SCREEN_HEIGHT=720
+ini SHORT_WARNING=1
+ini NO_INTRO=1
+ini MSAA=4
+ini ALPHA_TO_COVERAGE=1
+ini HIDE_MORE_GAMES=1
+ini HIDE_GAMELOFT_LIVE=0
+ini CUTSCENE_KEYS=1
+ini TUTORIAL_KEYS=1
+wait 8
+key SPACE
+wait 12
+click 0.12 0.625
+wait 3
+click 0.12 0.58
+wait 3
+shot display
+click 0.783 0.622
+wait 2
+shot aa
+click 0.839 0.27
+wait 2
+shot graphics1
+click 0.786 0.831
+wait 2
+shot graphics2
+click 0.786 0.831
+wait 2
+shot graphics3
+click 0.12 0.70
+wait 3
+waitlog ^\[gamepatch\] options tab: ALPHA_TO_COVERAGE=0 in force now 10
+shot fixes1
+click 0.786 0.831
+wait 2
+shot fixes2
+click 0.786 0.831
+wait 2
+shot fixes3
+click 0.783 0.406
+wait 2
+shot bugfixes-off
+click 0.839 0.27
+wait 2
+shot menu
+click 0.904 0.406
+wait 1
+click 0.904 0.406
+wait 1
+click 0.783 0.696
+wait 2
+shot menu-set
+click 0.734 0.902
+waitlog ^\[gamepatch\] options tab: TUTORIAL_KEYS=0 10
+wait 2
+shot applied
+expectlog ^\[gamepatch\] options tab: RADIO_LOGO_FIX=0
+expectlog ^\[gamepatch\] options tab: MENUFLASH_FIX=0
+expectlog ^\[gamepatch\] options tab: FADE_EDGE_FIX=0
+expectlog ^\[gamepatch\] options tab: SWITCH_SAVE_FIX=0
+expectlog ^\[gamepatch\] options tab: AI_STEERING_FIX=0
+expectlog ^\[gamepatch\] options tab: BOAT_SEAT_FIX=0
+expectlog ^\[gamepatch\] options tab: MENU_FADE_CLICKS=0
+expectlog ^\[gamepatch\] options tab: HIDE_GAMELOFT_LIVE=1
+expectlog ^\[gamepatch\] options tab: CUTSCENE_KEYS=0
+nolog ^\[gamepatch\] options tab: MSAA=
+nolog ^\[gamepatch\] options tab: HIDE_MORE_GAMES=
+nolog ^\[gamepatch\] options tab: (STOPLOCK_FIX|LOAD_SLEEP_SKIP|LOAD_BUDGET|SHADOW_QUALITY|DYNAMIC_SHADOWS)=
+inihas ^MSAA=4$
+inihas ^ALPHA_TO_COVERAGE=0$
+inihas ^RADIO_LOGO_FIX=0$
+inihas ^BOAT_SEAT_FIX=0$
+inihas ^MENU_FADE_CLICKS=0$
+inihas ^HIDE_MORE_GAMES=1$
+inihas ^HIDE_GAMELOFT_LIVE=1$
+inihas ^CUTSCENE_KEYS=0$
+inihas ^TUTORIAL_KEYS=0$
